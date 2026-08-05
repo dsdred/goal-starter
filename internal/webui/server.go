@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/example/goal/internal/config"
+	"github.com/example/goal/internal/domain"
 	"github.com/example/goal/internal/process"
 	"github.com/example/goal/internal/store"
 	"github.com/example/goal/internal/version"
@@ -385,17 +386,16 @@ func (a *App) profileDelete(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) profileAction(w http.ResponseWriter, r *http.Request) {
 	// Path: /api/v1/profiles/{id}/action/{action}
-	// e.g., /api/v1/profiles/id_123/action/start
 	path := strings.TrimPrefix(r.URL.Path, "/api/v1/profiles/")
 	parts := strings.SplitN(path, "/action/", 2)
 	if len(parts) != 2 {
 		writeError(w, 400, "invalid path: expected /api/v1/profiles/{id}/action/{action}")
 		return
 	}
-	id := parts[0]
+	profileID := parts[0]
 	action := parts[1]
 
-	// Read body for start action (to get runtime/model config).
+	// Read body for start action.
 	var body struct {
 		RuntimeID string   `json:"runtime_id"`
 		ModelID   string   `json:"model_id"`
@@ -407,76 +407,138 @@ func (a *App) profileAction(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewDecoder(r.Body).Decode(&body)
 	}
 
-	p, err := a.pdb.GetProfile(id)
+	p, err := a.pdb.GetProfile(profileID)
 	if err != nil {
 		writeError(w, 404, "profile not found")
 		return
 	}
 
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+
 	switch action {
 	case "start":
-		if err := a.startProfile(p, body); err != nil {
+		inst, err := a.startProfile(ctx, p, body)
+		if err != nil {
 			writeError(w, 500, err.Error())
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]string{"status": "started"})
+		writeJSON(w, http.StatusOK, map[string]string{"status": "started", "instance_id": string(inst.ID)})
 
 	case "stop":
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		defer cancel()
-		if err := a.mgr.Stop(ctx); err != nil {
-			writeError(w, 500, err.Error())
-			return
+		instances, _ := a.supervisor.ListByProfileID(profileID)
+		for _, inst := range instances {
+			if inst.IsActive() {
+				if err := a.supervisor.Stop(ctx, inst.ID); err != nil {
+					writeError(w, 500, err.Error())
+					return
+				}
+				writeJSON(w, http.StatusOK, map[string]string{"status": "stopped"})
+				return
+			}
 		}
-		writeJSON(w, http.StatusOK, map[string]string{"status": "stopped"})
+		writeError(w, 404, "no active instance for profile")
 
 	case "restart":
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		defer cancel()
-		_ = a.mgr.Stop(ctx)
-		if err := a.startProfile(p, body); err != nil {
-			writeError(w, 500, err.Error())
-			return
+		instances, _ := a.supervisor.ListByProfileID(profileID)
+		var targetID domain.InstanceID
+		for _, inst := range instances {
+			if inst.IsActive() {
+				targetID = inst.ID
+				break
+			}
 		}
-		writeJSON(w, http.StatusOK, map[string]string{"status": "restarted"})
+		if targetID != "" {
+			if _, err := a.supervisor.Restart(ctx, targetID); err != nil {
+				writeError(w, 500, err.Error())
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]string{"status": "restarted"})
+		} else {
+			inst, err := a.startProfile(ctx, p, body)
+			if err != nil {
+				writeError(w, 500, err.Error())
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]string{"status": "restarted", "instance_id": string(inst.ID)})
+		}
 
 	default:
 		writeError(w, 400, "unknown action: "+action)
 	}
 }
 
-func (a *App) startProfile(p *WebUIStore.Profile, body struct {
+func (a *App) startProfile(ctx context.Context, p *WebUIStore.Profile, body struct {
 	RuntimeID string   `json:"runtime_id"`
 	ModelID   string   `json:"model_id"`
 	Host      string   `json:"host"`
 	Port      int      `json:"port"`
 	Args      []string `json:"args"`
-}) error {
+}) (*domain.LaunchInstance, error) {
+	// Resolve runtime and convert to domain.
 	rte, err := a.pdb.GetRuntime(p.RuntimeID)
 	if err != nil {
-		return fmt.Errorf("runtime not found: %w", err)
+		return nil, fmt.Errorf("runtime not found: %w", err)
 	}
-
-	// Build command args: runtime default args + profile args.
-	allArgs := append(rte.DefaultArgs, p.Args...)
-
-	// Build environment.
-	env := make([]string, 0)
-	for k, v := range rte.Environment {
-		env = append(env, k+"="+v)
-	}
-	for k, v := range p.Environment {
-		env = append(env, k+"="+v)
-	}
-	// Profile-level env overrides.
-
-	spec := process.CommandSpec{
+	domainRTE := &domain.Runtime{
+		ID:               rte.ID,
+		Name:             rte.Name,
 		Executable:       rte.Executable,
-		Args:             allArgs,
 		WorkingDirectory: rte.WorkingDirectory,
-		Environment:      env,
+		DefaultArgs:      rte.DefaultArgs,
+		Environment:      rte.Environment,
 	}
-	return a.mgr.Start(context.Background(), spec)
+
+	// Resolve model (optional, for preview only).
+	var mdl *domain.Model
+	if p.ModelID != "" {
+		mdlData, err := a.mdb.GetModel(p.ModelID)
+		if err == nil {
+			mdl = &domain.Model{
+				ID:     mdlData.ID,
+				Name:   mdlData.Name,
+				Path:   mdlData.Path,
+				MMProj: mdlData.MMProj,
+				Format: mdlData.Format,
+			}
+		}
+	}
+
+	// Build domain profile from store profile.
+	domainProfile := &domain.Profile{
+		ID:          p.ID,
+		Name:        p.Name,
+		RuntimeID:   p.RuntimeID,
+		ModelID:     p.ModelID,
+		Host:        p.Host,
+		Port:        p.Port,
+		Args:        p.Args,
+		Environment: p.Environment,
+		Active:      p.Active,
+	}
+
+	// Collect custom args from body (override profile args).
+	var customArgs []string
+	if len(body.Args) > 0 {
+		customArgs = body.Args
+	}
+
+	// Collect custom environment.
+	var customEnv map[string]string
+	if p.Environment != nil {
+		customEnv = make(map[string]string)
+		for k, v := range p.Environment {
+			customEnv[k] = v
+		}
+	}
+
+	// Build instance via Supervisor.
+	inst, err := a.supervisor.Start(ctx, domainProfile, domainRTE, mdl, customArgs, customEnv)
+	if err != nil {
+		return nil, err
+	}
+
+	return inst, nil
 }
 
 // ---------- runtimes CRUD ----------
