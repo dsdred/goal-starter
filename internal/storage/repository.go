@@ -194,11 +194,9 @@ func (r *JSONRepository) load() error {
 	return nil
 }
 
-// save writes the data to disk atomically.
-func (r *JSONRepository) save() error {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
+// saveLocked writes the data to disk atomically.
+// The caller must hold r.mu (read or write lock).
+func (r *JSONRepository) saveLocked() error {
 	unified := map[string]interface{}{
 		"schema_version": 4,
 		"runtimes":       r.runtimes,
@@ -213,7 +211,7 @@ func (r *JSONRepository) save() error {
 	}
 
 	tmp := r.filePath + ".tmp"
-	if err := os.WriteFile(tmp, data, 0644); err != nil {
+	if err := os.WriteFile(tmp, data, 0600); err != nil {
 		return fmt.Errorf("write temp file: %w", err)
 	}
 
@@ -223,6 +221,16 @@ func (r *JSONRepository) save() error {
 	}
 
 	return nil
+}
+
+// save writes the data to disk atomically.
+// This method acquires its own lock and should be used
+// when the caller does NOT already hold the mutex (e.g., initial save).
+func (r *JSONRepository) save() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	return r.saveLocked()
 }
 
 // SchemaVersion returns the current schema version.
@@ -272,7 +280,7 @@ func (r *JSONRepository) CreateRuntime(e *RuntimeEntry) error {
 	e.UpdatedAt = time.Now()
 
 	r.runtimes = append(r.runtimes, e)
-	return r.save()
+	return r.saveLocked()
 }
 
 func (r *JSONRepository) GetRuntime(id string) (*RuntimeEntry, error) {
@@ -302,7 +310,7 @@ func (r *JSONRepository) UpdateRuntime(e *RuntimeEntry) error {
 		if existing.ID == e.ID {
 			r.runtimes[i] = e
 			e.UpdatedAt = time.Now()
-			return r.save()
+			return r.saveLocked()
 		}
 	}
 	return fmt.Errorf("runtime not found: %s", e.ID)
@@ -315,7 +323,7 @@ func (r *JSONRepository) DeleteRuntime(id string) error {
 	for i, e := range r.runtimes {
 		if e.ID == id {
 			r.runtimes = append(r.runtimes[:i], r.runtimes[i+1:]...)
-			return r.save()
+			return r.saveLocked()
 		}
 	}
 	return fmt.Errorf("runtime not found: %s", id)
@@ -350,7 +358,7 @@ func (r *JSONRepository) CreateModel(e *ModelEntry) error {
 	e.UpdatedAt = time.Now()
 
 	r.models = append(r.models, e)
-	return r.save()
+	return r.saveLocked()
 }
 
 func (r *JSONRepository) GetModel(id string) (*ModelEntry, error) {
@@ -374,7 +382,7 @@ func (r *JSONRepository) UpdateModel(e *ModelEntry) error {
 		if existing.ID == e.ID {
 			r.models[i] = e
 			e.UpdatedAt = time.Now()
-			return r.save()
+			return r.saveLocked()
 		}
 	}
 	return fmt.Errorf("model not found: %s", e.ID)
@@ -387,7 +395,7 @@ func (r *JSONRepository) DeleteModel(id string) error {
 	for i, e := range r.models {
 		if e.ID == id {
 			r.models = append(r.models[:i], r.models[i+1:]...)
-			return r.save()
+			return r.saveLocked()
 		}
 	}
 	return fmt.Errorf("model not found: %s", id)
@@ -416,7 +424,7 @@ func (r *JSONRepository) CreateProfile(e *ProfileEntry) error {
 	e.UpdatedAt = time.Now()
 
 	r.profiles = append(r.profiles, e)
-	return r.save()
+	return r.saveLocked()
 }
 
 func (r *JSONRepository) GetProfile(id string) (*ProfileEntry, error) {
@@ -446,7 +454,7 @@ func (r *JSONRepository) UpdateProfile(e *ProfileEntry) error {
 		if existing.ID == e.ID {
 			r.profiles[i] = e
 			e.UpdatedAt = time.Now()
-			return r.save()
+			return r.saveLocked()
 		}
 	}
 	return fmt.Errorf("profile not found: %s", e.ID)
@@ -459,7 +467,7 @@ func (r *JSONRepository) DeleteProfile(id string) error {
 	for i, e := range r.profiles {
 		if e.ID == id {
 			r.profiles = append(r.profiles[:i], r.profiles[i+1:]...)
-			return r.save()
+			return r.saveLocked()
 		}
 	}
 	return fmt.Errorf("profile not found: %s", id)
@@ -489,12 +497,16 @@ func (r *JSONRepository) CreateLaunchInstance(e *LaunchInstanceEntry) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	e.ID = generateID()
+	// ID is generated exactly once by the caller (Supervisor / Resolver).
+	// Do not overwrite an existing ID.
+	if e.ID == "" {
+		e.ID = generateID()
+	}
 	e.CreatedAt = time.Now()
 	e.UpdatedAt = time.Now()
 
 	r.instances = append(r.instances, e)
-	return r.save()
+	return r.saveLocked()
 }
 
 func (r *JSONRepository) GetLaunchInstance(id string) (*LaunchInstanceEntry, error) {
@@ -524,7 +536,7 @@ func (r *JSONRepository) UpdateLaunchInstance(e *LaunchInstanceEntry) error {
 		if existing.ID == e.ID {
 			r.instances[i] = e
 			e.UpdatedAt = time.Now()
-			return r.save()
+			return r.saveLocked()
 		}
 	}
 	return fmt.Errorf("launch instance not found: %s", e.ID)
@@ -537,7 +549,7 @@ func (r *JSONRepository) DeleteLaunchInstance(id string) error {
 	for i, e := range r.instances {
 		if e.ID == id {
 			r.instances = append(r.instances[:i], r.instances[i+1:]...)
-			return r.save()
+			return r.saveLocked()
 		}
 	}
 	return fmt.Errorf("launch instance not found: %s", id)

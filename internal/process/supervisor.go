@@ -3,6 +3,7 @@ package process
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -19,6 +20,7 @@ type Supervisor struct {
 	resolver      *domain.LaunchResolver
 	store         InstanceStore
 	maxConcurrent int
+	lifecycleCtx  context.Context
 }
 
 // InstanceStore persists and retrieves launch instances.
@@ -43,6 +45,24 @@ func NewSupervisor(store InstanceStore) *Supervisor {
 		resolver:  domain.NewLaunchResolver(),
 		store:     store,
 	}
+}
+
+// NewSupervisorWithContext creates a Supervisor with an application-level lifecycle context.
+// The lifecycle context is used for all instance processes, so HTTP request
+// timeouts do not kill running processes.
+func NewSupervisorWithContext(lifecycleCtx context.Context, store InstanceStore) *Supervisor {
+	s := NewSupervisor(store)
+	s.lifecycleCtx = lifecycleCtx
+	return s
+}
+
+// lifecycleContext returns the application lifecycle context, or a background
+// context if none was explicitly set.
+func (s *Supervisor) lifecycleContext() context.Context {
+	if s.lifecycleCtx != nil {
+		return s.lifecycleCtx
+	}
+	return context.Background()
 }
 
 // NewSupervisorWithConfig creates a Supervisor with config.
@@ -112,15 +132,15 @@ func (s *Supervisor) Start(ctx context.Context, profile *domain.Profile, runtime
 	}
 
 	// Create controller.
-	ctrl := NewInstanceController(inst, s.resolver)
+	ctrl := NewInstanceController(inst, s.store, s.resolver)
 
 	s.mu.Lock()
 	s.instances[inst.ID] = ctrl
 	s.mu.Unlock()
 
-	// Start process.
-	if err := ctrl.Start(ctx); err != nil {
-		inst.UpdateError(err.Error(), domain.InstanceExitError)
+	// Start process using the supervisor lifecycle context (not HTTP request ctx).
+	if err := ctrl.Start(s.lifecycleContext()); err != nil {
+		inst.Fail(err.Error(), domain.InstanceExitError)
 		if s.store != nil {
 			_ = s.store.Update(domain.ToStorageEntry(inst))
 		}
@@ -270,30 +290,69 @@ func (s *Supervisor) ShutdownWithPersistence(ctx context.Context) error {
 	return nil
 }
 
+// Recover restores instances from the store and marks stale records.
+// This is called during Supervisor startup to handle instances that were
+// running when the application previously stopped.
+func (s *Supervisor) Recover(ctx context.Context) error {
+	if s.store == nil {
+		return nil
+	}
+
+	entries, err := s.store.List()
+	if err != nil {
+		return fmt.Errorf("list instances for recovery: %w", err)
+	}
+
+	for _, entry := range entries {
+		inst := domain.ToDomain(entry)
+
+		switch inst.State {
+		case domain.InstanceStateRunning, domain.InstanceStateStarting, domain.InstanceStateStopping, domain.InstanceStatePending:
+			// The instance was not properly stopped. Mark as stale.
+			inst.UpdateState(domain.InstanceStateStale)
+			if s.store != nil {
+				_ = s.store.Update(domain.ToStorageEntry(inst))
+			}
+			slog.Warn("marking stale instance", "instance_id", string(inst.ID), "state", string(inst.State))
+		}
+	}
+
+	return nil
+}
+
 // InstanceController controls a single launch instance.
 type InstanceController struct {
 	mu       sync.RWMutex
 	instance *domain.LaunchInstance
 	manager  *Manager
+	store    InstanceStore
 	resolver *domain.LaunchResolver
 	done     chan struct{}
 }
 
 // NewInstanceController creates a controller for an instance.
-func NewInstanceController(inst *domain.LaunchInstance, resolver *domain.LaunchResolver) *InstanceController {
+func NewInstanceController(inst *domain.LaunchInstance, store InstanceStore, resolver *domain.LaunchResolver) *InstanceController {
 	return &InstanceController{
 		instance: inst,
 		manager:  NewManager(),
+		store:    store,
 		resolver: resolver,
 		done:     make(chan struct{}),
 	}
 }
 
 // Start launches the managed process.
-func (ic *InstanceController) Start(ctx context.Context) error {
+// The operationCtx parameter is used only for the Start() operation timeout.
+// The process lifecycle uses the instance-specific context (supervisor lifecycle).
+func (ic *InstanceController) Start(operationCtx context.Context) error {
 	ic.mu.Lock()
 	ic.instance.UpdateState(domain.InstanceStateStarting)
 	ic.mu.Unlock()
+
+	// Persist the starting state immediately so restart sees starting, not pending.
+	if err := ic.persistState(); err != nil {
+		return fmt.Errorf("persist starting state: %w", err)
+	}
 
 	// Resolve the command spec from stored instance data.
 	spec := &CommandSpec{
@@ -303,16 +362,26 @@ func (ic *InstanceController) Start(ctx context.Context) error {
 		Environment:      ic.instance.EnvironmentToList(),
 	}
 
-	if err := ic.manager.Start(ctx, *spec); err != nil {
+	if err := ic.manager.Start(operationCtx, *spec); err != nil {
 		ic.mu.Lock()
-		ic.instance.UpdateError(err.Error(), domain.InstanceExitError)
+		ic.instance.Fail(err.Error(), domain.InstanceExitError)
 		ic.mu.Unlock()
+		_ = ic.persistState()
 		return err
 	}
 
+	// Copy PID from manager immediately after successful start.
+	status := ic.manager.Status()
 	ic.mu.Lock()
+	ic.instance.PID = status.PID
+	ic.instance.StartedAt = status.StartedAt
 	ic.instance.UpdateState(domain.InstanceStateRunning)
 	ic.mu.Unlock()
+
+	// Persist running state with PID.
+	if err := ic.persistState(); err != nil {
+		slog.Error("persist running state", "instance_id", string(ic.instance.ID), "error", err)
+	}
 
 	// Start wait goroutine.
 	go ic.wait()
@@ -338,9 +407,6 @@ func (ic *InstanceController) Stop(ctx context.Context) error {
 	ic.mu.Lock()
 	if err != nil {
 		ic.instance.UpdateError(err.Error(), domain.InstanceExitError)
-	} else {
-		// Manager will update to exited via wait(), but we set stopping->exited
-		// if wait hasn't fired yet.
 	}
 	ic.mu.Unlock()
 
@@ -371,12 +437,12 @@ func (ic *InstanceController) Instance() *domain.LaunchInstance {
 }
 
 // wait monitors the process and updates instance state.
+// It maps the Manager exit class to the domain exit class and transitions
+// the instance to either "exited" (for normal/user-initiated stops) or
+// "failed" (for unexpected exits).
 func (ic *InstanceController) wait() {
-	// Wait for the manager's done channel.
-	// The Manager closes its done channel when the process exits via its wait() goroutine.
 	done := ic.manager.done
 	if done == nil {
-		// Manager hasn't started a process yet.
 		return
 	}
 	<-done
@@ -384,39 +450,53 @@ func (ic *InstanceController) wait() {
 	ic.mu.Lock()
 	defer ic.mu.Unlock()
 
-	// Get final status from manager.
 	finalStatus := ic.manager.Status()
 
 	ic.instance.PID = finalStatus.PID
 	ic.instance.ExitCode = finalStatus.ExitCode
 
-	// Map Manager exit class to domain exit class.
+	var domainExitClass domain.InstanceExitClass
+	var targetState domain.InstanceState
+
 	switch finalStatus.ExitClass {
 	case processExitNormal:
-		ic.instance.ExitClass = domain.InstanceExitNormal
-	case processExitFailure:
-		ic.instance.ExitClass = domain.InstanceExitFailure
+		domainExitClass = domain.InstanceExitNormal
+		targetState = domain.InstanceStateExited
 	case processExitKilled:
-		ic.instance.ExitClass = domain.InstanceExitKilled
-	case processExitTimeout:
-		ic.instance.ExitClass = domain.InstanceExitTimeout
-	case processExitContext:
-		ic.instance.ExitClass = domain.InstanceExitContext
-	case processExitError:
-		ic.instance.ExitClass = domain.InstanceExitError
+		domainExitClass = domain.InstanceExitKilled
+		targetState = domain.InstanceStateExited
 	case processExitSignaled:
-		ic.instance.ExitClass = domain.InstanceExitSignaled
+		domainExitClass = domain.InstanceExitSignaled
+		targetState = domain.InstanceStateExited
+	case processExitContext:
+		domainExitClass = domain.InstanceExitContext
+		targetState = domain.InstanceStateExited
+	case processExitTimeout:
+		domainExitClass = domain.InstanceExitTimeout
+		targetState = domain.InstanceStateFailed
+	case processExitError:
+		domainExitClass = domain.InstanceExitError
+		targetState = domain.InstanceStateFailed
+	case processExitFailure:
+		domainExitClass = domain.InstanceExitFailure
+		targetState = domain.InstanceStateFailed
 	default:
-		ic.instance.ExitClass = domain.InstanceExitFailure
+		domainExitClass = domain.InstanceExitFailure
+		targetState = domain.InstanceStateFailed
 	}
 
+	ic.instance.ExitClass = domainExitClass
 	if finalStatus.LastError != "" {
 		ic.instance.LastError = finalStatus.LastError
 	}
-
-	ic.instance.State = domain.InstanceStateExited
+	ic.instance.State = targetState
 	ic.instance.StoppedAt = time.Now()
-	ic.instance.UpdatedAt = time.Now()
+	ic.instance.UpdatedAt = ic.instance.StoppedAt
+
+	if ic.store != nil {
+		entry := domain.ToStorageEntry(ic.instance)
+		_ = ic.store.Update(entry)
+	}
 }
 
 // processExitClass represents Manager exit classes.
@@ -431,6 +511,16 @@ const (
 	processExitError    = ExitClass("error")
 	processExitSignaled = ExitClass("signaled")
 )
+
+// persistState persists the current instance state to the store.
+// The caller must hold ic.mu.
+func (ic *InstanceController) persistState() error {
+	if ic.store == nil {
+		return nil
+	}
+	entry := domain.ToStorageEntry(ic.instance)
+	return ic.store.Update(entry)
+}
 
 // GetDoneChannel returns the manager's done channel for monitoring.
 func (ic *InstanceController) GetDoneChannel() <-chan struct{} {

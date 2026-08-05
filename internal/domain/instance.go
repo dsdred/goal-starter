@@ -101,14 +101,25 @@ func (i *LaunchInstance) UpdateState(state InstanceState) {
 	}
 }
 
-// UpdateError records an error and transitions to failed state.
+// UpdateError records an error but does NOT change the instance state.
+// Use this when the caller wants to record error details without forcing
+// a state transition (e.g., Supervisor.Start records the error and the
+// state is set by the caller).
 func (i *LaunchInstance) UpdateError(err string, exitCls InstanceExitClass) {
 	i.LastError = err
 	i.ExitClass = exitCls
 	i.UpdatedAt = time.Now()
-	if i.IsTerminal() {
-		i.StoppedAt = time.Now()
-	}
+}
+
+// Fail records a failure and transitions the instance to the failed state.
+// This method MUST be used when an instance fails to start or exits unexpectedly.
+// It sets the state to failed, records stop time, and applies the exit class.
+func (i *LaunchInstance) Fail(err string, exitCls InstanceExitClass) {
+	i.LastError = err
+	i.ExitClass = exitCls
+	i.State = InstanceStateFailed
+	i.StoppedAt = time.Now()
+	i.UpdatedAt = i.StoppedAt
 }
 
 // EnvironmentToList converts the Environment map to []string format.

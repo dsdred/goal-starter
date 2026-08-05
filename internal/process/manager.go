@@ -127,10 +127,10 @@ func (m *Manager) Start(ctx context.Context, spec CommandSpec) error {
 	// Merge environment: parent env first, then user vars (user vars override).
 	env := mergeEnvironment(spec.Environment)
 
-	// Use exec.CommandContext so we can cancel via ctx, but the manager owns
-	// the context lifecycle — ctx is passed down from Supervisor via a dedicated
-	// instance context, not from HTTP request context.
-	cmd := exec.CommandContext(ctx, spec.Executable, spec.Args...)
+	// Use exec.Command (not CommandContext) — the manager owns process lifecycle
+	// via platform.ProcessControl (Job Objects on Windows, process groups on Linux).
+	// Parent context is used only for Start() operation timeout.
+	cmd := exec.Command(spec.Executable, spec.Args...)
 	cmd.Dir = spec.WorkingDirectory
 	cmd.Env = env
 	if sa, ok := spec.SysProcAttr.(*syscall.SysProcAttr); ok {

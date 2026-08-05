@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	"github.com/example/goal/internal/config"
 	"github.com/example/goal/internal/process"
@@ -69,19 +70,43 @@ func main() {
 	// Create legacy Manager for backward compatibility (health checks, logs).
 	legacyMgr := process.NewManager()
 
-	// Create Supervisor with repository.
-	supervisor := process.NewSupervisor(repo)
+	// Create application-level context for Supervisor lifecycle.
+	// All instance processes inherit this context, so HTTP request timeouts
+	// do not kill running processes.
+	appCtx, appStop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer appStop()
+
+	// Create Supervisor with lifecycle context.
+	supervisor := process.NewSupervisorWithContext(appCtx, repo)
+
+	// Recover instances from previous runs that were not properly stopped.
+	// Marks running/starting/stopping/pending instances as stale.
+	if err := supervisor.Recover(context.Background()); err != nil {
+		slog.Error("supervisor recovery", "error", err)
+		os.Exit(1)
+	}
 
 	app := webui.NewWithSupervisor(cfg, supervisor, legacyMgr, repo)
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
 	// Start periodic health check goroutine.
-	go app.RunHealthChecker(ctx)
+	go app.RunHealthChecker(appCtx)
 
-	if err := app.Run(ctx); err != nil {
-		slog.Error("server stopped", "error", err)
+	// Run the application (HTTP server).
+	runErr := app.Run(appCtx)
+
+	// Gracefully shutdown all instance processes and persist final states.
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	shutdownErr := supervisor.ShutdownWithPersistence(shutdownCtx)
+
+	if runErr != nil {
+		slog.Error("server stopped", "error", runErr)
+	}
+	if shutdownErr != nil {
+		slog.Error("shutdown error", "error", shutdownErr)
+	}
+
+	if runErr != nil || shutdownErr != nil {
 		os.Exit(1)
 	}
 }

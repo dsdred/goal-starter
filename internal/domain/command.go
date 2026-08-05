@@ -59,10 +59,37 @@ func (r *LaunchResolver) Resolve(
 	}
 
 	// Build args: runtime default args + model-specific args + profile args + custom args.
-	args := make([]string, 0, len(runtime.DefaultArgs)+len(profile.Args)+len(customArgs))
+	args := make([]string, 0, len(runtime.DefaultArgs)+len(profile.Args)+len(customArgs)+4)
 	args = append(args, runtime.DefaultArgs...)
 	args = append(args, profile.Args...)
 	args = append(args, customArgs...)
+
+	// Add host/port if not already present (same logic as BuildCommandSpecForPreview).
+	if profile.Host != "" {
+		hasHostFlag := false
+		for _, arg := range args {
+			if arg == "--host" || arg == "-a" {
+				hasHostFlag = true
+				break
+			}
+		}
+		if !hasHostFlag {
+			args = append(args, "--host", profile.Host)
+		}
+	}
+
+	if profile.Port > 0 {
+		hasPortFlag := false
+		for _, arg := range args {
+			if arg == "--port" {
+				hasPortFlag = true
+				break
+			}
+		}
+		if !hasPortFlag {
+			args = append(args, "--port", fmt.Sprintf("%d", profile.Port))
+		}
+	}
 
 	// Build environment.
 	envMap := make(map[string]string)
