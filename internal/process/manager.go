@@ -127,7 +127,9 @@ func (m *Manager) Start(ctx context.Context, spec CommandSpec) error {
 	// Merge environment: parent env first, then user vars (user vars override).
 	env := mergeEnvironment(spec.Environment)
 
-	// Use exec.Command (NOT CommandContext) so the manager owns the context lifecycle.
+	// Use exec.CommandContext so we can cancel via ctx, but the manager owns
+	// the context lifecycle — ctx is passed down from Supervisor via a dedicated
+	// instance context, not from HTTP request context.
 	cmd := exec.CommandContext(ctx, spec.Executable, spec.Args...)
 	cmd.Dir = spec.WorkingDirectory
 	cmd.Env = env
@@ -162,7 +164,10 @@ func (m *Manager) Start(ctx context.Context, spec CommandSpec) error {
 	}
 
 	if err := control.AfterStart(cmd.Process.Pid); err != nil {
+		// Kill the process and wait to ensure resources are released.
 		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		_ = control.Close()
 		m.status = Status{
 			State:     StateFailed,
 			ExitClass: ExitError,
@@ -257,6 +262,13 @@ func (m *Manager) Subscribe() (<-chan LogEvent, func()) {
 		close(ch)
 		m.mu.Unlock()
 	}
+}
+
+// GetDoneChannel returns the manager's done channel for monitoring.
+func (m *Manager) GetDoneChannel() <-chan struct{} {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.done
 }
 
 // wait is the SINGLE owner of cmd.Wait(). It runs in its own goroutine.

@@ -11,9 +11,10 @@ import (
 
 	"github.com/example/goal/internal/config"
 	"github.com/example/goal/internal/process"
+	"github.com/example/goal/internal/store"
 	"github.com/example/goal/internal/version"
 	"github.com/example/goal/internal/webui"
-	"github.com/example/goal/internal/webui/store"
+	WebUIStore "github.com/example/goal/internal/webui/store"
 )
 
 func main() {
@@ -39,26 +40,38 @@ func main() {
 		os.Exit(1)
 	}
 
-	mgr := process.NewManager()
-
 	dataDir := cfg.DataDir
 	if dataDir == "" {
 		dataDir = "./data"
 	}
 
-	pdb, err := store.NewStore(dataDir)
+	// Create stores.
+	pdb, err := WebUIStore.NewStore(dataDir)
 	if err != nil {
 		slog.Error("init profile store", "error", err)
 		os.Exit(1)
 	}
 
-	mdb, err := store.NewModelStore(dataDir)
+	mdb, err := WebUIStore.NewModelStore(dataDir)
 	if err != nil {
 		slog.Error("init model store", "error", err)
 		os.Exit(1)
 	}
 
-	app := webui.New(cfg, mgr, pdb, mdb)
+	// Create instance store for launch instances.
+	instStore, err := store.NewInstanceStoreJSON(store.InstanceStoreOptions{
+		Directory: dataDir,
+		Filename:  "instances.json",
+	})
+	if err != nil {
+		slog.Error("init instance store", "error", err)
+		os.Exit(1)
+	}
+
+	// Create Supervisor with instance store.
+	supervisor := process.NewSupervisor(instStore)
+
+	app := webui.NewWithSupervisor(cfg, supervisor, pdb, mdb, instStore)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

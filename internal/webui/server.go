@@ -15,13 +15,14 @@ import (
 
 	"github.com/example/goal/internal/config"
 	"github.com/example/goal/internal/process"
+	"github.com/example/goal/internal/store"
 	"github.com/example/goal/internal/version"
 	"github.com/example/goal/internal/webui/errors"
 	"github.com/example/goal/internal/webui/health"
 	"github.com/example/goal/internal/webui/metrics"
 	"github.com/example/goal/internal/webui/middleware"
 	"github.com/example/goal/internal/webui/security"
-	"github.com/example/goal/internal/webui/store"
+	WebUIStore "github.com/example/goal/internal/webui/store"
 )
 
 var funcMap = template.FuncMap{
@@ -42,20 +43,31 @@ var funcMap = template.FuncMap{
 //go:embed templates/*.html static/*
 var assets embed.FS
 
+// App is the main web application struct.
+// It owns the composition root, HTTP routes, and templates.
 type App struct {
-	cfg     config.Config
-	mgr     *process.Manager
-	tpl     *template.Template
-	pdb     *store.Store
-	mdb     *store.ModelStore
-	sess    *security.SessionStore
-	pass    *security.PasswordStore
-	csrf    *security.CSRF
-	hc      *health.HealthChecker
-	metrics *metrics.Manager
+	cfg        config.Config
+	mgr        *process.Manager    // Legacy: single process manager (for backward compat)
+	supervisor *process.Supervisor // New: multi-instance supervisor
+	tpl        *template.Template
+	pdb        *WebUIStore.Store
+	mdb        *WebUIStore.ModelStore
+	instStore  *store.InstanceStoreJSON
+	sess       *security.SessionStore
+	pass       *security.PasswordStore
+	csrf       *security.CSRF
+	hc         *health.HealthChecker
+	metrics    *metrics.Manager
 }
 
-func New(cfg config.Config, mgr *process.Manager, pdb *store.Store, mdb *store.ModelStore) *App {
+func New(cfg config.Config, mgr *process.Manager, pdb *WebUIStore.Store, mdb *WebUIStore.ModelStore) *App {
+	return NewWithSupervisor(cfg, nil, pdb, mdb, mgr)
+}
+
+// NewWithSupervisor creates an App with a Supervisor for multi-instance support.
+// instStoreOrMgr can be either a *process.Manager (for backward compat) or *store.InstanceStoreJSON.
+// If instStoreOrMgr is a *process.Manager, supervisor will manage it as the legacy single instance.
+func NewWithSupervisor(cfg config.Config, supervisor *process.Supervisor, pdb *WebUIStore.Store, mdb *WebUIStore.ModelStore, instStoreOrMgr ...any) *App {
 	tpl := template.Must(template.New("").Funcs(funcMap).ParseFS(assets, "templates/*.html"))
 	sess := security.NewSessionStore()
 	pass := security.NewPasswordStore()
@@ -68,10 +80,30 @@ func New(cfg config.Config, mgr *process.Manager, pdb *store.Store, mdb *store.M
 		_ = pass.AddUser(cfg.AdminUser, cfg.AdminPassword)
 	}
 
-	return &App{
-		cfg: cfg, mgr: mgr, tpl: tpl, pdb: pdb, mdb: mdb,
-		sess: sess, pass: pass, csrf: csrf, hc: hc, metrics: met,
+	app := &App{
+		cfg:        cfg,
+		supervisor: supervisor,
+		tpl:        tpl,
+		pdb:        pdb,
+		mdb:        mdb,
+		sess:       sess,
+		pass:       pass,
+		csrf:       csrf,
+		hc:         hc,
+		metrics:    met,
 	}
+
+	// Handle variadic parameter: can be *process.Manager or *store.InstanceStoreJSON.
+	for _, arg := range instStoreOrMgr {
+		switch v := arg.(type) {
+		case *process.Manager:
+			app.mgr = v
+		case *store.InstanceStoreJSON:
+			app.instStore = v
+		}
+	}
+
+	return app
 }
 
 func (a *App) Run(ctx context.Context) error {
@@ -413,7 +445,7 @@ func (a *App) profileAction(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (a *App) startProfile(p *store.Profile, body struct {
+func (a *App) startProfile(p *WebUIStore.Profile, body struct {
 	RuntimeID string   `json:"runtime_id"`
 	ModelID   string   `json:"model_id"`
 	Host      string   `json:"host"`
