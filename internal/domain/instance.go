@@ -2,6 +2,8 @@ package domain
 
 import (
 	"time"
+
+	"github.com/example/goal/internal/storage"
 )
 
 // InstanceID uniquely identifies a launch instance.
@@ -116,4 +118,59 @@ func (i *LaunchInstance) EnvironmentToList() []string {
 		result = append(result, k+"="+v)
 	}
 	return result
+}
+
+// ToStorageEntry converts domain.LaunchInstance to storage.LaunchInstanceEntry.
+func ToStorageEntry(i *LaunchInstance) *storage.LaunchInstanceEntry {
+	exitCode := 0
+	if i.ExitCode != nil {
+		exitCode = *i.ExitCode
+	}
+	return &storage.LaunchInstanceEntry{
+		ID:               string(i.ID),
+		ProfileID:        i.ProfileID,
+		RuntimeID:        i.RuntimeID,
+		ModelID:          i.ModelID,
+		Executable:       i.Executable,
+		Args:             i.Args,
+		WorkingDirectory: i.WorkingDirectory,
+		Environment:      i.Environment,
+		State:            string(i.State),
+		PID:              i.PID,
+		ExitCode:         exitCode,
+		ExitClass:        string(i.ExitClass),
+		LastError:        i.LastError,
+		StartedAt:        i.StartedAt,
+		StoppedAt:        i.StoppedAt,
+		CreatedAt:        i.CreatedAt,
+		UpdatedAt:        i.UpdatedAt,
+	}
+}
+
+// ToDomain converts storage.LaunchInstanceEntry to domain.LaunchInstance.
+func ToDomain(e *storage.LaunchInstanceEntry) *LaunchInstance {
+	exitCode := e.ExitCode
+	var exitCodePtr *int
+	if exitCode != 0 {
+		exitCodePtr = &exitCode
+	}
+	return &LaunchInstance{
+		ID:               InstanceID(e.ID),
+		ProfileID:        e.ProfileID,
+		RuntimeID:        e.RuntimeID,
+		ModelID:          e.ModelID,
+		PID:              e.PID,
+		State:            InstanceState(e.State),
+		StartedAt:        e.StartedAt,
+		StoppedAt:        e.StoppedAt,
+		ExitCode:         exitCodePtr,
+		ExitClass:        InstanceExitClass(e.ExitClass),
+		LastError:        e.LastError,
+		Executable:       e.Executable,
+		Args:             e.Args,
+		WorkingDirectory: e.WorkingDirectory,
+		Environment:      e.Environment,
+		CreatedAt:        e.CreatedAt,
+		UpdatedAt:        e.UpdatedAt,
+	}
 }

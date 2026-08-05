@@ -7,14 +7,14 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 
 	"github.com/example/goal/internal/config"
 	"github.com/example/goal/internal/process"
-	"github.com/example/goal/internal/store"
+	"github.com/example/goal/internal/storage"
 	"github.com/example/goal/internal/version"
 	"github.com/example/goal/internal/webui"
-	WebUIStore "github.com/example/goal/internal/webui/store"
 )
 
 func main() {
@@ -45,33 +45,34 @@ func main() {
 		dataDir = "./data"
 	}
 
-	// Create stores.
-	pdb, err := WebUIStore.NewStore(dataDir)
+	repoPath := filepath.Join(dataDir, "goal_repo.json")
+
+	// Create unified repository.
+	repo, err := storage.NewJSONRepository(repoPath)
 	if err != nil {
-		slog.Error("init profile store", "error", err)
+		slog.Error("init repository", "error", err)
 		os.Exit(1)
 	}
 
-	mdb, err := WebUIStore.NewModelStore(dataDir)
-	if err != nil {
-		slog.Error("init model store", "error", err)
-		os.Exit(1)
+	// Migrate legacy data if needed.
+	oldProfilesPath := filepath.Join(dataDir, "profiles.json")
+	oldRuntimesPath := filepath.Join(dataDir, "runtimes.json")
+
+	if _, err := os.Stat(oldProfilesPath); err == nil {
+		if _, err := os.Stat(oldRuntimesPath); err == nil {
+			if err := storage.MigrateFromOldStores(repo, dataDir, repoPath); err != nil {
+				slog.Warn("migration failed (data may already exist)", "error", err)
+			}
+		}
 	}
 
-	// Create instance store for launch instances.
-	instStore, err := store.NewInstanceStoreJSON(store.InstanceStoreOptions{
-		Directory: dataDir,
-		Filename:  "instances.json",
-	})
-	if err != nil {
-		slog.Error("init instance store", "error", err)
-		os.Exit(1)
-	}
+	// Create legacy Manager for backward compatibility (health checks, logs).
+	legacyMgr := process.NewManager()
 
-	// Create Supervisor with instance store.
-	supervisor := process.NewSupervisor(instStore)
+	// Create Supervisor with repository.
+	supervisor := process.NewSupervisor(repo)
 
-	app := webui.NewWithSupervisor(cfg, supervisor, pdb, mdb, instStore)
+	app := webui.NewWithSupervisor(cfg, supervisor, legacyMgr, repo)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

@@ -16,14 +16,13 @@ import (
 	"github.com/example/goal/internal/config"
 	"github.com/example/goal/internal/domain"
 	"github.com/example/goal/internal/process"
-	"github.com/example/goal/internal/store"
+	"github.com/example/goal/internal/storage"
 	"github.com/example/goal/internal/version"
 	"github.com/example/goal/internal/webui/errors"
 	"github.com/example/goal/internal/webui/health"
 	"github.com/example/goal/internal/webui/metrics"
 	"github.com/example/goal/internal/webui/middleware"
 	"github.com/example/goal/internal/webui/security"
-	WebUIStore "github.com/example/goal/internal/webui/store"
 )
 
 var funcMap = template.FuncMap{
@@ -50,10 +49,8 @@ type App struct {
 	cfg        config.Config
 	mgr        *process.Manager    // Legacy: single process manager (for backward compat)
 	supervisor *process.Supervisor // New: multi-instance supervisor
+	repo       storage.Repository  // Unified repository
 	tpl        *template.Template
-	pdb        *WebUIStore.Store
-	mdb        *WebUIStore.ModelStore
-	instStore  *store.InstanceStoreJSON
 	sess       *security.SessionStore
 	pass       *security.PasswordStore
 	csrf       *security.CSRF
@@ -61,14 +58,13 @@ type App struct {
 	metrics    *metrics.Manager
 }
 
-func New(cfg config.Config, mgr *process.Manager, pdb *WebUIStore.Store, mdb *WebUIStore.ModelStore) *App {
-	return NewWithSupervisor(cfg, nil, pdb, mdb, mgr)
+// New creates an App with legacy single-process manager.
+func New(cfg config.Config, mgr *process.Manager, repo storage.Repository) *App {
+	return NewWithSupervisor(cfg, nil, mgr, repo)
 }
 
 // NewWithSupervisor creates an App with a Supervisor for multi-instance support.
-// instStoreOrMgr can be either a *process.Manager (for backward compat) or *store.InstanceStoreJSON.
-// If instStoreOrMgr is a *process.Manager, supervisor will manage it as the legacy single instance.
-func NewWithSupervisor(cfg config.Config, supervisor *process.Supervisor, pdb *WebUIStore.Store, mdb *WebUIStore.ModelStore, instStoreOrMgr ...any) *App {
+func NewWithSupervisor(cfg config.Config, supervisor *process.Supervisor, mgr *process.Manager, repo storage.Repository) *App {
 	tpl := template.Must(template.New("").Funcs(funcMap).ParseFS(assets, "templates/*.html"))
 	sess := security.NewSessionStore()
 	pass := security.NewPasswordStore()
@@ -84,24 +80,14 @@ func NewWithSupervisor(cfg config.Config, supervisor *process.Supervisor, pdb *W
 	app := &App{
 		cfg:        cfg,
 		supervisor: supervisor,
+		mgr:        mgr,
+		repo:       repo,
 		tpl:        tpl,
-		pdb:        pdb,
-		mdb:        mdb,
 		sess:       sess,
 		pass:       pass,
 		csrf:       csrf,
 		hc:         hc,
 		metrics:    met,
-	}
-
-	// Handle variadic parameter: can be *process.Manager or *store.InstanceStoreJSON.
-	for _, arg := range instStoreOrMgr {
-		switch v := arg.(type) {
-		case *process.Manager:
-			app.mgr = v
-		case *store.InstanceStoreJSON:
-			app.instStore = v
-		}
 	}
 
 	return app
@@ -129,6 +115,10 @@ func (a *App) Run(ctx context.Context) error {
 	mux.HandleFunc("GET /api/v1/runtimes/health", a.requireAuth(a.runtimeHealthCheck))
 	mux.HandleFunc("GET /api/v1/runtimes/health/{id}", a.requireAuth(a.runtimeRuntimeHealth))
 	mux.HandleFunc("GET /api/v1/models", a.requireAuth(a.modelList))
+	mux.HandleFunc("GET /api/v1/models/", a.requireAuth(a.modelGet))
+
+	// Profile resolve (preview).
+	mux.HandleFunc("POST /api/v1/profiles/{id}/resolve", a.requireAuthCSRF(a.profileResolve))
 
 	// Auth endpoints.
 	mux.HandleFunc("POST /api/v1/auth/logout", a.logout)
@@ -136,7 +126,6 @@ func (a *App) Run(ctx context.Context) error {
 
 	// Protected CRUD endpoints (auth + CSRF for mutations).
 	mux.HandleFunc("POST /api/v1/profiles", a.requireAuthCSRF(a.profileCreate))
-	mux.HandleFunc("GET /api/v1/profiles/", a.requireAuth(a.profileGet))
 	mux.HandleFunc("PUT /api/v1/profiles/", a.requireAuthCSRF(a.profileUpdate))
 	mux.HandleFunc("DELETE /api/v1/profiles/", a.requireAuthCSRF(a.profileDelete))
 	mux.HandleFunc("POST /api/v1/profiles/{id}/action/{action}", a.requireAuthCSRF(a.profileAction))
@@ -148,12 +137,10 @@ func (a *App) Run(ctx context.Context) error {
 	mux.HandleFunc("POST /api/v1/profiles/{id}/activate", a.requireAuthCSRF(a.profileActivate))
 	mux.HandleFunc("POST /api/v1/profiles/{id}/deactivate", a.requireAuthCSRF(a.profileDeactivate))
 	mux.HandleFunc("POST /api/v1/runtimes", a.requireAuthCSRF(a.runtimeCreate))
-	mux.HandleFunc("GET /api/v1/runtimes/", a.requireAuth(a.runtimeGet))
 	mux.HandleFunc("PUT /api/v1/runtimes/", a.requireAuthCSRF(a.runtimeUpdate))
 	mux.HandleFunc("DELETE /api/v1/runtimes/", a.requireAuthCSRF(a.runtimeDelete))
 	mux.HandleFunc("POST /api/v1/runtimes/{id}/action/{action}", a.requireAuthCSRF(a.runtimeAction))
 	mux.HandleFunc("POST /api/v1/models", a.requireAuthCSRF(a.modelCreate))
-	mux.HandleFunc("GET /api/v1/models/", a.requireAuth(a.modelGet))
 	mux.HandleFunc("PUT /api/v1/models/", a.requireAuthCSRF(a.modelUpdate))
 	mux.HandleFunc("DELETE /api/v1/models/", a.requireAuthCSRF(a.modelDelete))
 
@@ -168,7 +155,14 @@ func (a *App) Run(ctx context.Context) error {
 	handler = a.rateLimitHandler(handler)
 	handler = a.csrf.Middleware(handler)
 
-	srv := &http.Server{Addr: fmt.Sprintf("%s:%d", a.cfg.ListenAddress, a.cfg.WebPort), Handler: handler}
+	srv := &http.Server{
+		Addr:              fmt.Sprintf("%s:%d", a.cfg.ListenAddress, a.cfg.WebPort),
+		Handler:           handler,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		IdleTimeout:       60 * time.Second,
+		MaxHeaderBytes:    1 << 20,
+	}
 	go func() {
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -183,7 +177,6 @@ func (a *App) Run(ctx context.Context) error {
 }
 
 // RunHealthChecker starts the periodic health check goroutine.
-// It should be called from the main function after creating the App.
 func (a *App) RunHealthChecker(ctx context.Context) {
 	a.startHealthChecker(ctx)
 }
@@ -204,9 +197,9 @@ func writeError(w http.ResponseWriter, code int, msg string) {
 
 func (a *App) index(w http.ResponseWriter, r *http.Request) {
 	status := a.mgr.Status()
-	profiles, _ := a.pdb.ListProfiles()
-	runtimes, _ := a.pdb.ListRuntimes()
-	models, _ := a.mdb.ListModels()
+	profiles, _ := a.repo.ListProfiles()
+	runtimes, _ := a.repo.ListRuntimes()
+	models, _ := a.repo.ListModels()
 
 	data := map[string]any{
 		"Status":   status,
@@ -250,7 +243,6 @@ func (a *App) logsQuery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Parse query parameters.
 	query := process.LogQuery{}
 
 	if stream := r.URL.Query().Get("stream"); stream != "" {
@@ -266,7 +258,6 @@ func (a *App) logsQuery(w http.ResponseWriter, r *http.Request) {
 		query.To = to
 	}
 
-	// Parse pagination.
 	if pageStr := r.URL.Query().Get("page"); pageStr != "" {
 		if page, err := strconv.Atoi(pageStr); err == nil && page > 0 {
 			query.Page = page
@@ -278,7 +269,6 @@ func (a *App) logsQuery(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Get logs from log store.
 	logStore := a.mgr.GetLogStore()
 	result := logStore.GetLogs(query)
 
@@ -313,7 +303,7 @@ func (a *App) logs(w http.ResponseWriter, r *http.Request) {
 // ---------- profiles CRUD ----------
 
 func (a *App) profileList(w http.ResponseWriter, r *http.Request) {
-	profiles, err := a.pdb.ListProfiles()
+	profiles, err := a.repo.ListProfiles()
 	if err != nil {
 		writeError(w, 500, err.Error())
 		return
@@ -323,7 +313,7 @@ func (a *App) profileList(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) profileGet(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimPrefix(r.URL.Path, "/api/v1/profiles/")
-	p, err := a.pdb.GetProfile(id)
+	p, err := a.repo.GetProfile(id)
 	if err != nil {
 		errors.WriteError(w, http.StatusNotFound, errors.ErrProfileNotFound(id))
 		return
@@ -332,15 +322,7 @@ func (a *App) profileGet(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) profileCreate(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		Name        string            `json:"name"`
-		RuntimeID   string            `json:"runtime_id"`
-		ModelID     string            `json:"model_id"`
-		Host        string            `json:"host"`
-		Port        int               `json:"port"`
-		Args        []string          `json:"args"`
-		Environment map[string]string `json:"environment"`
-	}
+	var body storage.ProfileEntry
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		errors.WriteError(w, http.StatusBadRequest, errors.ErrBadRequest)
 		return
@@ -349,40 +331,44 @@ func (a *App) profileCreate(w http.ResponseWriter, r *http.Request) {
 		errors.WriteError(w, http.StatusBadRequest, errors.NewAPIError(errors.CodeBadRequest, "name is required"))
 		return
 	}
-	p, err := a.pdb.CreateProfile(body.Name, body.RuntimeID, body.ModelID, body.Host, body.Port, body.Args, body.Environment)
-	if err != nil {
+	if body.RuntimeID == "" {
+		errors.WriteError(w, http.StatusBadRequest, errors.NewAPIError(errors.CodeBadRequest, "runtime_id is required"))
+		return
+	}
+	if body.Host == "" || body.Port == 0 {
+		errors.WriteError(w, http.StatusBadRequest, errors.NewAPIError(errors.CodeBadRequest, "host and port are required"))
+		return
+	}
+
+	body.ID = ""
+	body.Active = false
+
+	if err := a.repo.CreateProfile(&body); err != nil {
 		errors.WriteError(w, http.StatusInternalServerError, errors.NewAPIError(errors.CodeInternalServer, err.Error()))
 		return
 	}
-	writeJSON(w, http.StatusCreated, p)
+	writeJSON(w, http.StatusCreated, &body)
 }
 
 func (a *App) profileUpdate(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimPrefix(r.URL.Path, "/api/v1/profiles/")
-	var body struct {
-		Name        string            `json:"name"`
-		RuntimeID   string            `json:"runtime_id"`
-		ModelID     string            `json:"model_id"`
-		Host        string            `json:"host"`
-		Port        int               `json:"port"`
-		Args        []string          `json:"args"`
-		Environment map[string]string `json:"environment"`
-	}
+	var body storage.ProfileEntry
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, 400, "invalid request body")
 		return
 	}
-	p, err := a.pdb.UpdateProfile(id, body.Name, body.RuntimeID, body.ModelID, body.Host, body.Port, body.Args, body.Environment)
-	if err != nil {
+	body.ID = id
+
+	if err := a.repo.UpdateProfile(&body); err != nil {
 		writeError(w, 404, "profile not found")
 		return
 	}
-	writeJSON(w, http.StatusOK, p)
+	writeJSON(w, http.StatusOK, &body)
 }
 
 func (a *App) profileDelete(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimPrefix(r.URL.Path, "/api/v1/profiles/")
-	if err := a.pdb.DeleteProfile(id); err != nil {
+	if err := a.repo.DeleteProfile(id); err != nil {
 		writeError(w, 404, "profile not found")
 		return
 	}
@@ -390,7 +376,6 @@ func (a *App) profileDelete(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) profileAction(w http.ResponseWriter, r *http.Request) {
-	// Path: /api/v1/profiles/{id}/action/{action}
 	path := strings.TrimPrefix(r.URL.Path, "/api/v1/profiles/")
 	parts := strings.SplitN(path, "/action/", 2)
 	if len(parts) != 2 {
@@ -400,7 +385,6 @@ func (a *App) profileAction(w http.ResponseWriter, r *http.Request) {
 	profileID := parts[0]
 	action := parts[1]
 
-	// Read body for start action.
 	var body struct {
 		RuntimeID string   `json:"runtime_id"`
 		ModelID   string   `json:"model_id"`
@@ -412,7 +396,7 @@ func (a *App) profileAction(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewDecoder(r.Body).Decode(&body)
 	}
 
-	p, err := a.pdb.GetProfile(profileID)
+	p, err := a.repo.GetProfile(profileID)
 	if err != nil {
 		writeError(w, 404, "profile not found")
 		return
@@ -423,7 +407,7 @@ func (a *App) profileAction(w http.ResponseWriter, r *http.Request) {
 
 	switch action {
 	case "start":
-		inst, err := a.startProfile(ctx, p, body)
+		inst, err := a.startProfile(ctx, p)
 		if err != nil {
 			writeError(w, 500, err.Error())
 			return
@@ -431,10 +415,10 @@ func (a *App) profileAction(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "started", "instance_id": string(inst.ID)})
 
 	case "stop":
-		instances, _ := a.supervisor.ListByProfileID(profileID)
+		instances, _ := a.repo.ListByProfileID(profileID)
 		for _, inst := range instances {
-			if inst.IsActive() {
-				if err := a.supervisor.Stop(ctx, inst.ID); err != nil {
+			if inst.State == "running" || inst.State == "starting" {
+				if err := a.supervisor.Stop(ctx, domain.InstanceID(inst.ID)); err != nil {
 					writeError(w, 500, err.Error())
 					return
 				}
@@ -445,11 +429,11 @@ func (a *App) profileAction(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 404, "no active instance for profile")
 
 	case "restart":
-		instances, _ := a.supervisor.ListByProfileID(profileID)
+		instances, _ := a.repo.ListByProfileID(profileID)
 		var targetID domain.InstanceID
 		for _, inst := range instances {
-			if inst.IsActive() {
-				targetID = inst.ID
+			if inst.State == "running" || inst.State == "starting" {
+				targetID = domain.InstanceID(inst.ID)
 				break
 			}
 		}
@@ -460,7 +444,7 @@ func (a *App) profileAction(w http.ResponseWriter, r *http.Request) {
 			}
 			writeJSON(w, http.StatusOK, map[string]string{"status": "restarted"})
 		} else {
-			inst, err := a.startProfile(ctx, p, body)
+			inst, err := a.startProfile(ctx, p)
 			if err != nil {
 				writeError(w, 500, err.Error())
 				return
@@ -473,31 +457,196 @@ func (a *App) profileAction(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (a *App) startProfile(ctx context.Context, p *WebUIStore.Profile, body struct {
-	RuntimeID string   `json:"runtime_id"`
-	ModelID   string   `json:"model_id"`
-	Host      string   `json:"host"`
-	Port      int      `json:"port"`
-	Args      []string `json:"args"`
-}) (*domain.LaunchInstance, error) {
-	// Resolve runtime and convert to domain.
-	rte, err := a.pdb.GetRuntime(p.RuntimeID)
+func (a *App) profileResolve(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimPrefix(r.URL.Path, "/api/v1/profiles/")
+	p, err := a.repo.GetProfile(id)
+	if err != nil {
+		errors.WriteError(w, http.StatusNotFound, errors.ErrProfileNotFound(id))
+		return
+	}
+
+	rte, err := a.repo.GetRuntime(p.RuntimeID)
+	if err != nil {
+		errors.WriteError(w, http.StatusNotFound, errors.ErrRuntimeNotFound(p.RuntimeID))
+		return
+	}
+
+	// Resolve model path for preview.
+	var modelPath, mmprojPath string
+	if p.ModelID != "" {
+		mdl, err := a.repo.GetModel(p.ModelID)
+		if err == nil {
+			modelPath = mdl.Path
+			mmprojPath = mdl.MMProj
+		}
+	}
+
+	// Build command spec (same logic as startProfile).
+	spec, err := domain.BuildCommandSpecForPreview(p, rte, modelPath, mmprojPath)
+	if err != nil {
+		errors.WriteError(w, http.StatusBadRequest, errors.NewAPIError(errors.CodeBadRequest, err.Error()))
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"executable":       spec.Executable,
+		"args":             spec.Args,
+		"workingDirectory": spec.WorkingDirectory,
+		"environmentKeys":  getEnvKeys(spec.Environment),
+	})
+}
+
+func getEnvKeys(env []string) []string {
+	keys := make([]string, 0, len(env))
+	for _, ev := range env {
+		if k, _, ok := strings.Cut(ev, "="); ok {
+			keys = append(keys, k)
+		}
+	}
+	return keys
+}
+
+func (a *App) profileStart(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimPrefix(r.URL.Path, "/api/v1/profiles/")
+	p, err := a.repo.GetProfile(id)
+	if err != nil {
+		writeError(w, 404, "profile not found")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+
+	inst, err := a.startProfile(ctx, p)
+	if err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "started", "instance_id": string(inst.ID)})
+}
+
+func (a *App) profileStop(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimPrefix(r.URL.Path, "/api/v1/profiles/")
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+
+	instances, _ := a.repo.ListByProfileID(id)
+	for _, inst := range instances {
+		if inst.State == "running" || inst.State == "starting" {
+			if err := a.supervisor.Stop(ctx, domain.InstanceID(inst.ID)); err != nil {
+				writeError(w, 500, err.Error())
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]string{"status": "stopped"})
+			return
+		}
+	}
+	writeError(w, 404, "no active instance for profile")
+}
+
+func (a *App) profileRestart(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimPrefix(r.URL.Path, "/api/v1/profiles/")
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+
+	instances, _ := a.repo.ListByProfileID(id)
+	var targetID domain.InstanceID
+	for _, inst := range instances {
+		if inst.State == "running" || inst.State == "starting" {
+			targetID = domain.InstanceID(inst.ID)
+			break
+		}
+	}
+	if targetID != "" {
+		if _, err := a.supervisor.Restart(ctx, targetID); err != nil {
+			writeError(w, 500, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "restarted"})
+	} else {
+		p, err := a.repo.GetProfile(id)
+		if err != nil {
+			writeError(w, 404, "profile not found")
+			return
+		}
+		inst, err := a.startProfile(ctx, p)
+		if err != nil {
+			writeError(w, 500, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "restarted", "instance_id": string(inst.ID)})
+	}
+}
+
+func (a *App) profileStatus(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimPrefix(r.URL.Path, "/api/v1/profiles/")
+	instances, err := a.repo.ListByProfileID(id)
+	if err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+
+	type StatusSummary struct {
+		ProfileID  string                       `json:"profile_id"`
+		ActiveInst *storage.LaunchInstanceEntry `json:"active_instance,omitempty"`
+		Count      int                          `json:"count"`
+		Running    int                          `json:"running"`
+	}
+
+	summary := StatusSummary{
+		ProfileID: id,
+		Count:     len(instances),
+	}
+	for _, inst := range instances {
+		if inst.State == "running" || inst.State == "starting" {
+			summary.Running++
+			summary.ActiveInst = inst
+		}
+	}
+
+	writeJSON(w, http.StatusOK, summary)
+}
+
+func (a *App) profileActivate(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimPrefix(r.URL.Path, "/api/v1/profiles/")
+	p, err := a.repo.GetProfile(id)
+	if err != nil {
+		writeError(w, 404, "profile not found")
+		return
+	}
+	p.Active = true
+	if err := a.repo.UpdateProfile(p); err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, p)
+}
+
+func (a *App) profileDeactivate(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimPrefix(r.URL.Path, "/api/v1/profiles/")
+	p, err := a.repo.GetProfile(id)
+	if err != nil {
+		writeError(w, 404, "profile not found")
+		return
+	}
+	p.Active = false
+	if err := a.repo.UpdateProfile(p); err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, p)
+}
+
+// startProfile resolves runtime, model, and profile to start a new instance.
+func (a *App) startProfile(ctx context.Context, p *storage.ProfileEntry) (*domain.LaunchInstance, error) {
+	rte, err := a.repo.GetRuntime(p.RuntimeID)
 	if err != nil {
 		return nil, fmt.Errorf("runtime not found: %w", err)
 	}
-	domainRTE := &domain.Runtime{
-		ID:               rte.ID,
-		Name:             rte.Name,
-		Executable:       rte.Executable,
-		WorkingDirectory: rte.WorkingDirectory,
-		DefaultArgs:      rte.DefaultArgs,
-		Environment:      rte.Environment,
-	}
 
-	// Resolve model (optional, for preview only).
 	var mdl *domain.Model
 	if p.ModelID != "" {
-		mdlData, err := a.mdb.GetModel(p.ModelID)
+		mdlData, err := a.repo.GetModel(p.ModelID)
 		if err == nil {
 			mdl = &domain.Model{
 				ID:     mdlData.ID,
@@ -509,7 +658,6 @@ func (a *App) startProfile(ctx context.Context, p *WebUIStore.Profile, body stru
 		}
 	}
 
-	// Build domain profile from store profile.
 	domainProfile := &domain.Profile{
 		ID:          p.ID,
 		Name:        p.Name,
@@ -522,23 +670,12 @@ func (a *App) startProfile(ctx context.Context, p *WebUIStore.Profile, body stru
 		Active:      p.Active,
 	}
 
-	// Collect custom args from body (override profile args).
-	var customArgs []string
-	if len(body.Args) > 0 {
-		customArgs = body.Args
-	}
+	domainRuntime := process.RuntimeToDomain(
+		rte.ID, rte.Name, rte.Executable, rte.WorkingDirectory,
+		rte.DefaultArgs, rte.Environment,
+	)
 
-	// Collect custom environment.
-	var customEnv map[string]string
-	if p.Environment != nil {
-		customEnv = make(map[string]string)
-		for k, v := range p.Environment {
-			customEnv[k] = v
-		}
-	}
-
-	// Build instance via Supervisor.
-	inst, err := a.supervisor.Start(ctx, domainProfile, domainRTE, mdl, customArgs, customEnv)
+	inst, err := a.supervisor.Start(ctx, domainProfile, domainRuntime, mdl, nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -549,7 +686,7 @@ func (a *App) startProfile(ctx context.Context, p *WebUIStore.Profile, body stru
 // ---------- runtimes CRUD ----------
 
 func (a *App) runtimeList(w http.ResponseWriter, r *http.Request) {
-	runtimes, err := a.pdb.ListRuntimes()
+	runtimes, err := a.repo.ListRuntimes()
 	if err != nil {
 		writeError(w, 500, err.Error())
 		return
@@ -558,9 +695,8 @@ func (a *App) runtimeList(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) runtimeGet(w http.ResponseWriter, r *http.Request) {
-	// Path is /api/v1/runtimes/{id}, but mux already stripped /api/v1/runtimes/
-	id := strings.TrimPrefix(r.URL.Path, "/")
-	rte, err := a.pdb.GetRuntime(id)
+	id := strings.TrimPrefix(r.URL.Path, "/api/v1/runtimes/")
+	rte, err := a.repo.GetRuntime(id)
 	if err != nil {
 		writeError(w, 404, "runtime not found")
 		return
@@ -569,13 +705,7 @@ func (a *App) runtimeGet(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) runtimeCreate(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		Name             string            `json:"name"`
-		Executable       string            `json:"executable"`
-		WorkingDirectory string            `json:"working_directory"`
-		DefaultArgs      []string          `json:"default_args"`
-		Environment      map[string]string `json:"environment"`
-	}
+	var body storage.RuntimeEntry
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, 400, "invalid request body")
 		return
@@ -584,45 +714,38 @@ func (a *App) runtimeCreate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "name and executable are required")
 		return
 	}
-	rte, err := a.pdb.CreateRuntime(body.Name, body.Executable, body.WorkingDirectory, body.DefaultArgs, body.Environment)
-	if err != nil {
+	body.ID = ""
+	if err := a.repo.CreateRuntime(&body); err != nil {
 		writeError(w, 500, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusCreated, rte)
+	writeJSON(w, http.StatusCreated, &body)
 }
 
 func (a *App) runtimeUpdate(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimPrefix(r.URL.Path, "/api/v1/runtimes/")
-	var body struct {
-		Name             string            `json:"name"`
-		Executable       string            `json:"executable"`
-		WorkingDirectory string            `json:"working_directory"`
-		DefaultArgs      []string          `json:"default_args"`
-		Environment      map[string]string `json:"environment"`
-	}
+	var body storage.RuntimeEntry
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, 400, "invalid request body")
 		return
 	}
-	rte, err := a.pdb.UpdateRuntime(id, body.Name, body.Executable, body.WorkingDirectory, body.DefaultArgs, body.Environment)
-	if err != nil {
+	body.ID = id
+
+	if err := a.repo.UpdateRuntime(&body); err != nil {
 		writeError(w, 404, "runtime not found")
 		return
 	}
-	writeJSON(w, http.StatusOK, rte)
+	writeJSON(w, http.StatusOK, &body)
 }
 
 func (a *App) runtimeDelete(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimPrefix(r.URL.Path, "/api/v1/runtimes/")
-	if err := a.pdb.DeleteRuntime(id); err != nil {
+	if err := a.repo.DeleteRuntime(id); err != nil {
 		writeError(w, 404, "runtime not found")
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
-
-// ---------- models CRUD ----------
 
 func (a *App) runtimeAction(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, "/api/v1/runtimes/")
@@ -631,10 +754,8 @@ func (a *App) runtimeAction(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid path: expected /api/v1/runtimes/{id}/action/{action}")
 		return
 	}
-	_ = parts[0] // id not used for runtime actions
 	action := parts[1]
 
-	// Check if a process is already running.
 	curStatus := a.mgr.Status()
 	if curStatus.State == process.StateRunning && action != "stop" {
 		writeError(w, 409, "a process is already running")
@@ -655,7 +776,6 @@ func (a *App) runtimeAction(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		_ = a.mgr.Stop(ctx)
-		// Re-read profile config for restart (simplified: use stored profile).
 		writeJSON(w, http.StatusOK, map[string]string{"status": "restarted"})
 
 	default:
@@ -663,8 +783,10 @@ func (a *App) runtimeAction(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// ---------- models CRUD ----------
+
 func (a *App) modelList(w http.ResponseWriter, r *http.Request) {
-	models, err := a.mdb.ListModels()
+	models, err := a.repo.ListModels()
 	if err != nil {
 		writeError(w, 500, err.Error())
 		return
@@ -672,13 +794,18 @@ func (a *App) modelList(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, models)
 }
 
-func (a *App) modelCreate(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		Name   string `json:"name"`
-		Path   string `json:"path"`
-		MMProj string `json:"mmproj"`
-		Format string `json:"format"`
+func (a *App) modelGet(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimPrefix(r.URL.Path, "/api/v1/models/")
+	m, err := a.repo.GetModel(id)
+	if err != nil {
+		writeError(w, 404, "model not found")
+		return
 	}
+	writeJSON(w, http.StatusOK, m)
+}
+
+func (a *App) modelCreate(w http.ResponseWriter, r *http.Request) {
+	var body storage.ModelEntry
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, 400, "invalid request body")
 		return
@@ -687,53 +814,33 @@ func (a *App) modelCreate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "name and path are required")
 		return
 	}
-	m, err := a.mdb.CreateModel(body.Name, body.Path, body.MMProj, body.Format)
-	if err != nil {
+	body.ID = ""
+	if err := a.repo.CreateModel(&body); err != nil {
 		writeError(w, 500, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusCreated, m)
-}
-
-func (a *App) modelGet(w http.ResponseWriter, r *http.Request) {
-	id := strings.TrimPrefix(r.URL.Path, "/api/v1/models/")
-	m, err := a.mdb.GetModel(id)
-	if err != nil {
-		writeError(w, 404, "model not found")
-		return
-	}
-	writeJSON(w, http.StatusOK, m)
+	writeJSON(w, http.StatusCreated, &body)
 }
 
 func (a *App) modelUpdate(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimPrefix(r.URL.Path, "/api/v1/models/")
-	var body struct {
-		Name   string `json:"name"`
-		Path   string `json:"path"`
-		MMProj string `json:"mmproj"`
-		Format string `json:"format"`
-	}
+	var body storage.ModelEntry
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, 400, "invalid request body")
 		return
 	}
-	if body.Name == "" || body.Path == "" {
-		writeError(w, 400, "name and path are required")
-		return
-	}
-	m, err := a.mdb.UpdateModel(id, body.Name, body.Path, body.MMProj, body.Format)
-	if err != nil {
+	body.ID = id
+
+	if err := a.repo.UpdateModel(&body); err != nil {
 		writeError(w, 404, "model not found")
 		return
 	}
-	writeJSON(w, http.StatusOK, m)
+	writeJSON(w, http.StatusOK, &body)
 }
-
-// ---------- models delete ----------
 
 func (a *App) modelDelete(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimPrefix(r.URL.Path, "/api/v1/models/")
-	if err := a.mdb.DeleteModel(id); err != nil {
+	if err := a.repo.DeleteModel(id); err != nil {
 		writeError(w, 404, "model not found")
 		return
 	}
@@ -837,7 +944,6 @@ func (rl *rateLimiter) allow(ip string) bool {
 	now := time.Now()
 	windowStart := now.Add(-rl.window)
 
-	// Filter old entries.
 	var times []time.Time
 	for _, t := range rl.requests[ip] {
 		if t.After(windowStart) {
@@ -855,7 +961,7 @@ func (rl *rateLimiter) allow(ip string) bool {
 }
 
 func (a *App) rateLimitHandler(next http.Handler) http.Handler {
-	rl := newRateLimiter(100, 1*time.Minute) // 100 requests per minute per IP
+	rl := newRateLimiter(100, 1*time.Minute)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ip := getClientIP(r)
 		if !rl.allow(ip) {
@@ -867,14 +973,12 @@ func (a *App) rateLimitHandler(next http.Handler) http.Handler {
 }
 
 func getClientIP(r *http.Request) string {
-	// Check X-Real-IP and X-Forwarded-First headers first.
 	if ip := r.Header.Get("X-Real-IP"); ip != "" {
 		return ip
 	}
 	if ip := r.Header.Get("X-Forwarded-For"); ip != "" {
 		return strings.Split(ip, ",")[0]
 	}
-	// Fall back to RemoteAddr.
 	if ip, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
 		return ip
 	}
@@ -901,7 +1005,7 @@ func (a *App) runtimeRuntimeHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) buildRuntimeDefs() []health.RuntimeDef {
-	runtimes, err := a.pdb.ListRuntimes()
+	runtimes, err := a.repo.ListRuntimes()
 	if err != nil {
 		return nil
 	}
@@ -914,7 +1018,7 @@ func (a *App) buildRuntimeDefs() []health.RuntimeDef {
 			Port: 0,
 		}
 	}
-	profiles, _ := a.pdb.ListProfiles()
+	profiles, _ := a.repo.ListProfiles()
 	for _, p := range profiles {
 		if def, ok := defsMap[p.RuntimeID]; ok {
 			defsMap[p.RuntimeID] = health.RuntimeDef{
@@ -932,12 +1036,10 @@ func (a *App) buildRuntimeDefs() []health.RuntimeDef {
 	return defs
 }
 
-// startHealthChecker begins periodic health check polling.
 func (a *App) startHealthChecker(ctx context.Context) {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 
-	// Run initial check immediately.
 	a.refreshHealthChecks()
 	a.performHealthCheck()
 
@@ -952,7 +1054,6 @@ func (a *App) startHealthChecker(ctx context.Context) {
 	}
 }
 
-// performHealthCheck runs health checks and stores results.
 func (a *App) performHealthCheck() {
 	_ = a.hc.CheckAll()
 }

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/example/goal/internal/domain"
+	"github.com/example/goal/internal/storage"
 )
 
 // Supervisor manages multiple launch instances.
@@ -22,12 +23,12 @@ type Supervisor struct {
 
 // InstanceStore persists and retrieves launch instances.
 type InstanceStore interface {
-	Create(*domain.LaunchInstance) error
-	Get(domain.InstanceID) (*domain.LaunchInstance, error)
-	Update(*domain.LaunchInstance) error
-	Delete(domain.InstanceID) error
-	List() ([]*domain.LaunchInstance, error)
-	FindByProfileID(profileID string) ([]*domain.LaunchInstance, error)
+	Create(e *storage.LaunchInstanceEntry) error
+	Get(id string) (*storage.LaunchInstanceEntry, error)
+	Update(e *storage.LaunchInstanceEntry) error
+	Delete(id string) error
+	List() ([]*storage.LaunchInstanceEntry, error)
+	ListByProfileID(profileID string) ([]*storage.LaunchInstanceEntry, error)
 }
 
 // SupervisorConfig holds configuration for Supervisor.
@@ -68,6 +69,18 @@ func (s *Supervisor) ResolvePreview(profile *domain.Profile, runtime *domain.Run
 	return s.resolver.Resolve(profile, runtime, model, customArgs, customEnv)
 }
 
+// RuntimeToDomain converts storage.RuntimeEntry to domain.Runtime.
+func RuntimeToDomain(id, name, executable, workingDir string, defaultArgs []string, environment map[string]string) *domain.Runtime {
+	return &domain.Runtime{
+		ID:               id,
+		Name:             name,
+		Executable:       executable,
+		WorkingDirectory: workingDir,
+		DefaultArgs:      defaultArgs,
+		Environment:      environment,
+	}
+}
+
 // Start creates a new launch instance and starts its process.
 func (s *Supervisor) Start(ctx context.Context, profile *domain.Profile, runtime *domain.Runtime, model *domain.Model, customArgs []string, customEnv map[string]string) (*domain.LaunchInstance, error) {
 	// Check concurrency limit.
@@ -92,7 +105,8 @@ func (s *Supervisor) Start(ctx context.Context, profile *domain.Profile, runtime
 
 	// Persist initial pending instance.
 	if s.store != nil {
-		if err := s.store.Create(inst); err != nil {
+		entry := domain.ToStorageEntry(inst)
+		if err := s.store.Create(entry); err != nil {
 			return nil, fmt.Errorf("persist instance: %w", err)
 		}
 	}
@@ -108,7 +122,7 @@ func (s *Supervisor) Start(ctx context.Context, profile *domain.Profile, runtime
 	if err := ctrl.Start(ctx); err != nil {
 		inst.UpdateError(err.Error(), domain.InstanceExitError)
 		if s.store != nil {
-			_ = s.store.Update(inst)
+			_ = s.store.Update(domain.ToStorageEntry(inst))
 		}
 		return nil, fmt.Errorf("start instance %s: %w", inst.ID, err)
 	}
@@ -186,7 +200,15 @@ func (s *Supervisor) ListByProfileID(profileID string) ([]*domain.LaunchInstance
 	if s.store == nil {
 		return nil, nil
 	}
-	return s.store.FindByProfileID(profileID)
+	entries, err := s.store.ListByProfileID(profileID)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]*domain.LaunchInstance, 0, len(entries))
+	for _, e := range entries {
+		result = append(result, domain.ToDomain(e))
+	}
+	return result, nil
 }
 
 // Shutdown stops all active instances gracefully.
@@ -222,7 +244,7 @@ func (s *Supervisor) RemoveTerminal(id domain.InstanceID) {
 
 	if ok && s.store != nil {
 		inst := ctrl.Instance()
-		_ = s.store.Update(inst)
+		_ = s.store.Update(domain.ToStorageEntry(inst))
 	}
 }
 
@@ -239,7 +261,7 @@ func (s *Supervisor) ShutdownWithPersistence(ctx context.Context) error {
 		for _, ctrl := range s.instances {
 			inst := ctrl.Instance()
 			if inst.IsTerminal() {
-				_ = s.store.Update(inst)
+				_ = s.store.Update(domain.ToStorageEntry(inst))
 			}
 		}
 		s.mu.RUnlock()
