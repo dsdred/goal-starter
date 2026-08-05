@@ -73,7 +73,7 @@
 
 ## TODO — Next iteration
 
-### P1 — API improvements (ЧАСТИЧНО ЗАВЕРШЕНО)
+### P1 — API improvements
 
 - [x] Health checks для runtimes (`internal/webui/health/`)
 - [x] Runtime-level health check endpoint (`GET /api/v1/runtimes/health/{id}`)
@@ -84,7 +84,7 @@
 - [x] WebSocket для log stream (`internal/webui/websocket/`)
 - [x] Metrics endpoint (Prometheus format) — `internal/webui/metrics/`
 
-### P2 — Packaging (ЗАВЕРШЕНО)
+### P2 — Packaging
 
 - [x] Release archives для Windows (.zip) — `scripts/build-all.ps1`
   - Автоматическое создание ZIP архива с бинарником, конфигами, README и service скриптами
@@ -105,13 +105,31 @@
   - Работает на Windows и Linux
 - [x] MSI/SFX fallback в build.go — автовыбор между MSI и SFX
 - [x] Поддержка -sfx флага в goal-msi
+- [x] Linux packages (.deb, .rpm) — cmd/goal/linux/packager.go
+  - Поддержка dpkg-deb и fpm для .deb
+  - Поддержка rpmbuild и fpm для .rpm
+  - Автоматическое определение доступных инструментов
+  - Systemd service integration
+- [x] Auto-update mechanism — internal/updater/updater.go
+  - Проверка обновлений через GitHub Releases API
+  - Скачивание с verification checksum SHA256
+  - Установка для Windows, Linux
+  - Автоматический restart сервиса после обновления
+  - Fallback на package manager для .deb/.rpm
 - [ ] Windows installer (.msi) — требует WiX Toolset
-- [ ] Linux package (.deb, .rpm)
-- [ ] Auto-update mechanism
 
 ### P2 — Configuration
 
 - [x] Config validation при старте (`internal/config/validate.go`, `ValidateFull`)
+
+### P1 — Testing improvements
+
+- [x] Устранены failing тесты в `internal/webui/handlers/`
+  - Рефакторинг `instanceStoreAdapter` → `mockInstanceStore` с configurable behavior
+  - Исправлен `TestInstancesHandler_List_Error` — supervisor.List() возвращает из internal map, не из store
+  - Исправлен `TestInstancesHandler_StartProfile` — учтено что fake-runtime может отсутствовать
+  - Исправлен `TestInstanceStoreJSON_CreateDuplicate` — Create не проверяет уникальность (overwrite)
+  - Все тесты handlers проходят (go test ./internal/webui/handlers/...), gofmt и go vet чисты
 - [x] Hot-reload configuration (`internal/config/reload.go`, `ReloadConfig`)
 - [x] Config migration from v1 to v2 (`internal/config/config.go`, `migrateV1ToV2`)
   - Добавлена миграция версии конфиг файла
