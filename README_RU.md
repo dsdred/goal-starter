@@ -4,7 +4,7 @@ GoAl — лёгкий кроссплатформенный менеджер дл
 
 ## Статус
 
-**v0.8 — Миграция, Горячая Перезагрузка Конфига, SSE Лог-Фильтрация и Пагинация.**
+**v0.9 — Multi-Instance Supervisor, Domain Models, Launch Resolver, Structured API Errors.**
 
 > Этот репозиторий — архитектурный стартер, не готовая к продакшену система.
 
@@ -102,20 +102,33 @@ GoAl автоматически мигрирует конфигурацию пр
 | GET | `/api/v1/logs/query` | Поиск и пагинация логов |
 | GET | `/api/v1/migration/status` | Статус миграции конфигурации |
 
+### Управление экземплярами (Instances)
+
+Профиль — это шаблон запуска. Экземпляр (Instance) — запущенный процесс.
+
+| Method | Path | Описание |
+|--------|------|----------|
+| GET | `/api/v1/instances` | Список всех экземпляров |
+| GET | `/api/v1/instances/{id}` | Статус экземпляра |
+| POST | `/api/v1/instances/{id}/stop` | Остановить экземпляр |
+| POST | `/api/v1/instances/{id}/restart` | Перезапустить экземпляр |
+
 ### Профили (CRUD)
+
+Профиль — шаблон запуска, не процесс.
 
 | Method | Path | Описание |
 |--------|------|----------|
 | GET | `/api/v1/profiles` | Список профилей |
 | GET | `/api/v1/profiles/{id}` | Получить профиль |
 | POST | `/api/v1/profiles` | Создать профиль |
-| PUT | `/api/v1/profiles` | Обновить профиль |
-| DELETE | `/api/v1/profiles` | Удалить профиль |
-| POST | `/api/v1/profiles/{id}/action/{action}` | action: start, stop, restart |
+| PUT | `/api/v1/profiles/{id}` | Обновить профиль |
+| DELETE | `/api/v1/profiles/{id}` | Удалить профиль |
+| POST | `/api/v1/profiles/{id}/resolve` | Preview команды запуска |
 | POST | `/api/v1/profiles/{id}/start` | Запустить процесс по профилю |
-| POST | `/api/v1/profiles/{id}/stop` | Остановить процесс |
-| POST | `/api/v1/profiles/{id}/restart` | Перезапустить процесс |
-| GET | `/api/v1/profiles/{id}/status` | Статус процесса |
+| POST | `/api/v1/profiles/{id}/stop` | Остановить все процессы профиля |
+| POST | `/api/v1/profiles/{id}/restart` | Перезапустить процессы профиля |
+| GET | `/api/v1/profiles/{id}/status` | Статус процессов по профилю |
 | POST | `/api/v1/profiles/{id}/activate` | Активировать профиль |
 | POST | `/api/v1/profiles/{id}/deactivate` | Деактивировать профиль |
 
@@ -126,9 +139,11 @@ GoAl автоматически мигрирует конфигурацию пр
 | GET | `/api/v1/runtimes` | Список рантаймов |
 | GET | `/api/v1/runtimes/{id}` | Получить рантайм |
 | POST | `/api/v1/runtimes` | Создать рантайм |
-| PUT | `/api/v1/runtimes` | Обновить рантайм |
-| DELETE | `/api/v1/runtimes` | Удалить рантайм |
-| POST | `/api/v1/runtimes/{id}/action/{action}` | Start/stop/restart |
+| PUT | `/api/v1/runtimes/{id}` | Обновить рантайм |
+| DELETE | `/api/v1/runtimes/{id}` | Удалить рантайм |
+| POST | `/api/v1/runtimes/{id}/start` | Запустить процесс рантайма |
+| POST | `/api/v1/runtimes/{id}/stop` | Остановить процесс рантайма |
+| POST | `/api/v1/runtimes/{id}/restart` | Перезапустить процесс рантайма |
 | GET | `/api/v1/runtimes/health` | Проверка здоровья всех рантаймов |
 | GET | `/api/v1/runtimes/health/{id}` | Проверка здоровья конкретного рантайма |
 
@@ -139,14 +154,16 @@ GoAl автоматически мигрирует конфигурацию пр
 | GET | `/api/v1/models` | Список моделей |
 | GET | `/api/v1/models/{id}` | Получить модель |
 | POST | `/api/v1/models` | Создать модель |
-| PUT | `/api/v1/models` | Обновить модель |
-| DELETE | `/api/v1/models` | Удалить модель |
+| PUT | `/api/v1/models/{id}` | Обновить модель |
+| DELETE | `/api/v1/models/{id}` | Удалить модель |
 
-### WebSocket
+### SSE / WebSocket
 
 | Method | Path | Описание |
 |--------|------|----------|
-| GET | `/ws` | WebSocket поток логов (в разработке) |
+| GET | `/api/v1/logs/stream` | SSE поток логов |
+| GET | `/api/v1/logs/query` | Поиск и пагинация логов |
+| GET | `/ws` | WebSocket поток логов (WIP) |
 
 ### Structured API errors
 

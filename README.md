@@ -4,7 +4,7 @@ GoAl is a lightweight, cross-platform web service for managing local AI runtimes
 
 ## Status
 
-**v0.8 — Migration, Config Hot-Reload, SSE Log Filtering & Pagination.**
+**v0.9 — Multi-Instance Supervisor, Domain Models, Launch Resolver, Structured API Errors.**
 
 > This repository is an architectural starter, not a production-ready release.
 
@@ -102,20 +102,33 @@ Configuration is automatically reloaded when the file changes.
 | GET | `/api/v1/logs/query` | Log filtering and pagination |
 | GET | `/api/v1/migration/status` | Migration status |
 
+### Instance Management
+
+Profile is a launch template. Instance is a running process.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/v1/instances` | List all instances |
+| GET | `/api/v1/instances/{id}` | Instance status |
+| POST | `/api/v1/instances/{id}/stop` | Stop instance |
+| POST | `/api/v1/instances/{id}/restart` | Restart instance |
+
 ### Profiles (CRUD)
+
+Profile is a launch template, not a process.
 
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/api/v1/profiles` | List profiles |
 | GET | `/api/v1/profiles/{id}` | Get profile |
 | POST | `/api/v1/profiles` | Create profile |
-| PUT | `/api/v1/profiles` | Update profile |
-| DELETE | `/api/v1/profiles` | Delete profile |
-| POST | `/api/v1/profiles/{id}/action/{action}` | action: start, stop, restart |
+| PUT | `/api/v1/profiles/{id}` | Update profile |
+| DELETE | `/api/v1/profiles/{id}` | Delete profile |
+| POST | `/api/v1/profiles/{id}/resolve` | Preview launch command |
 | POST | `/api/v1/profiles/{id}/start` | Start process by profile |
-| POST | `/api/v1/profiles/{id}/stop` | Stop process |
-| POST | `/api/v1/profiles/{id}/restart` | Restart process |
-| GET | `/api/v1/profiles/{id}/status` | Process status |
+| POST | `/api/v1/profiles/{id}/stop` | Stop all profile processes |
+| POST | `/api/v1/profiles/{id}/restart` | Restart profile processes |
+| GET | `/api/v1/profiles/{id}/status` | Profile process status |
 | POST | `/api/v1/profiles/{id}/activate` | Activate profile |
 | POST | `/api/v1/profiles/{id}/deactivate` | Deactivate profile |
 
@@ -126,9 +139,11 @@ Configuration is automatically reloaded when the file changes.
 | GET | `/api/v1/runtimes` | List runtimes |
 | GET | `/api/v1/runtimes/{id}` | Get runtime |
 | POST | `/api/v1/runtimes` | Create runtime |
-| PUT | `/api/v1/runtimes` | Update runtime |
-| DELETE | `/api/v1/runtimes` | Delete runtime |
-| POST | `/api/v1/runtimes/{id}/action/{action}` | Start/stop/restart |
+| PUT | `/api/v1/runtimes/{id}` | Update runtime |
+| DELETE | `/api/v1/runtimes/{id}` | Delete runtime |
+| POST | `/api/v1/runtimes/{id}/start` | Start runtime process |
+| POST | `/api/v1/runtimes/{id}/stop` | Stop runtime process |
+| POST | `/api/v1/runtimes/{id}/restart` | Restart runtime process |
 | GET | `/api/v1/runtimes/health` | Check all runtimes health |
 | GET | `/api/v1/runtimes/health/{id}` | Check specific runtime health |
 
@@ -139,13 +154,15 @@ Configuration is automatically reloaded when the file changes.
 | GET | `/api/v1/models` | List models |
 | GET | `/api/v1/models/{id}` | Get model |
 | POST | `/api/v1/models` | Create model |
-| PUT | `/api/v1/models` | Update model |
-| DELETE | `/api/v1/models` | Delete model |
+| PUT | `/api/v1/models/{id}` | Update model |
+| DELETE | `/api/v1/models/{id}` | Delete model |
 
-### WebSocket
+### SSE / WebSocket
 
 | Method | Path | Description |
 |--------|------|-------------|
+| GET | `/api/v1/logs/stream` | SSE log stream |
+| GET | `/api/v1/logs/query` | Log filtering and pagination |
 | GET | `/ws` | WebSocket log stream (WIP) |
 
 ### Structured API errors
@@ -168,12 +185,16 @@ Codes: `bad_request`, `unauthorized`, `forbidden`, `not_found`, `conflict`, `inv
 
 ### Process Management
 
-GoAl manages exactly one process at a time via `process.Manager`. Each `exec.Cmd` has exactly one owner calling `Wait()`. Process lifecycle is managed through the `platform.ProcessControl` interface:
+GoAl uses a multi-instance `Supervisor` that manages multiple `process.Manager` instances — one per launch instance. Each `exec.Cmd` has exactly one owner calling `Wait()`. Process lifecycle is managed through the `platform.ProcessControl` interface:
 
 - **Windows**: Job Object with kill-on-close
 - **Linux**: Process group (SIGTERM/SIGKILL)
 
 Process environments are merged with the parent process environment (profile variables override system variables).
+
+### Domain Model
+
+`LaunchResolver` builds `CommandSpec` from `Profile` + `Runtime` + `Model` before launch. Use `POST /api/v1/profiles/{id}/resolve` to preview the resulting command.
 
 ### Logging
 
@@ -226,6 +247,7 @@ Periodic runtime health checking (every 30 seconds). Supports TCP and HTTP healt
 - `*.log`, `*.tmp`, `*.bak` — temp files
 - `*.exe` — compiled binaries
 - `.env*` — environment secrets
+- `goal` — dev binary (not tracked in git)
 
 ## Read before development
 
