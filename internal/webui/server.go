@@ -113,6 +113,10 @@ func (a *App) Run(ctx context.Context) error {
 	// Public endpoints (no auth required).
 	mux.HandleFunc("GET /api/v1/status", a.status)
 	mux.HandleFunc("GET /api/v1/logs/stream", a.logs)
+	mux.HandleFunc("GET /api/v1/instances", a.requireAuth(a.instancesList))
+	mux.HandleFunc("GET /api/v1/instances/{id}", a.requireAuth(a.instanceStatus))
+	mux.HandleFunc("POST /api/v1/instances/{id}/stop", a.requireAuthCSRF(a.instanceStop))
+	mux.HandleFunc("POST /api/v1/instances/{id}/restart", a.requireAuthCSRF(a.instanceRestart))
 	mux.HandleFunc("GET /api/v1/logs/query", a.requireAuth(a.logsQuery))
 	mux.HandleFunc("GET /api/v1/metrics", a.metrics.Handler())
 	mux.HandleFunc("GET /api/v1/version", a.versionInfo)
@@ -989,4 +993,51 @@ func (a *App) requireAuthCSRF(next http.HandlerFunc) http.HandlerFunc {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// ---------- instances management ----------
+
+func (a *App) instancesList(w http.ResponseWriter, r *http.Request) {
+	instances, err := a.supervisor.List()
+	if err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, instances)
+}
+
+func (a *App) instanceStatus(w http.ResponseWriter, r *http.Request) {
+	idStr := strings.TrimPrefix(r.URL.Path, "/api/v1/instances/")
+	id := domain.InstanceID(idStr)
+	inst, err := a.supervisor.Status(id)
+	if err != nil {
+		writeError(w, 404, "instance not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, inst)
+}
+
+func (a *App) instanceStop(w http.ResponseWriter, r *http.Request) {
+	idStr := strings.TrimPrefix(r.URL.Path, "/api/v1/instances/")
+	id := domain.InstanceID(idStr)
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	if err := a.supervisor.Stop(ctx, id); err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "stopped"})
+}
+
+func (a *App) instanceRestart(w http.ResponseWriter, r *http.Request) {
+	idStr := strings.TrimPrefix(r.URL.Path, "/api/v1/instances/")
+	id := domain.InstanceID(idStr)
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	inst, err := a.supervisor.Restart(ctx, id)
+	if err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "restarted", "instance_id": string(inst.ID)})
 }
