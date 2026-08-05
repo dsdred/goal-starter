@@ -1,0 +1,12 @@
+{
+  "version": 2,
+  "listenAddress": "127.0.0.1",
+  "webPort": 9090,
+  "dataDir": "./data",
+  "adminUser": "admin",
+  "adminPassword": "",
+  "authEnabled": false,
+  "runtimes": [],
+  "models": [],
+  "profiles": []
+}

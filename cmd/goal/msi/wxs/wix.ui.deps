@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Wix>
+  <String Table="DialogText">
+    <Row Id="CancelMsg" Value="Нажми 'Отмена', чтобы прервать установку. " />
+    <Row Id="WelcomeDlgDescription" Value="Мастер установит GoAl — менеджер локальных AI-рантаймов. Нажмите 'Далее'." />
+    <Row Id="AdvancedCustomErrorMsg" Value="Ошибка в пользовательском действии." />
+    <Row Id="ExecuteCustomErrorMsg" Value="Ошибка в пользовательском действии." />
+    <Row Id="AdminRequired" Value="Для установки этого приложения необходимы права администратора. Запустите установщик от имени администратора." />
+    <Row Id="AdminUIDefaultText" Value="Нажмите 'Далее' для установки." />
+    <Row Id="AdminUIInfo" Value="Мастер установит [ProductName]. Нажмите 'Далее'." />
+    <Row Id="AdminUIDisallowUIDefaultText" Value="Установка происходит без отображения интерфейса." />
+    <Row Id="AdminUIProcessing" Value="Идёт установка без отображения интерфейса." />
+    <Row Id="BrowseDlgDiskSpace" Value="Минимум требуется {0}." />
+    <Row Id="BrowseDiskSpace" Value="Диск: " />
+    <Row Id="CancelInstall" Value="Нажать 'Отмена' для отмены установки? Все изменения будут утрачены." />
+    <Row Id="CancelInstall2" Value="Нажмите 'Отмена' для отмены установки." />
+    <Row Id="CancelWait" Value="Нажмите 'Повтор', чтобы попробовать снова, или 'Отмена' для отмены установки." />
+    <Row Id="CertificatePrompt" Value="Установка следующего компонента требует подтверждения сертификата." />
+    <Row Id="CloseDialog" Value="&Закрыть" />
+    <Row Id="CmdLineAdmin" Value="Установка от имени не-администратора. Большинство функций будет доступно, но некоторые параметры могут быть недоступны." />
+    <Row Id="CustomAction" Value="{0}" />
+    <Row Id="DBSelection" Value="Выбор базы данных" />
+    <Row Id="DirDlgAdminRequired" Value="Установка в эту папку требует прав администратора. Войдите как администратор или выберите другую папку." />
+    <Row Id="DirDlgApplication" Value="Приложения" />
+    <Row Id="DirDlgApplications" Value="Приложения" />
+    <Row Id="DirDlgButtonBrowse" Value="&Друг..." />
+    <Row Id="DirDlgChange" Value="&Изменить..." />
+    <Row Id="DirDlgFolder" Value="&Папка:" />
+    <Row Id="DirDlgInstall" Value="&Установить" />
+    <Row Id="DirDlgInstallFor" Value="Установить для:" />
+    <Row Id="DirDlgJustMe" Value="&Только для меня" />
+    <Row Id="DirDlgYes" Value="&Да" />
+    <Row Id="DirDlgAllUsers" Value="&Для всех пользователей" />
+    <Row Id="DirDlgWarning" Value="Папка [DIR] уже существует. Установка продолжится в неё. Продолжить?" />
+    <Row Id="DirDlgVolumeOfDisk" Value="Объём диска:" />
+    <Row Id="DirDlgFreeSpace" Value="Свободно места:" />
+    <Row Id="DirDlgRequiredSpace" Value="Требуется:" />
+    <Row Id="DirDlgManage" Value="&Управление..." />
+    <Row Id="ErrorLine" Value="Ошибка: " />
+    <Row Id="ExitDialog" Value="Мастер установки завершён." />
+    <Row Id="FeatureTreeViewSelect" Value="Выберите компоненты для установки." />
+    <Row Id="FatalError" Value="Ошибка при завершении установки для [2]." />
+    <Row Id="FilesInUse" Value="Следующие файлы используются. Заверите их или нажмите 'Повтор' для проверки заново." />
+    <Row Id="InstallSpace" Value="Требуется места:" />
+    <Row Id="InstallSpace2" Value="Доступно места:" />
+    <Row Id="InstallWarning" Value="Папка [DIR] уже существует. Установка продолжится в неё." />
+    <Row Id="InvalidDirFormat" Value="Пожалуйста, введите корректный путь." />
+    <Row Id="InvalidDirFormat83" Value="Пожалуйста, введите корректный путь (не более 8.3)." />
+    <Row Id="LeftArrow" Value="<" />
+    <Row Id="LicenseAgreement" Value="Нажимая 'Принимаю', вы соглашаетесь с условиями лицензионного соглашения." />
+    <Row Id="ModifyFailed" Value="Не удалось изменить установку [2]. " />
+    <Row Id="NavigateBack" Value="< &Назад" />
+    <Row Id="NavigateNext" Value="&Далее >" />
+    <Row Id="Pause" Value="Установка приостановлена." />
+    <Row Id="ReadyBtnCustom" Value="&Изменить" />
+    <Row Id="ReadyBtnInstall" Value="&Установить" />
+    <Row Id="ReadyBtnRepair" Value="&Исправить" />
+    <Row Id="ReadyBtnReinstall" Value="&Переустановить" />
+    <Row Id="ReadyCaptionCustom" Value="Готовы к изменению [ProductName]?" />
+    <Row Id="ReadyCaptionInstall" Value="Готовы к установке [ProductName]?" />
+    <Row Id="ReadyCaptionRepair" Value="Готовы к исправлению [ProductName]?" />
+    <Row Id="ReadyCaptionReinstall" Value="Готовы к переустановке [ProductName]?" />
+    <Row Id="ReadyDescCustom" Value="Нажмите 'Изменить' для начала." />
+    <Row Id="ReadyDescInstall" Value="Нажмите 'Установить' для начала." />
+    <Row Id="ReadyDescRepair" Value="Нажмите 'Исправить' для начала." />
+    <Row Id="ReadyDescReinstall" Value="Нажмите 'Переустановить' для начала." />
+    <Row Id="ResumeInstall" Value="Нажмите 'Повтор' для продолжения установки." />
+    <Row Id="ResumeWait" Value="Установка приостановлена. Нажмите 'Повтор' для продолжения." />
+    <Row Id="RightArrow" Value=">" />
+    <Row Id="SetupTypeComplete" Value="&Полная" />
+    <Row Id="SetupTypeCompleteDesc" Value="Устанавливает все функции в стандартные папки." />
+    <Row Id="SetupTypeCustom" Value="&Выборочная" />
+    <Row Id="SetupTypeCustomDesc" Value="Позволяет выбрать компоненты и папку установки." />
+    <Row Id="SetupTypeServer" Value="&Сервер" />
+    <Row Id="SetupTypeServerDesc" Value="Устанавливает все функции в стандартные папки без интерфейса." />
+    <Row Id="SpaceValue" Value="<Недостаточно информации>" />
+    <Row Id="UserExit" Value="Нажмите 'Отмена' для отмены установки. [2] " />
+    <Row Id="UserExit2" Value="[2]" />
+    <Row Id="WaitForRestart" Value="Завершается установка [ProductName]. Пожалуйста, подождите..." />
+    <Row Id="WindowsInstall" Value="Установка Windows" />
+  </String>
+</Wix>

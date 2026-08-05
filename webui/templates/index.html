@@ -1,0 +1,279 @@
+{{define "index.html"}}<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GoAl - Process Manager</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <!-- Login Modal -->
+    <div id="login-modal" class="modal" style="display:none;">
+        <div class="modal-content">
+            <h2>Authentication Required</h2>
+            <form id="login-form" onsubmit="return handleLogin(event)">
+                <div class="form-group">
+                    <label for="username">Username</label>
+                    <input type="text" id="username" name="username" required autofocus>
+                </div>
+                <div class="form-group">
+                    <label for="password">Password</label>
+                    <input type="password" id="password" name="password" required>
+                </div>
+                <div id="login-error" class="error-message" style="display:none;"></div>
+                <button type="submit" class="btn btn-primary">Login</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Create Profile Modal -->
+    <div id="create-profile-modal" class="modal" style="display:none;">
+        <div class="modal-content modal-lg">
+            <div class="modal-header">
+                <h2>Create New Profile</h2>
+                <button class="modal-close" onclick="closeCreateProfileModal()">×</button>
+            </div>
+            <form id="create-profile-form" onsubmit="return handleCreateProfile(event)">
+                <div class="form-group">
+                    <label for="profile-name">Profile Name *</label>
+                    <input type="text" id="profile-name" name="name" required placeholder="e.g., My AI Model">
+                </div>
+                <div class="form-group">
+                    <label for="profile-runtime">Runtime *</label>
+                    <select id="profile-runtime" name="runtime_id" required onchange="updateProfileModelSelect()">
+                        <option value="">Select a runtime...</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="profile-model">Model *</label>
+                    <select id="profile-model" name="model_id" required>
+                        <option value="">Select a model...</option>
+                    </select>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="profile-host">Host</label>
+                        <input type="text" id="profile-host" name="host" placeholder="e.g., 127.0.0.1" value="127.0.0.1">
+                    </div>
+                    <div class="form-group">
+                        <label for="profile-port">Port</label>
+                        <input type="number" id="profile-port" name="port" placeholder="e.g., 8080" min="1" max="65535">
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label for="profile-args">Arguments (space-separated)</label>
+                    <textarea id="profile-args" name="args" rows="2" placeholder="--model-path /path/to/model --gpu-layers 30"></textarea>
+                </div>
+                <div class="form-group">
+                    <label>Environment Variables</label>
+                    <div id="env-variables-container">
+                        <div class="env-row">
+                            <input type="text" placeholder="VAR_NAME" class="env-key">
+                            <input type="text" placeholder="value" class="env-value">
+                            <button type="button" class="btn btn-danger btn-sm" onclick="removeEnvRow(this)">×</button>
+                        </div>
+                    </div>
+                    <button type="button" class="btn btn-sm" onclick="addEnvRow()">+ Add Variable</button>
+                </div>
+                <div id="create-profile-error" class="error-message" style="display:none;"></div>
+                <div class="form-actions">
+                    <button type="submit" class="btn btn-primary">Create Profile</button>
+                    <button type="button" class="btn btn-secondary" onclick="closeCreateProfileModal()">Cancel</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <header>
+        <div class="header-content">
+            <h1>GoAl Process Manager</h1>
+            <div class="header-right">
+                <div id="status-indicator" class="status-badge status-{{.Status.State}}">
+                    <span class="status-dot"></span>
+                    {{.Status.State}}
+                </div>
+                <div id="user-info" class="user-info" style="display:none;">
+                    <span id="username-display"></span>
+                    <button onclick="handleLogout()" class="btn btn-sm">Logout</button>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <main>
+        <!-- Status Overview -->
+        <section id="status-overview" class="dashboard">
+            <div class="dashboard-grid">
+                <div class="dashboard-card">
+                    <h3>Process</h3>
+                    <div class="status-info">
+                        <div class="status-row">
+                            <span class="label">State:</span>
+                            <span id="detail-state">{{.Status.State}}</span>
+                        </div>
+                        <div class="status-row">
+                            <span class="label">PID:</span>
+                            <span>{{.Status.PID | default "-"}}</span>
+                        </div>
+                        <div class="status-row">
+                            <span class="label">Started:</span>
+                            <span>{{.Status.StartedAt | formatTime}}</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="dashboard-card">
+                    <h3>Exit Info</h3>
+                    <div class="status-info">
+                        <div class="status-row">
+                            <span class="label">Exit Class:</span>
+                            <span>{{.Status.ExitClass | default "-"}}</span>
+                        </div>
+                        <div class="status-row">
+                            <span class="label">Exit Code:</span>
+                            <span>{{.Status.ExitCode | default "-"}}</span>
+                        </div>
+                        <div class="status-row">
+                            <span class="label">Exit Time:</span>
+                            <span>{{.Status.ExitTime | formatTime}}</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="dashboard-card">
+                    <h3>System</h3>
+                    <div class="status-info">
+                        <div class="status-row">
+                            <span class="label">Listen:</span>
+                            <span>{{.Config.ListenAddress}}:{{.Config.WebPort}}</span>
+                        </div>
+                        <div class="status-row">
+                            <span class="label">Data Dir:</span>
+                            <span>{{.Config.DataDir}}</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            {{if .Status.LastError}}
+            <div class="error-banner">
+                <span class="error-icon">⚠</span>
+                <span>{{.Status.LastError}}</span>
+            </div>
+            {{end}}
+        </section>
+
+        <!-- Runtimes -->
+        <section id="runtimes">
+            <div class="section-header">
+                <h2>Runtimes <span class="count">({{len .Runtimes}})</span></h2>
+                <button class="btn btn-primary" onclick="showCreateRuntimeModal()">+ Add Runtime</button>
+            </div>
+            {{if .Runtimes}}
+            <table class="data-table">
+                <thead>
+                    <tr><th>Name</th><th>Executable</th><th>Working Dir</th><th>Default Args</th><th>ID</th><th>Actions</th></tr>
+                </thead>
+                <tbody>
+                    {{range .Runtimes}}
+                    <tr>
+                        <td>{{.Name}}</td>
+                        <td><code>{{.Executable}}</code></td>
+                        <td><code>{{.WorkingDirectory}}</code></td>
+                        <td>{{range .DefaultArgs}}<span class="arg">{{.}}</span>{{end}}</td>
+                        <td><code>{{.ID}}</code></td>
+                        <td class="actions">
+                            <button onclick="deleteRuntime('{{.ID}}')" class="btn btn-danger btn-sm">Delete</button>
+                        </td>
+                    </tr>
+                    {{end}}
+                </tbody>
+            </table>
+            {{else}}
+            <p class="empty">No runtimes configured. Add one via API or UI.</p>
+            {{end}}
+        </section>
+
+        <!-- Models -->
+        <section id="models">
+            <div class="section-header">
+                <h2>Models <span class="count">({{len .Models}})</span></h2>
+                <button class="btn btn-primary" onclick="showCreateModelModal()">+ Add Model</button>
+            </div>
+            {{if .Models}}
+            <table class="data-table">
+                <thead>
+                    <tr><th>Name</th><th>Path</th><th>MMProj</th><th>Format</th><th>ID</th><th>Actions</th></tr>
+                </thead>
+                <tbody>
+                    {{range .Models}}
+                    <tr>
+                        <td>{{.Name}}</td>
+                        <td><code>{{.Path}}</code></td>
+                        <td><code>{{.MMProj}}</code></td>
+                        <td>{{.Format}}</td>
+                        <td><code>{{.ID}}</code></td>
+                        <td class="actions">
+                            <button onclick="deleteModel('{{.ID}}')" class="btn btn-danger btn-sm">Delete</button>
+                        </td>
+                    </tr>
+                    {{end}}
+                </tbody>
+            </table>
+            {{else}}
+            <p class="empty">No models configured. Add one via API or UI.</p>
+            {{end}}
+        </section>
+
+        <!-- Profiles -->
+        <section id="profiles">
+            <div class="section-header">
+                <h2>Profiles <span class="count">({{len .Profiles}})</span></h2>
+                <button class="btn btn-primary" onclick="openCreateProfileModal()">+ Create Profile</button>
+            </div>
+            {{if .Profiles}}
+            <table class="data-table">
+                <thead>
+                    <tr><th>Name</th><th>Runtime</th><th>Model</th><th>Host:Port</th><th>Args</th><th>Status</th><th>Actions</th></tr>
+                </thead>
+                <tbody id="profiles-body">
+                    {{range .Profiles}}
+                    <tr id="profile-row-{{.ID}}">
+                        <td>{{.Name}}</td>
+                        <td>{{.RuntimeID}}</td>
+                        <td>{{.ModelID}}</td>
+                        <td>{{if .Host}}{{.Host}}{{end}}{{if .Port}}:{{.Port}}{{end}}</td>
+                        <td>{{range .Args}}<span class="arg">{{.}}</span>{{end}}</td>
+                        <td><span class="profile-status" data-profile-id="{{.ID}}">not started</span></td>
+                        <td class="actions">
+                            <button onclick="startProfile('{{.ID}}')" class="btn btn-success btn-sm">Start</button>
+                            <button onclick="stopProfile('{{.ID}}')" class="btn btn-danger btn-sm">Stop</button>
+                        </td>
+                    </tr>
+                    {{end}}
+                </tbody>
+            </table>
+            {{else}}
+            <p class="empty">No profiles configured. Create one to get started.</p>
+            {{end}}
+        </section>
+
+        <!-- Logs -->
+        <section id="logs">
+            <div class="section-header">
+                <h2>Live Logs</h2>
+                <div class="log-controls">
+                    <select id="log-filter-stream" onchange="updateLogFilter()">
+                        <option value="">All Streams</option>
+                        <option value="stdout">stdout</option>
+                        <option value="stderr">stderr</option>
+                        <option value="system">system</option>
+                    </select>
+                    <input type="text" id="log-search" placeholder="Search..." oninput="filterLogs()">
+                    <button onclick="clearLogs()" class="btn btn-sm">Clear</button>
+                </div>
+            </div>
+            <div id="log-container" class="log-container"></div>
+        </section>
+    </main>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>{{end}}
