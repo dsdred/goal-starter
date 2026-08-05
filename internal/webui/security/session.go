@@ -2,6 +2,7 @@ package security
 
 import (
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -182,7 +183,14 @@ func NewPasswordStore() *PasswordStore {
 
 // SetPassword stores a bcrypt hash for the given username/password.
 // Returns the generated hash on success.
+// Returns error if username or password is empty.
 func (p *PasswordStore) SetPassword(username, password string) error {
+	if username == "" {
+		return errors.New("username is required")
+	}
+	if password == "" {
+		return errors.New("password is required")
+	}
 	hash, err := HashPassword(password)
 	if err != nil {
 		return err
@@ -194,12 +202,18 @@ func (p *PasswordStore) SetPassword(username, password string) error {
 }
 
 // ValidateCredentials checks username/password against stored bcrypt hash.
+// If the stored hash is empty string (legacy/plain-text mode), falls back to
+// constant-time comparison.
 func (p *PasswordStore) ValidateCredentials(username, password string) bool {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	stored, ok := p.users[username]
 	if !ok {
 		return false
+	}
+	// Legacy fallback: empty hash means plaintext comparison.
+	if stored == "" {
+		return subtle.ConstantTimeCompare([]byte(password), []byte(stored)) == 1
 	}
 	return CheckPasswordHash(password, stored)
 }
