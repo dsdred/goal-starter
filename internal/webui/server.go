@@ -190,7 +190,7 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 }
 
 func writeError(w http.ResponseWriter, code int, msg string) {
-	writeJSON(w, code, map[string]string{"error": msg})
+	errors.WriteError(w, code, errors.NewAPIError(errors.CodeInternalServer, msg))
 }
 
 // ---------- index ----------
