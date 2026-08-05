@@ -128,6 +128,119 @@ func (r *LaunchResolver) normalizeKey(key string) string {
 	return key
 }
 
+// ResolveError represents a resolution failure with details.
+type ResolveError struct {
+	Field   string
+	Message string
+}
+
+// Validate checks that all required fields are populated and references are valid.
+func (r *LaunchResolver) Validate(
+	profile *Profile,
+	runtime *Runtime,
+	model *Model,
+) []ResolveError {
+	var errs []ResolveError
+
+	if profile == nil {
+		errs = append(errs, ResolveError{Field: "profile", Message: "profile is required"})
+	}
+	if runtime == nil {
+		errs = append(errs, ResolveError{Field: "runtime", Message: "runtime is required"})
+		return errs
+	}
+
+	if runtime.Executable == "" {
+		errs = append(errs, ResolveError{Field: "runtime.executable", Message: "runtime executable is empty"})
+	}
+
+	if profile.RuntimeID != runtime.ID {
+		errs = append(errs, ResolveError{Field: "profile.runtime_id", Message: fmt.Sprintf("profile references runtime %s, but runtime is %s", profile.RuntimeID, runtime.ID)})
+	}
+
+	if model != nil {
+		if profile.ModelID != "" && model.ID != profile.ModelID {
+			errs = append(errs, ResolveError{Field: "profile.model_id", Message: fmt.Sprintf("profile references model %s, but model is %s", profile.ModelID, model.ID)})
+		}
+
+		// Validate model paths exist.
+		if model.Path != "" {
+			if _, err := os.Stat(model.Path); err != nil {
+				errs = append(errs, ResolveError{Field: "model.path", Message: fmt.Sprintf("model path does not exist: %s", model.Path)})
+			}
+		}
+
+		if model.MMProj != "" {
+			if _, err := os.Stat(model.MMProj); err != nil {
+				errs = append(errs, ResolveError{Field: "model.mmproj", Message: fmt.Sprintf("mmproj path does not exist: %s", model.MMProj)})
+			}
+		}
+	}
+
+	return errs
+}
+
+// Preview returns a CommandSpec without validating executable existence.
+// This is used for the /profiles/{id}/resolve endpoint to show what would be launched.
+func (r *LaunchResolver) Preview(
+	profile *Profile,
+	runtime *Runtime,
+	model *Model,
+	customArgs []string,
+	customEnv map[string]string,
+) (*CommandSpec, error) {
+	if profile == nil {
+		return nil, fmt.Errorf("profile is required")
+	}
+	if runtime == nil {
+		return nil, fmt.Errorf("runtime is required")
+	}
+
+	if runtime.Executable == "" {
+		return nil, fmt.Errorf("runtime executable is empty")
+	}
+
+	// Build args: runtime default args + model args + profile args + custom args.
+	args := make([]string, 0, len(runtime.DefaultArgs)+len(profile.Args)+len(customArgs))
+	args = append(args, runtime.DefaultArgs...)
+	args = append(args, profile.Args...)
+	args = append(args, customArgs...)
+
+	// Add model-specific args.
+	if model != nil {
+		if model.Path != "" {
+			args = append(args, "-m", model.Path)
+		}
+		if model.MMProj != "" {
+			args = append(args, "--mmproj", model.MMProj)
+		}
+	}
+
+	// Build environment.
+	envMap := make(map[string]string)
+	for k, v := range runtime.Environment {
+		envMap[r.normalizeKey(k)] = v
+	}
+	for k, v := range profile.Environment {
+		envMap[r.normalizeKey(k)] = v
+	}
+	for k, v := range customEnv {
+		envMap[r.normalizeKey(k)] = v
+	}
+
+	env := make([]string, 0, len(envMap))
+	for k, v := range envMap {
+		env = append(env, k+"="+v)
+	}
+
+	return &CommandSpec{
+		Executable:       runtime.Executable,
+		Args:             args,
+		WorkingDirectory: runtime.WorkingDirectory,
+		Environment:      env,
+	}, nil
+}
+
 // ResolveToInstance fills a LaunchInstance with resolved launch details.
 func (r *LaunchResolver) ResolveToInstance(
 	profile *Profile,
