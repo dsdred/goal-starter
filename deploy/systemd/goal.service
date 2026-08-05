@@ -1,0 +1,27 @@
+[Unit]
+Description=GoAl - Local AI Runtime Manager
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/goal --config /etc/goal/goal.json
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65536
+Environment=GOAL_CONFIG=/etc/goal/goal.json
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/goal /var/log/goal
+PrivateTmp=true
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=goal
+
+[Install]
+WantedBy=multi-user.target

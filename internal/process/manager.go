@@ -1,0 +1,465 @@
+package process
+
+import (
+	"bufio"
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"sync"
+	"syscall"
+	"time"
+
+	"github.com/example/goal/internal/platform"
+)
+
+// State represents the lifecycle state of a managed process.
+type State string
+
+const (
+	StateStopped  State = "stopped"
+	StateStarting State = "starting"
+	StateRunning  State = "running"
+	StateStopping State = "stopping"
+	StateExited   State = "exited"
+	StateFailed   State = "failed"
+)
+
+// ExitClass describes why the process ended.
+type ExitClass string
+
+const (
+	ExitNormal   ExitClass = "normal"   // clean exit (exit code 0)
+	ExitFailure  ExitClass = "failure"  // non-zero exit code
+	ExitKilled   ExitClass = "killed"   // force-killed by manager or OS
+	ExitTimeout  ExitClass = "timeout"  // did not stop within timeout
+	ExitContext  ExitClass = "context"  // parent context cancelled
+	ExitError    ExitClass = "error"    // exec or OS error during start/wait
+	ExitSignaled ExitClass = "signaled" // terminated by signal
+)
+
+// CommandSpec defines how to launch a managed process.
+type CommandSpec struct {
+	Executable       string
+	Args             []string
+	WorkingDirectory string
+	Environment      []string
+	SysProcAttr      interface{} // platform-specific SysProcAttr
+}
+
+// Status holds the current status of the managed process.
+type Status struct {
+	State     State     `json:"state"`
+	PID       int       `json:"pid,omitempty"`
+	StartedAt time.Time `json:"startedAt,omitempty"`
+	ExitCode  *int      `json:"exitCode,omitempty"`
+	ExitClass ExitClass `json:"exitClass,omitempty"`
+	LastError string    `json:"lastError,omitempty"`
+}
+
+// LogEvent carries a line from a process stream.
+type LogEvent struct {
+	Time    time.Time `json:"time"`
+	Stream  string    `json:"stream"`
+	Message string    `json:"message"`
+}
+
+// Manager owns the lifecycle of exactly one managed process.
+type Manager struct {
+	mu       sync.RWMutex
+	status   Status
+	cmd      *exec.Cmd
+	control  platform.ProcessControl
+	done     chan struct{}
+	logSubs  map[chan LogEvent]struct{}
+	logStore *LogStore
+}
+
+// NewManager creates a Manager already in the stopped state.
+func NewManager() *Manager {
+	return &Manager{
+		status:   Status{State: StateStopped},
+		logSubs:  make(map[chan LogEvent]struct{}),
+		logStore: NewLogStore(10000),
+	}
+}
+
+// NewManagerWithLogStore creates a Manager with a custom LogStore.
+func NewManagerWithLogStore(logStore *LogStore) *Manager {
+	return &Manager{
+		status:   Status{State: StateStopped},
+		logSubs:  make(map[chan LogEvent]struct{}),
+		logStore: logStore,
+	}
+}
+
+// Start launches the process described by spec.
+// It merges spec.Environment with the parent process environment so that
+// user-provided variables never silently overwrite system variables.
+func (m *Manager) Start(ctx context.Context, spec CommandSpec) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.cmd != nil {
+		return errors.New("a process is already running")
+	}
+	if spec.Executable == "" {
+		return errors.New("executable is required")
+	}
+
+	// Validate executable exists.
+	if abs, err := filepath.Abs(spec.Executable); err != nil {
+		return fmt.Errorf("cannot resolve executable path: %w", err)
+	} else if _, err := os.Stat(abs); err != nil {
+		return fmt.Errorf("executable does not exist: %s: %w", spec.Executable, err)
+	}
+
+	// Validate working directory.
+	if spec.WorkingDirectory != "" {
+		if info, err := os.Stat(spec.WorkingDirectory); err != nil || !info.IsDir() {
+			return fmt.Errorf("working directory does not exist: %s: %w", spec.WorkingDirectory, err)
+		}
+	}
+
+	// Merge environment: parent env first, then user vars (user vars override).
+	env := mergeEnvironment(spec.Environment)
+
+	// Use exec.Command (NOT CommandContext) so the manager owns the context lifecycle.
+	cmd := exec.CommandContext(ctx, spec.Executable, spec.Args...)
+	cmd.Dir = spec.WorkingDirectory
+	cmd.Env = env
+	if sa, ok := spec.SysProcAttr.(*syscall.SysProcAttr); ok {
+		cmd.SysProcAttr = sa
+	}
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return err
+	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return err
+	}
+
+	// Platform prepares SysProcAttr (already set above) and returns control handle.
+	control, err := platform.Prepare(cmd)
+	if err != nil {
+		return err
+	}
+
+	m.status = Status{State: StateStarting}
+
+	if err := cmd.Start(); err != nil {
+		m.status = Status{
+			State:     StateFailed,
+			ExitClass: ExitError,
+			LastError: err.Error(),
+		}
+		return err
+	}
+
+	if err := control.AfterStart(cmd.Process.Pid); err != nil {
+		_ = cmd.Process.Kill()
+		m.status = Status{
+			State:     StateFailed,
+			ExitClass: ExitError,
+			LastError: err.Error(),
+		}
+		return err
+	}
+
+	m.cmd = cmd
+	m.control = control
+	m.done = make(chan struct{})
+	m.status = Status{
+		State:     StateRunning,
+		PID:       cmd.Process.Pid,
+		StartedAt: time.Now(),
+	}
+
+	go m.readPipe("stdout", stdout)
+	go m.readPipe("stderr", stderr)
+	go m.wait(cmd, control)
+	return nil
+}
+
+// Stop requests a graceful shutdown and waits until the process exits
+// or the deadline passes (then force-kills).
+func (m *Manager) Stop(ctx context.Context) error {
+	m.mu.Lock()
+	if m.cmd == nil {
+		m.mu.Unlock()
+		return nil
+	}
+	done := m.done
+	control := m.control
+	m.status.State = StateStopping
+	m.mu.Unlock()
+
+	// Send SIGTERM to process group / job.
+	if err := control.GracefulStop(); err != nil {
+		m.publish(LogEvent{
+			Time:    time.Now(),
+			Stream:  "system",
+			Message: fmt.Sprintf("graceful stop signal failed: %v", err),
+		})
+	}
+
+	// Wait for process to exit or force-kill after timeout.
+	select {
+	case <-done:
+		return nil
+	case <-time.After(10 * time.Second):
+		// Timeout — force kill.
+		if err := control.ForceKill(); err != nil {
+			// ESRCH means already gone.
+			if err != syscall.ESRCH {
+				m.publish(LogEvent{
+					Time:    time.Now(),
+					Stream:  "system",
+					Message: fmt.Sprintf("force kill failed: %v", err),
+				})
+			}
+		}
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+
+	// Final wait for cleanup.
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// Status returns a snapshot of the current managed process status.
+func (m *Manager) Status() Status {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.status
+}
+
+// Subscribe creates a channel for live log events.
+// The caller MUST close the returned cleanup function.
+func (m *Manager) Subscribe() (<-chan LogEvent, func()) {
+	ch := make(chan LogEvent, 64)
+	m.mu.Lock()
+	m.logSubs[ch] = struct{}{}
+	m.mu.Unlock()
+	return ch, func() {
+		m.mu.Lock()
+		delete(m.logSubs, ch)
+		close(ch)
+		m.mu.Unlock()
+	}
+}
+
+// wait is the SINGLE owner of cmd.Wait(). It runs in its own goroutine.
+func (m *Manager) wait(cmd *exec.Cmd, control platform.ProcessControl) {
+	err := cmd.Wait()
+
+	// Close platform resources (job object, process group).
+	_ = control.Close()
+
+	exitCode := 0
+	exitClass := ExitNormal
+
+	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			exitClass = ExitContext
+		} else if err.Error() == "signal: killed" || err == exec.ErrNotFound {
+			exitClass = ExitKilled
+		} else {
+			exitClass = ExitError
+		}
+		m.publish(LogEvent{
+			Time:    time.Now(),
+			Stream:  "system",
+			Message: fmt.Sprintf("wait error: %v", err),
+		})
+	}
+
+	// Determine exit code and class from ProcessState.
+	// ProcessState is available regardless of the error value.
+	if cmd.ProcessState != nil {
+		// On all platforms, ProcessState.ExitCode() gives the real exit code.
+		exitCode = exitCodeFromProcessState(cmd.ProcessState)
+	}
+
+	// Signal-based termination takes priority over exit code classification.
+	// On Windows, Job Object kill-on-close may return exit code 0.
+	if control.WasSignaled() {
+		exitClass = ExitSignaled
+	} else if cmd.ProcessState != nil && exitCode == 0 {
+		exitClass = ExitNormal
+	} else if cmd.ProcessState != nil && exitCode != 0 {
+		exitClass = ExitFailure
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Only update status if we're still the active process.
+	if m.cmd == cmd {
+		m.status.State = StateExited
+		m.status.ExitCode = &exitCode
+		m.status.ExitClass = exitClass
+		if err != nil && m.status.LastError == "" {
+			m.status.LastError = err.Error()
+		}
+		m.cmd = nil
+		m.control = nil
+	}
+
+	close(m.done)
+}
+
+// exitCodeFromProcessState extracts the exit code from *os.ProcessState.
+// This works reliably on all platforms including Windows.
+func exitCodeFromProcessState(state *os.ProcessState) int {
+	if state == nil {
+		return 0
+	}
+	// ExitCode() works on all platforms including Windows (Go >= 1.22).
+	return state.ExitCode()
+}
+
+// exitCodeFromError extracts exit code from the error when possible.
+func exitCodeFromError(err error) (int, bool) {
+	if err == nil {
+		return 0, true
+	}
+	// cmd.Wait() returns nil on success (exit code 0).
+	return 0, false
+}
+
+// exitClassFromError classifies the exit reason from the error type.
+func exitClassFromError(err error) ExitClass {
+	if err == nil {
+		return ExitNormal
+	}
+	if exitErr, ok := err.(*exec.ExitError); ok {
+		// Signal-based termination (e.g., SIGKILL, SIGTERM on some platforms).
+		if waitStatus, ok := exitErr.Sys().(syscall.WaitStatus); ok {
+			if waitStatus.Signaled() {
+				return ExitSignaled
+			}
+		}
+		return ExitFailure
+	}
+	return ExitError
+}
+
+// mergeEnvironment merges user-provided environment variables with the
+// parent process environment. User variables take precedence (overwrite).
+func mergeEnvironment(userEnv []string) []string {
+	// Start with parent environment.
+	parentEnv := os.Environ()
+
+	if len(userEnv) == 0 {
+		return parentEnv
+	}
+
+	// Build a map of user-provided variables.
+	overrides := make(map[string]string)
+	for _, ev := range userEnv {
+		idx := -1
+		for i, c := range ev {
+			if c == '=' {
+				idx = i
+				break
+			}
+			if c == ';' || c == ' ' {
+				break
+			}
+		}
+		if idx > 0 {
+			key := ev[:idx]
+			val := ev[idx+1:]
+			overrides[key] = val
+		}
+	}
+
+	// Merge: parent env first, then user overrides.
+	result := make([]string, 0, len(parentEnv)+len(overrides))
+	parentKeys := make(map[string]bool)
+
+	for _, ev := range parentEnv {
+		idx := -1
+		for i, c := range ev {
+			if c == '=' {
+				idx = i
+				break
+			}
+		}
+		if idx > 0 {
+			key := ev[:idx]
+			if override, ok := overrides[key]; ok {
+				result = append(result, key+"="+override)
+				parentKeys[key] = true
+			} else {
+				result = append(result, ev)
+			}
+		} else {
+			result = append(result, ev)
+		}
+	}
+
+	// Add user-only variables (not in parent env).
+	for key, val := range overrides {
+		if !parentKeys[key] {
+			result = append(result, key+"="+val)
+		}
+	}
+
+	return result
+}
+
+// publish sends a log event to all subscribers and stores it in the log store.
+func (m *Manager) publish(ev LogEvent) {
+	// Store in log store if available.
+	if m.logStore != nil {
+		m.logStore.Add(ev)
+	}
+
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for ch := range m.logSubs {
+		select {
+		case ch <- ev:
+		default:
+			// Drop if subscriber channel is full.
+		}
+	}
+}
+
+// GetLogStore returns the log store for querying historical logs.
+func (m *Manager) GetLogStore() *LogStore {
+	return m.logStore
+}
+
+// readPipe reads lines from a process pipe and publishes them as log events.
+func (m *Manager) readPipe(stream string, r io.Reader) {
+	s := bufio.NewScanner(r)
+	buf := make([]byte, 0, 64*1024)
+	s.Buffer(buf, 1024*1024)
+	for s.Scan() {
+		m.publish(LogEvent{
+			Time:    time.Now(),
+			Stream:  stream,
+			Message: s.Text(),
+		})
+	}
+	if err := s.Err(); err != nil {
+		m.publish(LogEvent{
+			Time:    time.Now(),
+			Stream:  "system",
+			Message: fmt.Sprintf("%s scanner error: %v", stream, err),
+		})
+	}
+}

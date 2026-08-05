@@ -1,0 +1,45 @@
+# Build output directory
+/bin/
+
+# Data directory
+/data/
+
+# Config files with secrets (user-specific)
+goal.json
+*.secret.json
+.env
+.env.*
+
+# Log and temp files
+*.log
+*.tmp
+*.bak
+
+# IDE and editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+
+# Windows
+Thumbs.db
+ehthumbs.db
+desktop.ini
+
+# Compiled binary in repo root (kept for convenience)
+!goal.exe
+
+# Any other compiled binaries
+*.exe
+!goal.exe
+
+# Generated Linux binary
+goal-linux-amd64
