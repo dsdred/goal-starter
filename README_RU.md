@@ -4,9 +4,9 @@ GoAl — лёгкий кроссплатформенный менеджер дл
 
 ## Статус
 
-**v0.9 — Multi-Instance Supervisor, Domain Models, Launch Resolver, Structured API Errors.**
+**v0.9 — Architecture Consolidation (supervisor, instance model, application services).**
 
-> Этот репозиторий — архитектурный стартер, не готовая к продакшену система.
+> Этот репозиторий — архитектурный стартер. Безопасность и надёжность в процессе доработки.
 
 ## Поддерживаемые платформы
 
@@ -77,7 +77,16 @@ GoAl автоматически мигрирует конфигурацию пр
 
 ### Горячая перезагрузка конфигурации
 
-Перезагрузка определена в `internal/config` (`ReloadConfig`, `StartWatch`) но пока не подключена в main. Конфигурация читается один раз при запуске через `config.Load()`.
+Горячая перезагрузка определена в `internal/config` (`ReloadConfig`, `Watch`) но **пока не подключена** в main. Конфигурация читается один раз при запуске через `config.Load()`.
+
+Поддерживаются безопасные live-обновления для:
+- `logLevel` — изменение уровня логирования без перезапуска
+- `healthCheck.interval` — изменение частоты health check
+
+Поля, требующие перезапуск:
+- `listenAddress`, `webPort`, `dataDir`
+
+Статус: **WIP** — planned: reload coordinator и restart-required reporting.
 
 ## API endpoints
 
@@ -197,23 +206,81 @@ GoAl автоматически мигрирует конфигурацию пр
 ## Безопасность
 
 - **Аутентификация** — HTTP-only cookies, session-based
-- **CSRF защита** — CSRF token для всех unsafe методов
+- **CSRF защита** — CSRF token для всех unsafe методов (GET, HEAD, OPTIONS, DELETE защищены)
 - **Rate limiting** — 100 запросов в минуту на IP
+- **Login rate limit** — 5 попыток / 5 минут
+- **Request body size limit** — http.MaxBytesReader
+- **Default bind** — 127.0.0.1 (не все интерфейсы)
 
 ## Архитектура
 
+### Модель Profile → Instance
+
+**Profile** — шаблон запуска (конфигурация).
+**Instance** — запущенный процесс (runtime entity).
+
+```
+Profile (static)
+  ├─ runtime_id → Runtime
+  ├─ model_id → Model (optional)
+  ├─ args, environment, active
+  └─ ...
+
+Instance (dynamic, создан при start)
+  ├─ profile_id → Profile
+  ├─ pid, state, exit_code
+  ├─ started_at, stopped_at
+  └─ ...
+```
+
+Разделение означает:
+- Профили независимы от жизненного цикла процессов
+- Несколько экземпляров могут делить один профиль
+- Остановка экземпляра не удаляет профиль
+- Restart создаёт новый экземпляр с новым ID
+
 ### Управление процессами
 
-GoAl использует multi-instance `Supervisor` который управляет несколькими `process.Manager` — по одному на каждый экземпляр запуска. Каждый `exec.Cmd` имеет ровно одного владельца, вызывающего `Wait()`. Process lifecycle управляется через `platform.ProcessControl` интерфейс:
+GoAl использует multi-instance `Supervisor` который управляет несколькими `process.Manager` — по одному на каждый экземпляр запуска. Каждый `exec.Cmd` имеет ровно одного владельца, вызывающего `Wait()`. Process lifecycle управляется через `platform.Prepare`:
 
 - **Windows**: Job Object с kill-on-close
 - **Linux**: Process group (SIGTERM/SIGKILL)
 
 Среды процессов сливаются с окружением родительского процесса (переменные профиля переопределяют системные).
 
+SysProcAttr убран из `CommandSpec` — платформенная настройка выполняется через `platform.Prepare`.
+
+### Recovery при запуске
+
+При запуске Supervisor:
+1. Загружает все `LaunchInstanceEntry` из repository
+2. Проверяет, какие экземпляры были running
+3. Проверяет, жив ли PID
+4. Если жив: обновляет state на `running`, подписывает на logs
+5. Если мёртв: маркирует как `exited` с `recovered` exit class
+
 ### Хранение данных
 
-Единое JSON-хранилище (`goal_repo.json`) хранит runtimes, модели, профили и метаданные экземпляров в одном aggregate. Каждая мутация сохраняется под lock для atomic snapshot writes.
+**Единое JSON-хранилище** (`goal_repo.json`) — single-file storage для runtimes, моделей, профилей и экземпляров.
+
+Schema version: `4`. Atomic writes через `tmp + rename`.
+
+```
+goal_repo.json       — active repository
+goal_repo.json.tmp   — temporary write file
+```
+
+**Ограничения (текущие):**
+- Нет fsync guarantee (OS handles flushing)
+- Corrupted file требует ручного recovery
+- Нет concurrent write protection кроме mutex
+- Нет schema migration tests
+
+**Планируемые улучшения:**
+- Transactional backup перед каждой записью
+- fsync после rename
+- Автоматический recovery из `.bak` при corruption
+- Рассмотреть SQLite для v1.0 (всё ещё single-binary)
 
 ### Логирование
 
