@@ -108,6 +108,8 @@ func (a *App) Run(ctx context.Context) error {
 	mux.HandleFunc("GET /api/v1/metrics", a.requireAuth(a.metrics.Handler()))
 	mux.HandleFunc("GET /api/v1/instances", a.requireAuth(a.instancesList))
 	mux.HandleFunc("GET /api/v1/instances/{id}", a.requireAuth(a.instanceStatus))
+	mux.HandleFunc("POST /api/v1/instances/{id}/stop", a.requireAuthCSRF(a.instanceStop))
+	mux.HandleFunc("POST /api/v1/instances/{id}/restart", a.requireAuthCSRF(a.instanceRestart))
 	mux.HandleFunc("GET /api/v1/profiles", a.requireAuth(a.profileList))
 	mux.HandleFunc("GET /api/v1/profiles/", a.requireAuth(a.profileGet))
 	mux.HandleFunc("GET /api/v1/runtimes", a.requireAuth(a.runtimeList))

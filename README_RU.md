@@ -77,7 +77,7 @@ GoAl автоматически мигрирует конфигурацию пр
 
 ### Горячая перезагрузка конфигурации
 
-Конфигурация автоматически перезагружается при изменении файла.
+Перезагрузка определена в `internal/config` (`ReloadConfig`, `StartWatch`) но пока не подключена в main. Конфигурация читается один раз при запуске через `config.Load()`.
 
 ## API endpoints
 
@@ -108,10 +108,10 @@ GoAl автоматически мигрирует конфигурацию пр
 
 | Method | Path | Описание |
 |--------|------|----------|
-| GET | `/api/v1/instances` | Список всех экземпляров |
+| GET | `/api/v1/instances` | Список всех экземпляров (из Supervisor) |
 | GET | `/api/v1/instances/{id}` | Статус экземпляра |
-| POST | `/api/v1/instances/{id}/stop` | Остановить экземпляр |
-| POST | `/api/v1/instances/{id}/restart` | Перезапустить экземпляр |
+| POST | `/api/v1/instances/{id}/stop` | Остановить экземпляр (auth + CSRF) |
+| POST | `/api/v1/instances/{id}/restart` | Перезапустить экземпляр (auth + CSRF) |
 
 ### Профили (CRUD)
 
@@ -204,30 +204,29 @@ GoAl автоматически мигрирует конфигурацию пр
 
 ### Управление процессами
 
-GoAl управляет одним процессом за раз через `process.Manager`. Каждый `exec.Cmd` имеет ровно одного владельца, вызывающего `Wait()`. Process lifecycle управляется через `platform.ProcessControl` интерфейс:
+GoAl использует multi-instance `Supervisor` который управляет несколькими `process.Manager` — по одному на каждый экземпляр запуска. Каждый `exec.Cmd` имеет ровно одного владельца, вызывающего `Wait()`. Process lifecycle управляется через `platform.ProcessControl` интерфейс:
 
 - **Windows**: Job Object с kill-on-close
 - **Linux**: Process group (SIGTERM/SIGKILL)
 
 Среды процессов сливаются с окружением родительского процесса (переменные профиля переопределяют системные).
 
+### Хранение данных
+
+Единое JSON-хранилище (`goal_repo.json`) хранит runtimes, модели, профили и метаданные экземпляров в одном aggregate. Каждая мутация сохраняется под lock для atomic snapshot writes.
+
 ### Логирование
 
-Все логи процессов сохраняются в `LogStore` (кольцевой буфер до 10000 записей). Поддерживается:
+Логи процессов хранятся per-instance через ring buffer `process.Manager` (до 10000 записей на экземпляр). Доступ через:
 - SSE стриминг в реальном времени (`/api/v1/logs/stream`)
 - Фильтрация по stream, search, time range
 - Пагинация (page/page_size)
 
-### Хранение данных
-
-Профили, рантаймы и модели хранятся в JSON-файлах в `dataDir`:
-- `data/profiles.json`
-- `data/runtimes.json`
-- `data/models.json`
+Примечание: Legacy `/api/v1/logs/stream` и `/api/v1/status` читают из первого process manager. Per-instance лог эндпоинты в планах.
 
 ### Health Checks
 
-Периодическая проверка здоровья рантаймов (каждые 30 секунд). Поддерживаются TCP и HTTP health check'и.
+Периодическая проверка здоровья рантаймов (каждые 30 секунд). Поддерживаются TCP и HTTP health check. Определения строятся на основе Profile host/port полей.
 
 ## Структура репозитория
 

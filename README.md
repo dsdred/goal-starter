@@ -77,7 +77,7 @@ Migration status endpoint: `GET /api/v1/migration/status`
 
 ### Configuration hot-reload
 
-Configuration is automatically reloaded when the file changes.
+Configuration reload is defined in `internal/config` (`ReloadConfig`, `StartWatch` methods) but not yet wired into the main application. The config file is read once at startup via `config.Load()`.
 
 ## API endpoints
 
@@ -108,10 +108,10 @@ Profile is a launch template. Instance is a running process.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/api/v1/instances` | List all instances |
+| GET | `/api/v1/instances` | List all instances (from Supervisor) |
 | GET | `/api/v1/instances/{id}` | Instance status |
-| POST | `/api/v1/instances/{id}/stop` | Stop instance |
-| POST | `/api/v1/instances/{id}/restart` | Restart instance |
+| POST | `/api/v1/instances/{id}/stop` | Stop instance (auth + CSRF) |
+| POST | `/api/v1/instances/{id}/restart` | Restart instance (auth + CSRF) |
 
 ### Profiles (CRUD)
 
@@ -197,23 +197,26 @@ Process environments are merged with the parent process environment (profile var
 
 `LaunchResolver` builds `CommandSpec` from `Profile` + `Runtime` + `Model` before launch. Use `POST /api/v1/profiles/{id}/resolve` to preview the resulting command.
 
-### Logging
-
-All process logs are stored in a `LogStore` (ring buffer, up to 10000 entries). Supports:
-- Real-time SSE streaming (`/api/v1/logs/stream`)
-- Filtering by stream, search substring, time range
-- Pagination (page/page_size)
-
 ### Data Storage
 
-Profiles, runtimes, and models are persisted as JSON files in `dataDir`:
-- `data/profiles.json`
-- `data/runtimes.json`
-- `data/models.json`
+Unified JSON repository (`goal_repo.json`) stores runtimes, models, profiles, and launch instance metadata in a single aggregate. Each mutation is persisted under a lock for atomic snapshot writes.
+
+### Logging
+
+Process logs are stored per-instance via `process.Manager` ring buffer (up to 10000 entries per instance). Access via:
+- Real-time SSE streaming (`/api/v1/logs/stream`)
+- Filtering by instance stream, search substring, time range
+- Pagination (page/page_size)
+
+Note: Legacy `/api/v1/logs/stream` and `/api/v1/status` still read from the first process manager. Per-instance log endpoints are planned.
 
 ### Health Checks
 
-Periodic runtime health checking (every 30 seconds). Supports TCP and HTTP health checks.
+Periodic runtime health checking (every 30 seconds). Supports TCP and HTTP health checks. Health check definitions are built from Profile host/port fields.
+
+### Configuration Hot-Reload
+
+Configuration reload is defined in `internal/config` (ReloadConfig, Watch methods) but not yet wired into the main application startup. The config file is read once at startup via `config.Load()`.
 
 ## Repository layout
 
