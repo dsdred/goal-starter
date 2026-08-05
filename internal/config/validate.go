@@ -8,7 +8,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/example/goal/internal/webui/validation"
+	"github.com/dsdred/goal/internal/webui/validation"
 )
 
 // ValidateFull performs comprehensive configuration validation at startup.

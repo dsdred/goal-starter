@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/example/goal/internal/process"
+	"github.com/dsdred/goal/internal/process"
 )
 
 // doneCh is a channel returned by TestContextCancellation workaround.

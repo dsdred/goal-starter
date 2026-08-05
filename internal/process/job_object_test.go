@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/example/goal/internal/process"
+	"github.com/dsdred/goal/internal/process"
 )
 
 // TestWindowsJobObject_cleanup verifies that child processes are cleaned up

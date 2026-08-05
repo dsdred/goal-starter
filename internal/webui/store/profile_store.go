@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/example/goal/internal/webui/validation"
+	"github.com/dsdred/goal/internal/webui/validation"
 )
 
 // Profile represents a launch profile with all necessary configuration.

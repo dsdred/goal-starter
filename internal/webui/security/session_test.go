@@ -177,15 +177,16 @@ func TestCSRF_GetToken(t *testing.T) {
 func TestCSRF_RotateToken(t *testing.T) {
 	csrf := NewCSRF()
 	oldToken := csrf.GetToken()
-	returnedOld := csrf.RotateToken()
-	// RotateToken returns the old token.
-	if returnedOld != oldToken {
-		t.Error("RotateToken should return the old token")
-	}
-	// New token should be different.
-	newToken := csrf.GetToken()
+	// RotateToken now returns the NEW token that was stored.
+	newToken := csrf.RotateToken()
+	// RotateToken should return the new token.
 	if newToken == oldToken {
-		t.Error("Expected different token after rotation")
+		t.Error("RotateToken should return a new token different from the old one")
+	}
+	// The stored token should match what RotateToken returned.
+	currentToken := csrf.GetToken()
+	if currentToken != newToken {
+		t.Error("Stored token should match what RotateToken returned")
 	}
 }
 
@@ -195,6 +196,9 @@ func TestCSRF_Middleware(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
+	token := csrf.GetToken()
+
+	// Test: missing CSRF token → 403.
 	req := httptest.NewRequest("POST", "/", nil)
 	w := httptest.NewRecorder()
 	csrf.Middleware(handler).ServeHTTP(w, req)
@@ -202,8 +206,10 @@ func TestCSRF_Middleware(t *testing.T) {
 		t.Errorf("Expected 403 for missing CSRF token, got %d", w.Code)
 	}
 
+	// Test: valid double-submit (header == cookie == token) → 200.
 	req = httptest.NewRequest("POST", "/", nil)
-	req.Header.Set("X-CSRF-Token", csrf.GetToken())
+	req.Header.Set("X-CSRF-Token", token)
+	req.AddCookie(&http.Cookie{Name: "goal_csrf_token", Value: token})
 	w = httptest.NewRecorder()
 	csrf.Middleware(handler).ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
@@ -227,20 +233,44 @@ func TestCSRF_Middleware_SafeMethods(t *testing.T) {
 
 func TestCSRF_ValidateRequest(t *testing.T) {
 	csrf := NewCSRF()
+	token := csrf.GetToken()
 
+	// Test 1: missing header and cookie.
 	req := httptest.NewRequest("POST", "/", nil)
-	if csrf.ValidateRequest(req) == nil {
+	if err := csrf.ValidateRequest(req, token); err == nil {
 		t.Error("Expected error for missing CSRF token")
 	}
 
-	req.Header.Set("X-CSRF-Token", "wrong-token")
-	if csrf.ValidateRequest(req) == nil {
-		t.Error("Expected error for invalid CSRF token")
+	// Test 2: valid header, missing cookie.
+	req = httptest.NewRequest("POST", "/", nil)
+	req.Header.Set("X-CSRF-Token", token)
+	if err := csrf.ValidateRequest(req, token); err == nil {
+		t.Error("Expected error for missing cookie with valid header")
 	}
 
-	req.Header.Set("X-CSRF-Token", csrf.GetToken())
-	if csrf.ValidateRequest(req) != nil {
-		t.Error("Expected no error for valid CSRF token")
+	// Test 3: valid header and cookie, but mismatch with expected token.
+	req = httptest.NewRequest("POST", "/", nil)
+	req.Header.Set("X-CSRF-Token", token)
+	req.AddCookie(&http.Cookie{Name: "goal_csrf_token", Value: token})
+	// Cookie and header match each other, but expected is different.
+	if err := csrf.ValidateRequest(req, "different-token"); err == nil {
+		t.Error("Expected error for wrong expected token")
+	}
+
+	// Test 4: valid header, valid cookie, correct expected token (double-submit success).
+	req = httptest.NewRequest("POST", "/", nil)
+	req.Header.Set("X-CSRF-Token", token)
+	req.AddCookie(&http.Cookie{Name: "goal_csrf_token", Value: token})
+	if err := csrf.ValidateRequest(req, token); err != nil {
+		t.Errorf("Expected no error for valid CSRF token, got: %v", err)
+	}
+
+	// Test 5: header/cookie mismatch (header != cookie).
+	req = httptest.NewRequest("POST", "/", nil)
+	req.Header.Set("X-CSRF-Token", token)
+	req.AddCookie(&http.Cookie{Name: "goal_csrf_token", Value: "different-cookie"})
+	if err := csrf.ValidateRequest(req, token); err == nil {
+		t.Error("Expected error for header/cookie mismatch")
 	}
 }
 

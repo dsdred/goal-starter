@@ -11,11 +11,11 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/example/goal/internal/config"
-	"github.com/example/goal/internal/process"
-	"github.com/example/goal/internal/storage"
-	"github.com/example/goal/internal/version"
-	"github.com/example/goal/internal/webui"
+	"github.com/dsdred/goal/internal/config"
+	"github.com/dsdred/goal/internal/process"
+	"github.com/dsdred/goal/internal/storage"
+	"github.com/dsdred/goal/internal/version"
+	"github.com/dsdred/goal/internal/webui"
 )
 
 func main() {
@@ -67,9 +67,6 @@ func main() {
 		}
 	}
 
-	// Create legacy Manager for backward compatibility (health checks, logs).
-	legacyMgr := process.NewManager()
-
 	// Create application-level context for Supervisor lifecycle.
 	// All instance processes inherit this context, so HTTP request timeouts
 	// do not kill running processes.
@@ -86,10 +83,18 @@ func main() {
 		os.Exit(1)
 	}
 
-	app := webui.NewWithSupervisor(cfg, supervisor, legacyMgr, repo)
+	// Create and initialize the web UI app.
+	app, err := webui.NewApp(&cfg, repo, supervisor)
+	if err != nil {
+		slog.Error("init webui", "error", err)
+		os.Exit(1)
+	}
+
+	// Initialize route registry.
+	app.InitRegistry()
 
 	// Start periodic health check goroutine.
-	go app.RunHealthChecker(appCtx)
+	go app.StartHealthChecker(appCtx)
 
 	// Run the application (HTTP server).
 	runErr := app.Run(appCtx)

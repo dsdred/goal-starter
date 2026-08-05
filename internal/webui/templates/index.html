@@ -1,530 +1,279 @@
 {{define "index.html"}}<!DOCTYPE html>
-<html lang="ru">
+<html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Goal Manager</title>
-<style>
-* { margin: 0; padding: 0; box-sizing: border-box; }
-body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f5f5; color: #333; }
-header { background: #1a1a2e; color: #fff; padding: 16px 24px; display: flex; justify-content: space-between; align-items: center; }
-header h1 { font-size: 20px; }
-.status-badge { display: inline-block; padding: 4px 12px; border-radius: 12px; font-size: 13px; font-weight: 600; }
-.status-badge.running { background: #28a745; color: #fff; }
-.status-badge.stopped { background: #dc3545; color: #fff; }
-.status-badge.starting { background: #ffc107; color: #000; }
-.status-badge.stopping { background: #fd7e14; color: #000; }
-.container { max-width: 1200px; margin: 0 auto; padding: 20px; }
-.tabs { display: flex; gap: 4px; margin-bottom: 20px; border-bottom: 2px solid #ddd; }
-.tab { padding: 10px 20px; cursor: pointer; border: none; background: none; font-size: 15px; color: #666; border-bottom: 2px solid transparent; margin-bottom: -2px; }
-.tab.active { color: #1a1a2e; border-bottom-color: #1a1a2e; font-weight: 600; }
-.tab-content { display: none; }
-.tab-content.active { display: block; }
-.card { background: #fff; border-radius: 8px; padding: 20px; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
-.card h3 { margin-bottom: 12px; font-size: 16px; color: #1a1a2e; }
-.table { width: 100%; border-collapse: collapse; }
-.table th, .table td { padding: 10px 12px; text-align: left; border-bottom: 1px solid #eee; font-size: 14px; }
-.table th { background: #f8f9fa; font-weight: 600; color: #555; }
-.btn { display: inline-block; padding: 6px 14px; border: none; border-radius: 4px; cursor: pointer; font-size: 13px; font-weight: 500; text-decoration: none; }
-.btn-primary { background: #007bff; color: #fff; }
-.btn-success { background: #28a745; color: #fff; }
-.btn-danger { background: #dc3545; color: #fff; }
-.btn-warning { background: #ffc107; color: #000; }
-.btn-sm { padding: 4px 10px; font-size: 12px; }
-.btn-group { display: flex; gap: 6px; flex-wrap: wrap; }
-.form-group { margin-bottom: 12px; }
-.form-group label { display: block; margin-bottom: 4px; font-weight: 500; font-size: 14px; }
-.form-group input, .form-group select, .form-group textarea { width: 100%; padding: 8px 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px; }
-.form-group textarea { font-family: monospace; font-size: 13px; }
-.modal-overlay { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.4); z-index: 1000; }
-.modal-overlay.active { display: flex; justify-content: center; align-items: center; }
-.modal { background: #fff; border-radius: 8px; padding: 24px; width: 500px; max-width: 90vw; max-height: 80vh; overflow-y: auto; }
-.modal h2 { margin-bottom: 16px; font-size: 18px; }
-.log-viewer { background: #1e1e1e; color: #d4d4d4; padding: 12px; border-radius: 6px; font-family: 'Cascadia Code', 'Fira Code', monospace; font-size: 13px; height: 400px; overflow-y: auto; white-space: pre-wrap; word-wrap: break-word; }
-.empty { text-align: center; padding: 40px; color: #999; }
-.flex-between { display: flex; justify-content: space-between; align-items: center; }
-.mt-2 { margin-top: 12px; }
-.env-row { display: flex; gap: 8px; margin-bottom: 6px; }
-.env-row input { flex: 1; }
-.args-hint { font-size: 12px; color: #888; margin-top: 2px; }
-</style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GoAl - Process Manager</title>
+    <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-<header>
-  <h1>Goal Manager</h1>
-  <div>
-    <span id="statusBadge" class="status-badge stopped">Stopped</span>
-  </div>
-</header>
-
-<div class="container">
-  <div class="tabs">
-    <button class="tab active" data-tab="profiles">Profiles</button>
-    <button class="tab" data-tab="runtimes">Runtimes</button>
-    <button class="tab" data-tab="models">Models</button>
-    <button class="tab" data-tab="logs">Logs</button>
-  </div>
-
-  <!-- Profiles -->
-  <div class="tab-content active" id="tab-profiles">
-    <div class="card">
-      <div class="flex-between">
-        <h3>Profiles</h3>
-        <button class="btn btn-primary" onclick="showModal('profileModal')">+ New Profile</button>
-      </div>
-      <table class="table mt-2" id="profilesTable">
-        <thead>
-          <tr><th>Name</th><th>Runtime</th><th>Model</th><th>Host:Port</th><th>Actions</th></tr>
-        </thead>
-        <tbody id="profilesBody"></tbody>
-      </table>
-      <div class="empty" id="profilesEmpty">No profiles yet. Click "+ New Profile" to create one.</div>
-    </div>
-  </div>
-
-  <!-- Runtimes -->
-  <div class="tab-content" id="tab-runtimes">
-    <div class="card">
-      <div class="flex-between">
-        <h3>Runtimes</h3>
-        <button class="btn btn-primary" onclick="showModal('runtimeModal')">+ New Runtime</button>
-      </div>
-      <table class="table mt-2" id="runtimesTable">
-        <thead>
-          <tr><th>Name</th><th>Executable</th><th>Working Dir</th><th>Actions</th></tr>
-        </thead>
-        <tbody id="runtimesBody"></tbody>
-      </table>
-      <div class="empty" id="runtimesEmpty">No runtimes yet. Click "+ New Runtime" to create one.</div>
-    </div>
-  </div>
-
-  <!-- Models -->
-  <div class="tab-content" id="tab-models">
-    <div class="card">
-      <div class="flex-between">
-        <h3>Models</h3>
-        <button class="btn btn-primary" onclick="showModal('modelModal')">+ New Model</button>
-      </div>
-      <table class="table mt-2" id="modelsTable">
-        <thead>
-          <tr><th>Name</th><th>Path</th><th>MMProj</th><th>Format</th><th>Actions</th></tr>
-        </thead>
-        <tbody id="modelsBody"></tbody>
-      </table>
-      <div class="empty" id="modelsEmpty">No models yet. Click "+ New Model" to create one.</div>
-    </div>
-  </div>
-
-  <!-- Logs -->
-  <div class="tab-content" id="tab-logs">
-    <div class="card">
-      <div class="flex-between">
-        <h3>Live Logs</h3>
-        <button class="btn btn-danger btn-sm" onclick="clearLogs()">Clear</button>
-      </div>
-      <div class="log-viewer mt-2" id="logViewer"></div>
-    </div>
-  </div>
-</div>
-
-<!-- Profile Modal -->
-<div class="modal-overlay" id="profileModal">
-  <div class="modal">
-    <h2 id="profileModalTitle">New Profile</h2>
-    <form id="profileForm" onsubmit="saveProfile(event)">
-      <input type="hidden" id="profileId">
-      <div class="form-group">
-        <label>Name *</label>
-        <input type="text" id="profileName" required>
-      </div>
-      <div class="form-group">
-        <label>Runtime *</label>
-        <select id="profileRuntime" required></select>
-      </div>
-      <div class="form-group">
-        <label>Model</label>
-        <select id="profileModel">
-          <option value="">(none)</option>
-        </select>
-      </div>
-      <div class="form-group">
-        <label>Host</label>
-        <input type="text" id="profileHost" placeholder="127.0.0.1">
-      </div>
-      <div class="form-group">
-        <label>Port</label>
-        <input type="number" id="profilePort" placeholder="8080">
-      </div>
-      <div class="form-group">
-        <label>Args (one per line)</label>
-        <textarea id="profileArgs" rows="3" placeholder="--model path/to/model --gpu-layers 30"></textarea>
-        <div class="args-hint">Each line is a separate argument</div>
-      </div>
-      <div class="form-group">
-        <label>Environment (KEY=VALUE, one per line)</label>
-        <textarea id="profileEnv" rows="3" placeholder="HF_HOME=/data/hf"></textarea>
-      </div>
-      <div style="display:flex;gap:8px;justify-content:flex-end;">
-        <button type="button" class="btn" onclick="hideModal('profileModal')">Cancel</button>
-        <button type="submit" class="btn btn-primary">Save</button>
-      </div>
-    </form>
-  </div>
-</div>
-
-<!-- Runtime Modal -->
-<div class="modal-overlay" id="runtimeModal">
-  <div class="modal">
-    <h2 id="runtimeModalTitle">New Runtime</h2>
-    <form id="runtimeForm" onsubmit="saveRuntime(event)">
-      <input type="hidden" id="runtimeId">
-      <div class="form-group">
-        <label>Name *</label>
-        <input type="text" id="runtimeName" required>
-      </div>
-      <div class="form-group">
-        <label>Executable *</label>
-        <input type="text" id="runtimeExe" required placeholder="C:\path\to\ollama.exe">
-      </div>
-      <div class="form-group">
-        <label>Working Directory</label>
-        <input type="text" id="runtimeWorkDir">
-      </div>
-      <div class="form-group">
-        <label>Default Args (one per line)</label>
-        <textarea id="runtimeDefaultArgs" rows="3" placeholder="--listen-host 0.0.0.0"></textarea>
-        <div class="args-hint">Each line is a separate argument</div>
-      </div>
-      <div class="form-group">
-        <label>Environment (KEY=VALUE, one per line)</label>
-        <textarea id="runtimeEnv" rows="3"></textarea>
-      </div>
-      <div style="display:flex;gap:8px;justify-content:flex-end;">
-        <button type="button" class="btn" onclick="hideModal('runtimeModal')">Cancel</button>
-        <button type="submit" class="btn btn-primary">Save</button>
-      </div>
-    </form>
-  </div>
-</div>
-
-<!-- Model Modal -->
-<div class="modal-overlay" id="modelModal">
-  <div class="modal">
-    <h2 id="modelModalTitle">New Model</h2>
-    <form id="modelForm" onsubmit="saveModel(event)">
-      <input type="hidden" id="modelId">
-      <div class="form-group">
-        <label>Name *</label>
-        <input type="text" id="modelName" required>
-      </div>
-      <div class="form-group">
-        <label>Path *</label>
-        <input type="text" id="modelPath" required placeholder="C:\path\to\model.gguf">
-      </div>
-      <div class="form-group">
-        <label>MMProj Path</label>
-        <input type="text" id="modelMMProj">
-      </div>
-      <div class="form-group">
-        <label>Format</label>
-        <select id="modelFormat">
-          <option value="">(none)</option>
-          <option value="gguf">gguf</option>
-          <option value="safetensors">safetensors</option>
-        </select>
-      </div>
-      <div style="display:flex;gap:8px;justify-content:flex-end;">
-        <button type="button" class="btn" onclick="hideModal('modelModal')">Cancel</button>
-        <button type="submit" class="btn btn-primary">Save</button>
-      </div>
-    </form>
-  </div>
-</div>
-
-<script>
-// ---- Tab switching ----
-document.querySelectorAll('.tab').forEach(tab => {
-  tab.addEventListener('click', () => {
-    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
-    tab.classList.add('active');
-    document.getElementById('tab-' + tab.dataset.tab).classList.add('active');
-  });
-});
-
-// ---- Modal ----
-function showModal(id) { document.getElementById(id).classList.add('active'); }
-function hideModal(id) { document.getElementById(id).classList.remove('active'); }
-
-// ---- Status ----
-async function fetchStatus() {
-  try {
-    const r = await fetch('/api/v1/status');
-    const s = await r.json();
-    const badge = document.getElementById('statusBadge');
-    badge.textContent = s.Status.charAt(0).toUpperCase() + s.Status.slice(1).toLowerCase();
-    badge.className = 'status-badge ' + s.Status;
-  } catch(e) {}
-}
-
-// ---- Profiles ----
-let profiles = [], runtimes = [], models = [];
-
-async function loadAll() {
-  try {
-    const [pr, ru, mo] = await Promise.all([
-      fetch('/api/v1/profiles').then(r => r.json()),
-      fetch('/api/v1/runtimes').then(r => r.json()),
-      fetch('/api/v1/models').then(r => r.json()),
-    ]);
-    profiles = pr || [];
-    runtimes = ru || [];
-    models = mo || [];
-    renderProfiles();
-    renderRuntimes();
-    renderModels();
-    populateSelects();
-  } catch(e) { console.error(e); }
-  fetchStatus();
-}
-
-function populateSelects() {
-  const rtSel = document.getElementById('profileRuntime');
-  const mdSel = document.getElementById('profileModel');
-  rtSel.innerHTML = '<option value="">(select)</option>' +
-    runtimes.map(r => `<option value="${r.id}">${r.name}</option>`).join('');
-  mdSel.innerHTML = '<option value="">(none)</option>' +
-    models.map(m => `<option value="${m.id}">${m.name}</option>`).join('');
-}
-
-function renderProfiles() {
-  const body = document.getElementById('profilesBody');
-  const empty = document.getElementById('profilesEmpty');
-  if (profiles.length === 0) {
-    body.innerHTML = '';
-    empty.style.display = 'block';
-    return;
-  }
-  empty.style.display = 'none';
-  body.innerHTML = profiles.map(p => {
-    const rt = runtimes.find(r => r.id === p.runtime_id);
-    const md = models.find(m => m.id === p.model_id);
-    return `<tr>
-      <td><strong>${esc(p.name)}</strong></td>
-      <td>${esc(rt ? rt.name : 'N/A')}</td>
-      <td>${esc(md ? md.name : 'N/A')}</td>
-      <td>${p.host || '-'}:${p.port || '-'}</td>
-      <td>
-        <div class="btn-group">
-          <button class="btn btn-success btn-sm" onclick="actionProfile('${p.id}','start')">▶ Start</button>
-          <button class="btn btn-warning btn-sm" onclick="actionProfile('${p.id}','restart')">↻ Restart</button>
-          <button class="btn btn-danger btn-sm" onclick="actionProfile('${p.id}','stop')">■ Stop</button>
-          <button class="btn btn-sm" onclick="editProfile('${p.id}')">✎</button>
-          <button class="btn btn-danger btn-sm" onclick="deleteProfile('${p.id}')">🗑</button>
+    <!-- Login Modal -->
+    <div id="login-modal" class="modal" style="display:none;">
+        <div class="modal-content">
+            <h2>Authentication Required</h2>
+            <form id="login-form" onsubmit="return handleLogin(event)">
+                <div class="form-group">
+                    <label for="username">Username</label>
+                    <input type="text" id="username" name="username" required autofocus>
+                </div>
+                <div class="form-group">
+                    <label for="password">Password</label>
+                    <input type="password" id="password" name="password" required>
+                </div>
+                <div id="login-error" class="error-message" style="display:none;"></div>
+                <button type="submit" class="btn btn-primary">Login</button>
+            </form>
         </div>
-      </td>
-    </tr>`;
-  }).join('');
-}
+    </div>
 
-function renderRuntimes() {
-  const body = document.getElementById('runtimesBody');
-  const empty = document.getElementById('runtimesEmpty');
-  if (runtimes.length === 0) {
-    body.innerHTML = '';
-    empty.style.display = 'block';
-    return;
-  }
-  empty.style.display = 'none';
-  body.innerHTML = runtimes.map(r => `<tr>
-    <td><strong>${esc(r.name)}</strong></td>
-    <td><code>${esc(r.executable)}</code></td>
-    <td>${esc(r.working_directory || '-')}</td>
-    <td>
-      <div class="btn-group">
-        <button class="btn btn-sm" onclick="editRuntime('${r.id}')">✎</button>
-        <button class="btn btn-danger btn-sm" onclick="deleteRuntime('${r.id}')">🗑</button>
-      </div>
-    </td>
-  </tr>`).join('');
-}
+    <!-- Create Profile Modal -->
+    <div id="create-profile-modal" class="modal" style="display:none;">
+        <div class="modal-content modal-lg">
+            <div class="modal-header">
+                <h2>Create New Profile</h2>
+                <button class="modal-close" onclick="closeCreateProfileModal()">×</button>
+            </div>
+            <form id="create-profile-form" onsubmit="return handleCreateProfile(event)">
+                <div class="form-group">
+                    <label for="profile-name">Profile Name *</label>
+                    <input type="text" id="profile-name" name="name" required placeholder="e.g., My AI Model">
+                </div>
+                <div class="form-group">
+                    <label for="profile-runtime">Runtime *</label>
+                    <select id="profile-runtime" name="runtime_id" required onchange="updateProfileModelSelect()">
+                        <option value="">Select a runtime...</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="profile-model">Model *</label>
+                    <select id="profile-model" name="model_id" required>
+                        <option value="">Select a model...</option>
+                    </select>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="profile-host">Host</label>
+                        <input type="text" id="profile-host" name="host" placeholder="e.g., 127.0.0.1" value="127.0.0.1">
+                    </div>
+                    <div class="form-group">
+                        <label for="profile-port">Port</label>
+                        <input type="number" id="profile-port" name="port" placeholder="e.g., 8080" min="1" max="65535">
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label for="profile-args">Arguments (space-separated)</label>
+                    <textarea id="profile-args" name="args" rows="2" placeholder="--model-path /path/to/model --gpu-layers 30"></textarea>
+                </div>
+                <div class="form-group">
+                    <label>Environment Variables</label>
+                    <div id="env-variables-container">
+                        <div class="env-row">
+                            <input type="text" placeholder="VAR_NAME" class="env-key">
+                            <input type="text" placeholder="value" class="env-value">
+                            <button type="button" class="btn btn-danger btn-sm" onclick="removeEnvRow(this)">×</button>
+                        </div>
+                    </div>
+                    <button type="button" class="btn btn-sm" onclick="addEnvRow()">+ Add Variable</button>
+                </div>
+                <div id="create-profile-error" class="error-message" style="display:none;"></div>
+                <div class="form-actions">
+                    <button type="submit" class="btn btn-primary">Create Profile</button>
+                    <button type="button" class="btn btn-secondary" onclick="closeCreateProfileModal()">Cancel</button>
+                </div>
+            </form>
+        </div>
+    </div>
 
-function renderModels() {
-  const body = document.getElementById('modelsBody');
-  const empty = document.getElementById('modelsEmpty');
-  if (models.length === 0) {
-    body.innerHTML = '';
-    empty.style.display = 'block';
-    return;
-  }
-  empty.style.display = 'none';
-  body.innerHTML = models.map(m => `<tr>
-    <td><strong>${esc(m.name)}</strong></td>
-    <td><code>${esc(m.path)}</code></td>
-    <td>${esc(m.mmproj || '-')}</td>
-    <td>${esc(m.format || '-')}</td>
-    <td>
-      <button class="btn btn-danger btn-sm" onclick="deleteModel('${m.id}')">🗑</button>
-    </td>
-  </tr>`).join('');
-}
+    <header>
+        <div class="header-content">
+            <h1>GoAl Process Manager</h1>
+            <div class="header-right">
+                <div id="status-indicator" class="status-badge status-{{.Status.State}}">
+                    <span class="status-dot"></span>
+                    {{.Status.State}}
+                </div>
+                <div id="user-info" class="user-info" style="display:none;">
+                    <span id="username-display"></span>
+                    <button onclick="handleLogout()" class="btn btn-sm">Logout</button>
+                </div>
+            </div>
+        </div>
+    </header>
 
-async function actionProfile(id, action) {
-  try {
-    const p = profiles.find(x => x.id === id);
-    const body = action === 'start' ? JSON.stringify({ runtime_id: p.runtime_id, model_id: p.model_id, host: p.host, port: p.port }) : undefined;
-    const opts = body ? { method: 'POST', headers: {'Content-Type':'application/json'}, body } : undefined;
-    await fetch(`/api/v1/profiles/${id}?action=${action}`, opts);
-    loadAll();
-  } catch(e) { console.error(e); }
-}
+    <main>
+        <!-- Status Overview -->
+        <section id="status-overview" class="dashboard">
+            <div class="dashboard-grid">
+                <div class="dashboard-card">
+                    <h3>Process</h3>
+                    <div class="status-info">
+                        <div class="status-row">
+                            <span class="label">State:</span>
+                            <span id="detail-state">{{.Status.State}}</span>
+                        </div>
+                        <div class="status-row">
+                            <span class="label">PID:</span>
+                            <span>{{.Status.PID | default "-"}}</span>
+                        </div>
+                        <div class="status-row">
+                            <span class="label">Started:</span>
+                            <span>{{.Status.StartedAt | formatTime}}</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="dashboard-card">
+                    <h3>Exit Info</h3>
+                    <div class="status-info">
+                        <div class="status-row">
+                            <span class="label">Exit Class:</span>
+                            <span>{{.Status.ExitClass | default "-"}}</span>
+                        </div>
+                        <div class="status-row">
+                            <span class="label">Exit Code:</span>
+                            <span>{{.Status.ExitCode | default "-"}}</span>
+                        </div>
+                        <div class="status-row">
+                            <span class="label">Exit Time:</span>
+                            <span>{{.Status.ExitTime | formatTime}}</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="dashboard-card">
+                    <h3>System</h3>
+                    <div class="status-info">
+                        <div class="status-row">
+                            <span class="label">Listen:</span>
+                            <span>{{.Config.ListenAddress}}:{{.Config.WebPort}}</span>
+                        </div>
+                        <div class="status-row">
+                            <span class="label">Data Dir:</span>
+                            <span>{{.Config.DataDir}}</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            {{if .Status.LastError}}
+            <div class="error-banner">
+                <span class="error-icon">⚠</span>
+                <span>{{.Status.LastError}}</span>
+            </div>
+            {{end}}
+        </section>
 
-async function saveProfile(e) {
-  e.preventDefault();
-  const id = document.getElementById('profileId').value;
-  const name = document.getElementById('profileName').value;
-  const runtimeId = document.getElementById('profileRuntime').value;
-  const modelId = document.getElementById('profileModel').value;
-  const host = document.getElementById('profileHost').value;
-  const port = parseInt(document.getElementById('profilePort').value) || 0;
-  const argsRaw = document.getElementById('profileArgs').value.trim();
-  const envRaw = document.getElementById('profileEnv').value.trim();
-  const args = argsRaw ? argsRaw.split('\n').map(l => l.trim()).filter(Boolean) : [];
-  const env = {};
-  if (envRaw) {
-    envRaw.split('\n').forEach(l => {
-      const idx = l.indexOf('=');
-      if (idx > 0) env[l.substring(0, idx).trim()] = l.substring(idx + 1).trim();
-    });
-  }
-  const url = id ? `/api/v1/profiles/${id}` : '/api/v1/profiles';
-  const method = id ? 'PUT' : 'POST';
-  const body = JSON.stringify({ name, runtime_id: runtimeId, model_id: modelId, host, port, args, environment: env });
-  await fetch(url, { method, headers: {'Content-Type':'application/json'}, body });
-  hideModal('profileModal');
-  loadAll();
-}
+        <!-- Runtimes -->
+        <section id="runtimes">
+            <div class="section-header">
+                <h2>Runtimes <span class="count">({{len .Runtimes}})</span></h2>
+                <button class="btn btn-primary" onclick="showCreateRuntimeModal()">+ Add Runtime</button>
+            </div>
+            {{if .Runtimes}}
+            <table class="data-table">
+                <thead>
+                    <tr><th>Name</th><th>Executable</th><th>Working Dir</th><th>Default Args</th><th>ID</th><th>Actions</th></tr>
+                </thead>
+                <tbody>
+                    {{range .Runtimes}}
+                    <tr>
+                        <td>{{.Name}}</td>
+                        <td><code>{{.Executable}}</code></td>
+                        <td><code>{{.WorkingDirectory}}</code></td>
+                        <td>{{range .DefaultArgs}}<span class="arg">{{.}}</span>{{end}}</td>
+                        <td><code>{{.ID}}</code></td>
+                        <td class="actions">
+                            <button onclick="deleteRuntime('{{.ID}}')" class="btn btn-danger btn-sm">Delete</button>
+                        </td>
+                    </tr>
+                    {{end}}
+                </tbody>
+            </table>
+            {{else}}
+            <p class="empty">No runtimes configured. Add one via API or UI.</p>
+            {{end}}
+        </section>
 
-function editProfile(id) {
-  const p = profiles.find(x => x.id === id);
-  if (!p) return;
-  document.getElementById('profileId').value = p.id;
-  document.getElementById('profileName').value = p.name;
-  document.getElementById('profileHost').value = p.host || '';
-  document.getElementById('profilePort').value = p.port || '';
-  document.getElementById('profileArgs').value = (p.args || []).join('\n');
-  document.getElementById('profileEnv').value = Object.entries(p.environment || {}).map(([k,v]) => k+'='+v).join('\n');
-  document.getElementById('profileModalTitle').textContent = 'Edit Profile';
-  showModal('profileModal');
-}
+        <!-- Models -->
+        <section id="models">
+            <div class="section-header">
+                <h2>Models <span class="count">({{len .Models}})</span></h2>
+                <button class="btn btn-primary" onclick="showCreateModelModal()">+ Add Model</button>
+            </div>
+            {{if .Models}}
+            <table class="data-table">
+                <thead>
+                    <tr><th>Name</th><th>Path</th><th>MMProj</th><th>Format</th><th>ID</th><th>Actions</th></tr>
+                </thead>
+                <tbody>
+                    {{range .Models}}
+                    <tr>
+                        <td>{{.Name}}</td>
+                        <td><code>{{.Path}}</code></td>
+                        <td><code>{{.MMProj}}</code></td>
+                        <td>{{.Format}}</td>
+                        <td><code>{{.ID}}</code></td>
+                        <td class="actions">
+                            <button onclick="deleteModel('{{.ID}}')" class="btn btn-danger btn-sm">Delete</button>
+                        </td>
+                    </tr>
+                    {{end}}
+                </tbody>
+            </table>
+            {{else}}
+            <p class="empty">No models configured. Add one via API or UI.</p>
+            {{end}}
+        </section>
 
-async function deleteProfile(id) {
-  if (!confirm('Delete this profile?')) return;
-  await fetch('/api/v1/profiles/' + id, { method: 'DELETE' });
-  loadAll();
-}
+        <!-- Profiles -->
+        <section id="profiles">
+            <div class="section-header">
+                <h2>Profiles <span class="count">({{len .Profiles}})</span></h2>
+                <button class="btn btn-primary" onclick="openCreateProfileModal()">+ Create Profile</button>
+            </div>
+            {{if .Profiles}}
+            <table class="data-table">
+                <thead>
+                    <tr><th>Name</th><th>Runtime</th><th>Model</th><th>Host:Port</th><th>Args</th><th>Status</th><th>Actions</th></tr>
+                </thead>
+                <tbody id="profiles-body">
+                    {{range .Profiles}}
+                    <tr id="profile-row-{{.ID}}">
+                        <td>{{.Name}}</td>
+                        <td>{{.RuntimeID}}</td>
+                        <td>{{.ModelID}}</td>
+                        <td>{{if .Host}}{{.Host}}{{end}}{{if .Port}}:{{.Port}}{{end}}</td>
+                        <td>{{range .Args}}<span class="arg">{{.}}</span>{{end}}</td>
+                        <td><span class="profile-status" data-profile-id="{{.ID}}">not started</span></td>
+                        <td class="actions">
+                            <button onclick="startProfile('{{.ID}}')" class="btn btn-success btn-sm">Start</button>
+                            <button onclick="stopProfile('{{.ID}}')" class="btn btn-danger btn-sm">Stop</button>
+                        </td>
+                    </tr>
+                    {{end}}
+                </tbody>
+            </table>
+            {{else}}
+            <p class="empty">No profiles configured. Create one to get started.</p>
+            {{end}}
+        </section>
 
-// ---- Runtimes ----
-async function saveRuntime(e) {
-  e.preventDefault();
-  const id = document.getElementById('runtimeId').value;
-  const name = document.getElementById('runtimeName').value;
-  const exe = document.getElementById('runtimeExe').value;
-  const workDir = document.getElementById('runtimeWorkDir').value;
-  const defArgsRaw = document.getElementById('runtimeDefaultArgs').value.trim();
-  const envRaw = document.getElementById('runtimeEnv').value.trim();
-  const args = defArgsRaw ? defArgsRaw.split('\n').map(l => l.trim()).filter(Boolean) : [];
-  const env = {};
-  if (envRaw) {
-    envRaw.split('\n').forEach(l => {
-      const idx = l.indexOf('=');
-      if (idx > 0) env[l.substring(0, idx).trim()] = l.substring(idx + 1).trim();
-    });
-  }
-  const url = id ? `/api/v1/runtimes/${id}` : '/api/v1/runtimes';
-  const method = id ? 'PUT' : 'POST';
-  const body = JSON.stringify({ name, executable: exe, working_directory: workDir, default_args: args, environment: env });
-  await fetch(url, { method, headers: {'Content-Type':'application/json'}, body });
-  hideModal('runtimeModal');
-  loadAll();
-}
+        <!-- Logs -->
+        <section id="logs">
+            <div class="section-header">
+                <h2>Live Logs</h2>
+                <div class="log-controls">
+                    <select id="log-filter-stream" onchange="updateLogFilter()">
+                        <option value="">All Streams</option>
+                        <option value="stdout">stdout</option>
+                        <option value="stderr">stderr</option>
+                        <option value="system">system</option>
+                    </select>
+                    <input type="text" id="log-search" placeholder="Search..." oninput="filterLogs()">
+                    <button onclick="clearLogs()" class="btn btn-sm">Clear</button>
+                </div>
+            </div>
+            <div id="log-container" class="log-container"></div>
+        </section>
+    </main>
 
-function editRuntime(id) {
-  const r = runtimes.find(x => x.id === id);
-  if (!r) return;
-  document.getElementById('runtimeId').value = r.id;
-  document.getElementById('runtimeName').value = r.name;
-  document.getElementById('runtimeExe').value = r.executable;
-  document.getElementById('runtimeWorkDir').value = r.working_directory || '';
-  document.getElementById('runtimeDefaultArgs').value = (r.default_args || []).join('\n');
-  document.getElementById('runtimeEnv').value = Object.entries(r.environment || {}).map(([k,v]) => k+'='+v).join('\n');
-  document.getElementById('runtimeModalTitle').textContent = 'Edit Runtime';
-  showModal('runtimeModal');
-}
-
-async function deleteRuntime(id) {
-  if (!confirm('Delete this runtime?')) return;
-  await fetch('/api/v1/runtimes/' + id, { method: 'DELETE' });
-  loadAll();
-}
-
-// ---- Models ----
-async function saveModel(e) {
-  e.preventDefault();
-  const id = document.getElementById('modelId').value;
-  const name = document.getElementById('modelName').value;
-  const path = document.getElementById('modelPath').value;
-  const mmproj = document.getElementById('modelMMProj').value;
-  const format = document.getElementById('modelFormat').value;
-  const url = id ? `/api/v1/models/${id}` : '/api/v1/models';
-  const method = id ? 'PUT' : 'POST';
-  // Use POST for create, no PUT for model endpoint needed
-  const body = JSON.stringify({ name, path, mmproj, format });
-  await fetch(url, { method: method, headers: {'Content-Type':'application/json'}, body });
-  hideModal('modelModal');
-  loadAll();
-}
-
-async function deleteModel(id) {
-  if (!confirm('Delete this model?')) return;
-  await fetch('/api/v1/models/' + id, { method: 'DELETE' });
-  loadAll();
-}
-
-// ---- Logs ----
-const logViewer = document.getElementById('logViewer');
-let evtSource = null;
-
-function connectLogs() {
-  if (typeof EventSource !== 'undefined') {
-    evtSource = new EventSource('/api/v1/logs/stream');
-    evtSource.onmessage = (ev) => {
-      try {
-        const data = JSON.parse(ev.data);
-        const msg = `[${new Date().toISOString()}] ${data.level || 'INFO'}: ${data.message || JSON.stringify(data)}`;
-        logViewer.textContent += msg + '\n';
-        logViewer.scrollTop = logViewer.scrollHeight;
-      } catch(e) {}
-    };
-    evtSource.onerror = () => { evtSource.close(); };
-  }
-}
-
-function clearLogs() { logViewer.textContent = ''; }
-
-// ---- Escape HTML ----
-function esc(s) {
-  const d = document.createElement('div');
-  d.textContent = s || '';
-  return d.innerHTML;
-}
-
-// ---- Init ----
-loadAll();
-connectLogs();
-setInterval(loadAll, 5000);
-</script>
+    <script src="/static/app.js"></script>
 </body>
-</html>
-{{end}}
+</html>{{end}}

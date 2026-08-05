@@ -7,7 +7,7 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/example/goal/internal/storage"
+	"github.com/dsdred/goal/internal/storage"
 )
 
 // BuildCommandSpecForPreview constructs a CommandSpec preview from storage entries.

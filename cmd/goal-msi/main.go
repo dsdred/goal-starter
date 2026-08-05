@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"runtime"
 
-	"github.com/example/goal/cmd/goal/msi"
+	"github.com/dsdred/goal/cmd/goal/msi"
 )
 
 func main() {

@@ -1,273 +1,529 @@
-// ============ Log SSE ============
-const logsEl = document.getElementById('logs');
-if (logsEl) {
-  const es = new EventSource('/api/v1/logs/stream');
-  es.onmessage = e => {
-    const x = JSON.parse(e.data);
-    logsEl.textContent += `[${x.stream}] ${x.message}\n`;
-    logsEl.scrollTop = logsEl.scrollHeight;
-  };
-}
+// GoAl WebUI - Full featured JavaScript
+'use strict';
 
-// ============ Tab switching ============
-document.querySelectorAll('.tab').forEach(tab => {
-  tab.addEventListener('click', () => {
-    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
-    tab.classList.add('active');
-    document.getElementById('tab-' + tab.dataset.tab).classList.add('active');
-  });
-});
+(function() {
+    // State
+    let csrfToken = '';
+    let sessionToken = '';
+    let eventSource = null;
+    let currentLogFilter = '';
+    let logSearchTerm = '';
+    let profilesData = [];
+    let runtimesData = [];
+    let modelsData = [];
+    let isAuthenticated = false;
 
-// ============ Modal ============
-function showModal(id) { document.getElementById(id).classList.add('active'); }
-function hideModal(id) { document.getElementById(id).classList.remove('active'); }
+    // ========== CSRF ==========
+    function getCSRFToken() {
+        const match = document.cookie.match(/csrf_token=([^;]+)/);
+        return match ? match[1] : '';
+    }
 
-// ============ Status ============
-async function fetchStatus() {
-  try {
-    const r = await fetch('/api/v1/status');
-    const s = await r.json();
-    const badge = document.getElementById('statusBadge');
-    badge.textContent = s.Status.charAt(0).toUpperCase() + s.Status.slice(1).toLowerCase();
-    badge.className = 'status-badge ' + s.Status;
-  } catch(e) {}
-}
+    function updateCSRF() {
+        csrfToken = getCSRFToken();
+    }
 
-// ============ Data ============
-let profiles = [], runtimes = [], models = [];
+    // ========== Auth ==========
+    window.handleLogin = async function(event) {
+        event.preventDefault();
+        const username = document.getElementById('username').value;
+        const password = document.getElementById('password').value;
+        const errorEl = document.getElementById('login-error');
 
-async function loadAll() {
-  try {
-    const [pr, ru, mo] = await Promise.all([
-      fetch('/api/v1/profiles').then(r => r.json()),
-      fetch('/api/v1/runtimes').then(r => r.json()),
-      fetch('/api/v1/models').then(r => r.json()),
-    ]);
-    profiles = pr || [];
-    runtimes = ru || [];
-    models = mo || [];
-    renderProfiles();
-    renderRuntimes();
-    renderModels();
-    populateSelects();
-  } catch(e) { console.error(e); }
-  fetchStatus();
-}
+        try {
+            const response = await fetch('/api/v1/auth/login', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRF-Token': csrfToken
+                },
+                credentials: 'same-origin',
+                body: JSON.stringify({ username, password })
+            });
 
-function populateSelects() {
-  const rtSel = document.getElementById('profileRuntime');
-  const mdSel = document.getElementById('profileModel');
-  rtSel.innerHTML = '<option value="">(select)</option>' +
-    runtimes.map(r => `<option value="${r.id}">${esc(r.name)}</option>`).join('');
-  mdSel.innerHTML = '<option value="">(none)</option>' +
-    models.map(m => `<option value="${m.id}">${esc(m.name)}</option>`).join('');
-}
-
-// ============ Profiles ============
-function renderProfiles() {
-  const body = document.getElementById('profilesBody');
-  const empty = document.getElementById('profilesEmpty');
-  if (profiles.length === 0) {
-    body.innerHTML = '';
-    empty.style.display = 'block';
-    return;
-  }
-  empty.style.display = 'none';
-  body.innerHTML = profiles.map(p => {
-    const rt = runtimes.find(r => r.id === p.runtime_id);
-    const md = models.find(m => m.id === p.model_id);
-    const activeBadge = p.active
-      ? '<span style="color:#28a745;font-weight:600;font-size:12px;">● Active</span>'
-      : '<span style="color:#6c757d;font-size:12px;">○ Inactive</span>';
-    return `<tr>
-      <td><strong>${esc(p.name)}</strong><br>${activeBadge}</td>
-      <td>${esc(rt ? rt.name : 'N/A')}</td>
-      <td>${esc(md ? md.name : 'N/A')}</td>
-      <td>${p.host || '-'}:${p.port || '-'}</td>
-      <td>
-        <div class="btn-group">
-          <button class="btn btn-success btn-sm" onclick="actionProfile('${p.id}','start')" title="Start">▶ Start</button>
-          <button class="btn btn-warning btn-sm" onclick="actionProfile('${p.id}','restart')" title="Restart">↻ Restart</button>
-          <button class="btn btn-danger btn-sm" onclick="actionProfile('${p.id}','stop')" title="Stop">■ Stop</button>
-          ${p.active
-            ? `<button class="btn btn-sm" style="background:#6c757d;color:#fff;" onclick="deactivateProfile('${p.id}')" title="Deactivate">⏻ Deactivate</button>`
-            : `<button class="btn btn-sm" style="background:#17a2b8;color:#fff;" onclick="activateProfile('${p.id}')" title="Activate">✓ Activate</button>`}
-          <button class="btn btn-sm" onclick="editProfile('${p.id}')" title="Edit">✎</button>
-          <button class="btn btn-danger btn-sm" onclick="deleteProfile('${p.id}')" title="Delete">🗑</button>
-        </div>
-      </td>
-    </tr>`;
-  }).join('');
-}
-
-async function actionProfile(id, action) {
-  try {
-    const p = profiles.find(x => x.id === id);
-    if (!p) return;
-    const body = action === 'start' ? JSON.stringify({ runtime_id: p.runtime_id, model_id: p.model_id, host: p.host, port: p.port }) : undefined;
-    const opts = body ? { method: 'POST', headers: {'Content-Type':'application/json'}, body } : undefined;
-    await fetch(`/api/v1/profiles/${id}/action/${action}`, opts);
-    loadAll();
-  } catch(e) { console.error(e); }
-}
-
-async function activateProfile(id) {
-  try {
-    await fetch(`/api/v1/profiles/${id}/activate`, { method: 'POST' });
-    loadAll();
-  } catch(e) { console.error(e); }
-}
-
-async function deactivateProfile(id) {
-  try {
-    await fetch(`/api/v1/profiles/${id}/deactivate`, { method: 'POST' });
-    loadAll();
-  } catch(e) { console.error(e); }
-}
-
-async function saveProfile(e) {
-  e.preventDefault();
-  const id = document.getElementById('profileId').value;
-  const name = document.getElementById('profileName').value;
-  const runtimeId = document.getElementById('profileRuntime').value;
-  const modelId = document.getElementById('profileModel').value;
-  const host = document.getElementById('profileHost').value;
-  const port = parseInt(document.getElementById('profilePort').value) || 0;
-  const argsRaw = document.getElementById('profileArgs').value.trim();
-  const envRaw = document.getElementById('profileEnv').value.trim();
-  const args = argsRaw ? argsRaw.split('\n').map(l => l.trim()).filter(Boolean) : [];
-  const env = {};
-  if (envRaw) {
-    envRaw.split('\n').forEach(l => {
-      const idx = l.indexOf('=');
-      if (idx > 0) env[l.substring(0, idx).trim()] = l.substring(idx + 1).trim();
-    });
-  }
-  const url = id ? `/api/v1/profiles/${id}` : '/api/v1/profiles';
-  const method = id ? 'PUT' : 'POST';
-  const body = JSON.stringify({ name, runtime_id: runtimeId, model_id: modelId, host, port, args, environment: env });
-  await fetch(url, { method, headers: {'Content-Type':'application/json'}, body });
-  hideModal('profileModal');
-  loadAll();
-}
-
-function editProfile(id) {
-  const p = profiles.find(x => x.id === id);
-  if (!p) return;
-  document.getElementById('profileId').value = p.id;
-  document.getElementById('profileName').value = p.name;
-  document.getElementById('profileRuntime').value = p.runtime_id || '';
-  document.getElementById('profileModel').value = p.model_id || '';
-  document.getElementById('profileHost').value = p.host || '';
-  document.getElementById('profilePort').value = p.port || '';
-  document.getElementById('profileArgs').value = (p.args || []).join('\n');
-  document.getElementById('profileEnv').value = Object.entries(p.environment || {}).map(([k,v]) => k+'='+v).join('\n');
-  document.getElementById('profileModalTitle').textContent = 'Edit Profile';
-  showModal('profileModal');
-}
-
-async function deleteProfile(id) {
-  if (!confirm('Delete this profile?')) return;
-  await fetch('/api/v1/profiles/' + id, { method: 'DELETE' });
-  loadAll();
-}
-
-// ============ Runtimes ============
-async function saveRuntime(e) {
-  e.preventDefault();
-  const id = document.getElementById('runtimeId').value;
-  const name = document.getElementById('runtimeName').value;
-  const exe = document.getElementById('runtimeExe').value;
-  const workDir = document.getElementById('runtimeWorkDir').value;
-  const defArgsRaw = document.getElementById('runtimeDefaultArgs').value.trim();
-  const envRaw = document.getElementById('runtimeEnv').value.trim();
-  const args = defArgsRaw ? defArgsRaw.split('\n').map(l => l.trim()).filter(Boolean) : [];
-  const env = {};
-  if (envRaw) {
-    envRaw.split('\n').forEach(l => {
-      const idx = l.indexOf('=');
-      if (idx > 0) env[l.substring(0, idx).trim()] = l.substring(idx + 1).trim();
-    });
-  }
-  const url = id ? `/api/v1/runtimes/${id}` : '/api/v1/runtimes';
-  const method = id ? 'PUT' : 'POST';
-  const body = JSON.stringify({ name, executable: exe, working_directory: workDir, default_args: args, environment: env });
-  await fetch(url, { method, headers: {'Content-Type':'application/json'}, body });
-  hideModal('runtimeModal');
-  loadAll();
-}
-
-function editRuntime(id) {
-  const r = runtimes.find(x => x.id === id);
-  if (!r) return;
-  document.getElementById('runtimeId').value = r.id;
-  document.getElementById('runtimeName').value = r.name;
-  document.getElementById('runtimeExe').value = r.executable;
-  document.getElementById('runtimeWorkDir').value = r.working_directory || '';
-  document.getElementById('runtimeDefaultArgs').value = (r.default_args || []).join('\n');
-  document.getElementById('runtimeEnv').value = Object.entries(r.environment || {}).map(([k,v]) => k+'='+v).join('\n');
-  document.getElementById('runtimeModalTitle').textContent = 'Edit Runtime';
-  showModal('runtimeModal');
-}
-
-async function deleteRuntime(id) {
-  if (!confirm('Delete this runtime?')) return;
-  await fetch('/api/v1/runtimes/' + id, { method: 'DELETE' });
-  loadAll();
-}
-
-// ============ Models ============
-async function saveModel(e) {
-  e.preventDefault();
-  const id = document.getElementById('modelId').value;
-  const name = document.getElementById('modelName').value;
-  const path = document.getElementById('modelPath').value;
-  const mmproj = document.getElementById('modelMMProj').value;
-  const format = document.getElementById('modelFormat').value;
-  const url = id ? `/api/v1/models/${id}` : '/api/v1/models';
-  const method = id ? 'PUT' : 'POST';
-  const body = JSON.stringify({ name, path, mmproj, format });
-  await fetch(url, { method, headers: {'Content-Type':'application/json'}, body });
-  hideModal('modelModal');
-  loadAll();
-}
-
-async function deleteModel(id) {
-  if (!confirm('Delete this model?')) return;
-  await fetch('/api/v1/models/' + id, { method: 'DELETE' });
-  loadAll();
-}
-
-// ============ Logs ============
-const logViewer = document.getElementById('logViewer');
-let evtSource = null;
-
-function connectLogs() {
-  if (typeof EventSource !== 'undefined') {
-    evtSource = new EventSource('/api/v1/logs/stream');
-    evtSource.onmessage = (ev) => {
-      try {
-        const data = JSON.parse(ev.data);
-        const msg = `[${new Date().toISOString()}] ${data.level || 'INFO'}: ${data.message || JSON.stringify(data)}`;
-        logViewer.textContent += msg + '\n';
-        logViewer.scrollTop = logViewer.scrollHeight;
-      } catch(e) {}
+            if (response.ok) {
+                const data = await response.json();
+                csrfToken = data.csrf_token || '';
+                isAuthenticated = true;
+                document.getElementById('login-modal').style.display = 'none';
+                document.getElementById('user-info').style.display = 'flex';
+                document.getElementById('username-display').textContent = username;
+                reloadAllData();
+            } else {
+                const data = await response.json().catch(() => ({}));
+                errorEl.textContent = data.error || 'Authentication failed';
+                errorEl.style.display = 'block';
+            }
+        } catch (err) {
+            errorEl.textContent = 'Login request failed: ' + err.message;
+            errorEl.style.display = 'block';
+        }
+        return false;
     };
-    evtSource.onerror = () => { evtSource.close(); };
-  }
-}
 
-function clearLogs() { logViewer.textContent = ''; }
+    window.handleLogout = async function() {
+        await fetch('/api/v1/auth/logout', {
+            method: 'POST',
+            headers: { 'X-CSRF-Token': csrfToken },
+            credentials: 'same-origin'
+        });
+        isAuthenticated = false;
+        document.getElementById('user-info').style.display = 'none';
+        document.getElementById('login-modal').style.display = 'flex';
+    };
 
-// ============ Escape HTML ============
-function esc(s) {
-  const d = document.createElement('div');
-  d.textContent = s || '';
-  return d.innerHTML;
-}
+    async function checkAuth() {
+        try {
+            const response = await fetch('/api/v1/auth/session');
+            const data = await response.json();
+            if (data.authenticated === 'true') {
+                isAuthenticated = true;
+                csrfToken = getCSRFToken();
+                document.getElementById('user-info').style.display = 'flex';
+            } else {
+                document.getElementById('login-modal').style.display = 'flex';
+            }
+        } catch {
+            document.getElementById('login-modal').style.display = 'flex';
+        }
+    }
 
-// ============ Init ============
-loadAll();
-connectLogs();
-setInterval(loadAll, 5000);
+    // ========== Data Loading ==========
+    async function loadProfiles() {
+        try {
+            const response = await fetch('/api/v1/profiles', {
+                headers: { 'X-CSRF-Token': csrfToken },
+                credentials: 'same-origin'
+            });
+            if (response.ok) {
+                profilesData = await response.json();
+                renderProfiles(profilesData);
+            }
+        } catch { /* ignore */ }
+    }
+
+    async function loadRuntimes() {
+        try {
+            const response = await fetch('/api/v1/runtimes', {
+                headers: { 'X-CSRF-Token': csrfToken },
+                credentials: 'same-origin'
+            });
+            if (response.ok) {
+                runtimesData = await response.json();
+                renderRuntimes(runtimesData);
+            }
+        } catch { /* ignore */ }
+    }
+
+    async function loadModels() {
+        try {
+            const response = await fetch('/api/v1/models', {
+                headers: { 'X-CSRF-Token': csrfToken },
+                credentials: 'same-origin'
+            });
+            if (response.ok) {
+                modelsData = await response.json();
+                renderModels(modelsData);
+            }
+        } catch { /* ignore */ }
+    }
+
+    async function reloadAllData() {
+        await Promise.all([loadProfiles(), loadRuntimes(), loadModels()]);
+    }
+
+    // ========== Status ==========
+    async function refreshStatus() {
+        try {
+            const response = await fetch('/api/v1/status', {
+                headers: { 'X-CSRF-Token': csrfToken },
+                credentials: 'same-origin'
+            });
+            if (response.ok) {
+                const status = await response.json();
+                const indicator = document.getElementById('status-indicator');
+                if (indicator) {
+                    indicator.className = 'status-badge status-' + status.state.toLowerCase();
+                    indicator.innerHTML = '<span class="status-dot"></span>' + status.state;
+                }
+                const stateEl = document.getElementById('detail-state');
+                if (stateEl) stateEl.textContent = status.state;
+            }
+        } catch { /* ignore */ }
+    }
+
+    // ========== Runtimes ==========
+    function renderRuntimes(runtimes) {
+        const tbody = document.querySelector('#runtimes tbody');
+        if (!tbody) return;
+
+        if (runtimes.length === 0) {
+            const emptyEl = document.querySelector('#runtimes .empty');
+            if (emptyEl) emptyEl.style.display = 'block';
+            tbody.style.display = 'none';
+            return;
+        }
+
+        if (emptyEl) emptyEl.style.display = 'none';
+        tbody.style.display = '';
+
+        tbody.innerHTML = runtimes.map(r => `
+            <tr>
+                <td>${escapeHtml(r.name)}</td>
+                <td><code>${escapeHtml(r.executable)}</code></td>
+                <td><code>${escapeHtml(r.working_directory || '-')}</code></td>
+                <td>${(r.default_args || []).map(a => '<span class="arg">' + escapeHtml(a) + '</span>').join('')}</td>
+                <td><code>${escapeHtml(r.id)}</code></td>
+                <td class="actions">
+                    <button onclick="deleteRuntime('${r.id}')" class="btn btn-danger btn-sm">Delete</button>
+                </td>
+            </tr>
+        `).join('');
+    }
+
+    window.showCreateRuntimeModal = function() {
+        alert('Create Runtime dialog - use API: POST /api/v1/runtimes');
+    };
+
+    window.deleteRuntime = async function(id) {
+        if (!confirm('Delete runtime ' + id + '?')) return;
+        try {
+            const response = await fetch('/api/v1/runtimes/' + id, {
+                method: 'DELETE',
+                headers: { 'X-CSRF-Token': csrfToken },
+                credentials: 'same-origin'
+            });
+            if (response.ok) {
+                await loadRuntimes();
+            } else {
+                alert('Failed to delete runtime');
+            }
+        } catch (err) {
+            alert('Delete failed: ' + err.message);
+        }
+    };
+
+    // ========== Models ==========
+    function renderModels(models) {
+        const tbody = document.querySelector('#models tbody');
+        if (!tbody) return;
+
+        if (models.length === 0) {
+            const emptyEl = document.querySelector('#models .empty');
+            if (emptyEl) emptyEl.style.display = 'block';
+            tbody.style.display = 'none';
+            return;
+        }
+
+        if (emptyEl) emptyEl.style.display = 'none';
+        tbody.style.display = '';
+
+        tbody.innerHTML = models.map(m => `
+            <tr>
+                <td>${escapeHtml(m.name)}</td>
+                <td><code>${escapeHtml(m.path)}</code></td>
+                <td><code>${escapeHtml(m.mmproj || '-')}</code></td>
+                <td>${escapeHtml(m.format || '-')}</td>
+                <td><code>${escapeHtml(m.id)}</code></td>
+                <td class="actions">
+                    <button onclick="deleteModel('${m.id}')" class="btn btn-danger btn-sm">Delete</button>
+                </td>
+            </tr>
+        `).join('');
+    }
+
+    window.showCreateModelModal = function() {
+        alert('Create Model dialog - use API: POST /api/v1/models');
+    };
+
+    window.deleteModel = async function(id) {
+        if (!confirm('Delete model ' + id + '?')) return;
+        try {
+            const response = await fetch('/api/v1/models/' + id, {
+                method: 'DELETE',
+                headers: { 'X-CSRF-Token': csrfToken },
+                credentials: 'same-origin'
+            });
+            if (response.ok) {
+                await loadModels();
+            } else {
+                alert('Failed to delete model');
+            }
+        } catch (err) {
+            alert('Delete failed: ' + err.message);
+        }
+    };
+
+    // ========== Profiles ==========
+    function renderProfiles(profiles) {
+        const tbody = document.getElementById('profiles-body');
+        if (!tbody) return;
+
+        if (profiles.length === 0) {
+            const emptyEl = document.querySelector('#profiles .empty');
+            if (emptyEl) emptyEl.style.display = 'block';
+            return;
+        }
+
+        if (emptyEl) emptyEl.style.display = 'none';
+
+        tbody.innerHTML = profiles.map(p => `
+            <tr id="profile-row-${p.id}">
+                <td>${escapeHtml(p.name)}</td>
+                <td>${escapeHtml(p.runtime_id)}</td>
+                <td>${escapeHtml(p.model_id || '-')}</td>
+                <td>${p.host || ''}${p.port ? ':' + p.port : ''}</td>
+                <td>${(p.args || []).map(a => '<span class="arg">' + escapeHtml(a) + '</span>').join('')}</td>
+                <td><span class="profile-status stopped">not started</span></td>
+                <td class="actions">
+                    <button onclick="startProfile('${p.id}')" class="btn btn-success btn-sm">Start</button>
+                    <button onclick="stopProfile('${p.id}')" class="btn btn-danger btn-sm">Stop</button>
+                </td>
+            </tr>
+        `).join('');
+    }
+
+    window.openCreateProfileModal = function() {
+        document.getElementById('create-profile-modal').style.display = 'flex';
+        loadRuntimeModelSelects();
+    };
+
+    window.closeCreateProfileModal = function() {
+        document.getElementById('create-profile-modal').style.display = 'none';
+        document.getElementById('create-profile-form').reset();
+        document.getElementById('create-profile-error').style.display = 'none';
+    };
+
+    async function loadRuntimeModelSelects() {
+        // Load runtimes
+        const runtimeSelect = document.getElementById('profile-runtime');
+        try {
+            const resp = await fetch('/api/v1/runtimes', {
+                headers: { 'X-CSRF-Token': csrfToken },
+                credentials: 'same-origin'
+            });
+            if (resp.ok) {
+                const runtimes = await resp.json();
+                runtimeSelect.innerHTML = '<option value="">Select a runtime...</option>' +
+                    runtimes.map(r => '<option value="' + r.id + '">' + escapeHtml(r.name) + '</option>').join('');
+            }
+        } catch { /* ignore */ }
+
+        // Load models
+        const modelSelect = document.getElementById('profile-model');
+        try {
+            const resp = await fetch('/api/v1/models', {
+                headers: { 'X-CSRF-Token': csrfToken },
+                credentials: 'same-origin'
+            });
+            if (resp.ok) {
+                const models = await resp.json();
+                modelSelect.innerHTML = '<option value="">Select a model...</option>' +
+                    models.map(m => '<option value="' + m.id + '">' + escapeHtml(m.name) + '</option>').join('');
+            }
+        } catch { /* ignore */ }
+    }
+
+    window.updateProfileModelSelect = function() {
+        // Could filter models by runtime, currently just a hook
+    };
+
+    window.addEnvRow = function() {
+        const container = document.getElementById('env-variables-container');
+        const row = document.createElement('div');
+        row.className = 'env-row';
+        row.innerHTML = `
+            <input type="text" placeholder="VAR_NAME" class="env-key">
+            <input type="text" placeholder="value" class="env-value">
+            <button type="button" class="btn btn-danger btn-sm" onclick="removeEnvRow(this)">×</button>
+        `;
+        container.appendChild(row);
+    };
+
+    window.removeEnvRow = function(btn) {
+        const container = document.getElementById('env-variables-container');
+        if (container.children.length > 1) {
+            btn.parentElement.remove();
+        }
+    };
+
+    window.handleCreateProfile = async function(event) {
+        event.preventDefault();
+        const errorEl = document.getElementById('create-profile-error');
+
+        const formData = new FormData(document.getElementById('create-profile-form'));
+        const envPairs = [];
+        document.querySelectorAll('.env-row').forEach(row => {
+            const key = row.querySelector('.env-key').value.trim();
+            const value = row.querySelector('.env-value').value;
+            if (key) envPairs.push([key, value]);
+        });
+
+        // Parse args from textarea
+        const argsText = document.getElementById('profile-args').value.trim();
+        const args = argsText ? argsText.split(/\s+/) : [];
+
+        const body = {
+            name: formData.get('name'),
+            runtime_id: formData.get('runtime_id'),
+            model_id: formData.get('model_id'),
+            host: formData.get('host') || undefined,
+            port: formData.get('port') ? parseInt(formData.get('port')) : undefined,
+            args: args,
+            environment: Object.fromEntries(envPairs)
+        };
+
+        try {
+            const response = await fetch('/api/v1/profiles', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRF-Token': csrfToken
+                },
+                credentials: 'same-origin',
+                body: JSON.stringify(body)
+            });
+
+            if (response.ok) {
+                await loadProfiles();
+                closeCreateProfileModal();
+            } else {
+                const data = await response.json().catch(() => ({}));
+                errorEl.textContent = data.error || 'Failed to create profile';
+                errorEl.style.display = 'block';
+            }
+        } catch (err) {
+            errorEl.textContent = 'Create failed: ' + err.message;
+            errorEl.style.display = 'block';
+        }
+        return false;
+    };
+
+    window.startProfile = async function(id) {
+        try {
+            const response = await fetch('/api/v1/profiles/' + id + '/start', {
+                method: 'POST',
+                headers: { 'X-CSRF-Token': csrfToken },
+                credentials: 'same-origin'
+            });
+            if (response.ok) {
+                await refreshStatus();
+                await loadProfiles();
+            } else {
+                const data = await response.json().catch(() => ({}));
+                alert('Start failed: ' + (data.error || 'Unknown error'));
+            }
+        } catch (err) {
+            alert('Start failed: ' + err.message);
+        }
+    };
+
+    window.stopProfile = async function(id) {
+        try {
+            const response = await fetch('/api/v1/profiles/' + id + '/stop', {
+                method: 'POST',
+                headers: { 'X-CSRF-Token': csrfToken },
+                credentials: 'same-origin'
+            });
+            if (response.ok) {
+                await refreshStatus();
+                await loadProfiles();
+            } else {
+                const data = await response.json().catch(() => ({}));
+                alert('Stop failed: ' + (data.error || 'Unknown error'));
+            }
+        } catch (err) {
+            alert('Stop failed: ' + err.message);
+        }
+    };
+
+    // ========== Logs ==========
+    function connectLogs() {
+        if (eventSource) {
+            eventSource.close();
+        }
+
+        eventSource = new EventSource('/api/v1/logs/stream');
+
+        eventSource.onmessage = function(event) {
+            try {
+                const data = JSON.parse(event.data);
+                appendLog(data);
+            } catch (e) {
+                appendLog({ stream: 'system', message: 'Parse error: ' + e.message });
+            }
+        };
+
+        eventSource.onerror = function() {
+            appendLog({ stream: 'system', message: '[Connection lost. Reconnecting...]' });
+        };
+    }
+
+    function appendLog(ev) {
+        const container = document.getElementById('log-container');
+        if (!container) return;
+
+        // Apply filters
+        if (ev.stream !== 'system') {
+            if (currentLogFilter && ev.stream !== currentLogFilter) return;
+        }
+        if (logSearchTerm) {
+            if (!ev.message.toLowerCase().includes(logSearchTerm.toLowerCase())) return;
+        }
+
+        const p = document.createElement('p');
+        const time = new Date(ev.time).toLocaleTimeString();
+        const cls = ev.stream === 'stderr' ? 'log-stderr' :
+                    ev.stream === 'system' ? 'log-system' : 'log-stdout';
+        p.className = cls;
+        p.textContent = `[${time}] [${ev.stream}] ${ev.message}`;
+        container.appendChild(p);
+
+        // Limit log entries
+        while (container.children.length > 1000) {
+            container.removeChild(container.firstChild);
+        }
+
+        container.scrollTop = container.scrollHeight;
+    }
+
+    window.clearLogs = function() {
+        const container = document.getElementById('log-container');
+        if (container) container.innerHTML = '';
+    };
+
+    window.updateLogFilter = function() {
+        currentLogFilter = document.getElementById('log-filter-stream').value;
+        // Reconnect SSE to get all logs (client-side filtering)
+        connectLogs();
+    };
+
+    window.filterLogs = function() {
+        logSearchTerm = document.getElementById('log-search').value;
+        // Clear and reconnect to apply filter
+        const container = document.getElementById('log-container');
+        if (container) container.innerHTML = '';
+        connectLogs();
+    };
+
+    // ========== Escape HTML ==========
+    function escapeHtml(str) {
+        const div = document.createElement('div');
+        div.textContent = str;
+        return div.innerHTML;
+    }
+
+    // ========== Init ==========
+    async function init() {
+        csrfToken = getCSRFToken();
+        await checkAuth();
+        await reloadAllData();
+        await refreshStatus();
+        connectLogs();
+
+        // Periodic status refresh
+        setInterval(refreshStatus, 5000);
+    }
+
+    init();
+})();

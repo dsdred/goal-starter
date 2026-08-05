@@ -4,9 +4,9 @@ GoAl is a lightweight, cross-platform web service for managing local AI runtimes
 
 ## Status
 
-**v0.9 — Multi-Instance Supervisor, Domain Models, Launch Resolver, Structured API Errors.**
+**v0.9 — Architecture Consolidation (supervisor, instance model, application services).**
 
-> This repository is an architectural starter, not a production-ready release.
+> This repository is an architectural starter. Security and reliability hardening in progress.
 
 ## Supported targets
 
@@ -77,7 +77,16 @@ Migration status endpoint: `GET /api/v1/migration/status`
 
 ### Configuration hot-reload
 
-Configuration reload is defined in `internal/config` (`ReloadConfig`, `StartWatch` methods) but not yet wired into the main application. The config file is read once at startup via `config.Load()`.
+Configuration hot-reload is implemented in `internal/config` (`ReloadConfig`, `Watch` methods) but **not yet integrated** into main application startup. The config file is read once at startup via `config.Load()`.
+
+Hot-reload supports safe live updates for:
+- `logLevel` — changes logging verbosity without restart
+- `healthCheck.interval` — changes health check frequency
+
+Fields requiring restart:
+- `listenAddress`, `webPort`, `dataDir`
+
+Status: **WIP** — reload coordinator and restart-required reporting planned.
 
 ## API endpoints
 
@@ -199,7 +208,26 @@ Process environments are merged with the parent process environment (profile var
 
 ### Data Storage
 
-Unified JSON repository (`goal_repo.json`) stores runtimes, models, profiles, and launch instance metadata in a single aggregate. Each mutation is persisted under a lock for atomic snapshot writes.
+**Unified JSON Repository** (`goal_repo.json`) — single-file storage for runtimes, models, profiles, and instances.
+
+Schema version: `4`. Atomic writes via `tmp + rename` pattern.
+
+```
+goal_repo.json       — active repository
+goal_repo.json.tmp   — temporary write file
+```
+
+**Limitations (current):**
+- No fsync guarantee (OS handles flushing)
+- Corrupted file requires manual recovery
+- No concurrent write protection beyond mutex
+- No schema migration tests
+
+**Planned improvements:**
+- Transactional backup before each write
+- fsync after rename
+- Automatic recovery from `.bak` on corruption
+- Consider SQLite for v1.0 (still single-binary)
 
 ### Logging
 
@@ -216,7 +244,9 @@ Periodic runtime health checking (every 30 seconds). Supports TCP and HTTP healt
 
 ### Configuration Hot-Reload
 
-Configuration reload is defined in `internal/config` (ReloadConfig, Watch methods) but not yet wired into the main application startup. The config file is read once at startup via `config.Load()`.
+Configuration hot-reload is implemented (`internal/config` → `ReloadConfig`) but **not wired** into main startup. Status: **WIP**.
+
+See "Configuration hot-reload" section above for details.
 
 ## Repository layout
 

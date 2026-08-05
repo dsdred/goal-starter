@@ -20,11 +20,12 @@ const (
 
 // Session stores session metadata.
 type Session struct {
-	Token    string    `json:"token"`
-	User     string    `json:"user"`
-	Created  time.Time `json:"created"`
-	Expiry   time.Time `json:"expiry"`
-	LastUsed time.Time `json:"last_used"`
+	Token     string    `json:"token"`
+	CSRFToken string    `json:"csrf_token"`
+	User      string    `json:"user"`
+	Created   time.Time `json:"created"`
+	Expiry    time.Time `json:"expiry"`
+	LastUsed  time.Time `json:"last_used"`
 }
 
 // SessionStore manages active sessions in memory.
@@ -67,13 +68,15 @@ func (s *SessionStore) CreateSession(user string) (*Session, error) {
 	if err != nil {
 		return nil, err
 	}
+	csrfToken := generateCSRFToken()
 	now := time.Now()
 	session := &Session{
-		Token:    token,
-		User:     user,
-		Created:  now,
-		Expiry:   now.Add(sessionTTL),
-		LastUsed: now,
+		Token:     token,
+		CSRFToken: csrfToken,
+		User:      user,
+		Created:   now,
+		Expiry:    now.Add(sessionTTL),
+		LastUsed:  now,
 	}
 	s.mu.Lock()
 	s.sessions[token] = session

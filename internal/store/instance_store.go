@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/example/goal/internal/domain"
+	"github.com/dsdred/goal/internal/domain"
 )
 
 // InstanceStoreJSON persists launch instances to a JSON file.

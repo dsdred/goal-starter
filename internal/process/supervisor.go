@@ -7,9 +7,31 @@ import (
 	"sync"
 	"time"
 
-	"github.com/example/goal/internal/domain"
-	"github.com/example/goal/internal/storage"
+	"github.com/dsdred/goal/internal/domain"
+	"github.com/dsdred/goal/internal/storage"
 )
+
+// SupervisorStatus describes the overall supervisor state.
+type SupervisorStatus struct {
+	ActiveInstances  int               `json:"active_instances"`
+	RunningInstances int               `json:"running_instances"`
+	Instances        []InstanceSummary `json:"instances,omitempty"`
+}
+
+// InstanceSummary is a lightweight summary of an instance state.
+type InstanceSummary struct {
+	ID        string `json:"id"`
+	ProfileID string `json:"profile_id"`
+	State     string `json:"state"`
+	PID       int    `json:"pid,omitempty"`
+}
+
+// LogStreamEvent represents an SSE log event.
+type LogStreamEvent struct {
+	Time    time.Time `json:"time"`
+	Stream  string    `json:"stream"`
+	Message string    `json:"message"`
+}
 
 // Supervisor manages multiple launch instances.
 // Each instance has its own process.Manager, allowing concurrent or sequential
@@ -288,6 +310,45 @@ func (s *Supervisor) ShutdownWithPersistence(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// SubscribeLogs returns a channel for log stream events.
+func (s *Supervisor) SubscribeLogs() (<-chan LogStreamEvent, func()) {
+	ch := make(chan LogStreamEvent, 64)
+	cancelCh := make(chan struct{}, 0)
+	return ch, func() {
+		close(ch)
+		// Drain cancel channel to signal subscriber is done.
+		<-cancelCh
+	}
+}
+
+// QueryLogs performs a filtered, paginated log query.
+func (s *Supervisor) QueryLogs(q LogQuery) LogResult {
+	// Collect all logs from all instance controllers.
+	var allLogs []LogEvent
+	s.mu.RLock()
+	for _, ctrl := range s.instances {
+		if ctrl.manager != nil {
+			logStore := ctrl.manager.GetLogStore()
+			if logStore != nil {
+				res := logStore.GetLogs(q)
+				if res != nil {
+					allLogs = append(allLogs, res.Items...)
+				}
+			}
+		}
+	}
+	s.mu.RUnlock()
+
+	result := LogResult{
+		Total: len(allLogs),
+		Page:  q.Page,
+		Size:  q.PageSize,
+		Items: allLogs,
+	}
+
+	return result
 }
 
 // Recover restores instances from the store and marks stale records.

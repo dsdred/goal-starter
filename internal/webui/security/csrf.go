@@ -17,7 +17,8 @@ const (
 	csrfTokenLen   = 32
 )
 
-// CSRF protector stores issued tokens per session (simple single-token mode).
+// CSRF protector stores the global token for double-submit cookie validation
+// on routes that do not go through requireAuthCSRF.
 type CSRF struct {
 	mu      sync.RWMutex
 	token   string
@@ -44,28 +45,61 @@ func (c *CSRF) GetToken() string {
 	return c.token
 }
 
-// RotateToken generates a new CSRF token and returns the old one.
+// RotateToken generates a new CSRF token and stores it, returning the new value.
+// The new token is sent to the client via SetCSRFCookie.
 func (c *CSRF) RotateToken() string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	old := c.token
 	c.token = generateCSRFToken()
-	return old
+	return c.token
 }
 
-// ValidateRequest checks the CSRF token in the request header against the stored token.
-// Returns nil if valid, error otherwise.
-func (c *CSRF) ValidateRequest(r *http.Request) error {
+// ValidateRequest checks the CSRF token in the request header and cookie
+// against an expected token. It enforces double-submit cookie validation:
+// the header token must equal the cookie token, and both must equal expectedToken.
+func (c *CSRF) ValidateRequest(r *http.Request, expectedToken string) error {
 	if !c.enabled {
 		return nil
 	}
-	header := r.Header.Get(csrfHeaderName)
-	if header == "" {
+
+	headerToken := r.Header.Get(csrfHeaderName)
+	cookieToken, cookieErr := r.Cookie(csrfCookieName)
+
+	// Double-submit: header must equal cookie.
+	if headerToken == "" || cookieErr != nil || cookieToken.Value == "" {
 		return errors.New("missing CSRF token")
 	}
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	if subtle.ConstantTimeCompare([]byte(header), []byte(c.token)) != 1 {
+	if subtle.ConstantTimeCompare([]byte(headerToken), []byte(cookieToken.Value)) != 1 {
+		return errors.New("csrf header/cookie mismatch")
+	}
+
+	// Compare against the session-bound expected token.
+	if subtle.ConstantTimeCompare([]byte(headerToken), []byte(expectedToken)) != 1 {
+		return errors.New("invalid CSRF token")
+	}
+	return nil
+}
+
+// ValidateSessionCSRF validates the CSRF token for a specific session.
+// It compares the request header and cookie against the session's CSRFToken.
+func (c *CSRF) ValidateSessionCSRF(r *http.Request, session *Session) error {
+	if !c.enabled {
+		return nil
+	}
+
+	headerToken := r.Header.Get(csrfHeaderName)
+	cookieToken, cookieErr := r.Cookie(csrfCookieName)
+
+	// Double-submit: header must equal cookie.
+	if headerToken == "" || cookieErr != nil || cookieToken.Value == "" {
+		return errors.New("missing CSRF token")
+	}
+	if subtle.ConstantTimeCompare([]byte(headerToken), []byte(cookieToken.Value)) != 1 {
+		return errors.New("csrf header/cookie mismatch")
+	}
+
+	// Compare against the session's CSRF token.
+	if subtle.ConstantTimeCompare([]byte(headerToken), []byte(session.CSRFToken)) != 1 {
 		return errors.New("invalid CSRF token")
 	}
 	return nil
@@ -84,12 +118,18 @@ func SetCSRFCookie(w http.ResponseWriter, token string) {
 	http.SetCookie(w, cookie)
 }
 
-// Middleware returns an HTTP middleware that enforces CSRF validation on unsafe methods.
+// Middleware returns an HTTP middleware that enforces CSRF validation on unsafe methods
+// using the global token (for routes that do not use requireAuthCSRF).
 func (c *CSRF) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Safe methods don't need CSRF validation.
-		if r.Method != "GET" && r.Method != "HEAD" && r.Method != "OPTIONS" && r.Method != "DELETE" {
-			if err := c.ValidateRequest(r); err != nil {
+		// Only unsafe methods need CSRF validation.
+		switch r.Method {
+		case http.MethodGet, http.MethodHead, http.MethodOptions:
+			next.ServeHTTP(w, r)
+			return
+		default:
+			// Use the global token for double-submit validation.
+			if err := c.ValidateRequest(r, c.token); err != nil {
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusForbidden)
 				_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})

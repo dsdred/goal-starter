@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/example/goal/internal/domain"
+	"github.com/dsdred/goal/internal/domain"
 )
 
 func TestInstanceStoreJSON_CreateAndGet(t *testing.T) {

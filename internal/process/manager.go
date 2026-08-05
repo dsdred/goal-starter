@@ -13,7 +13,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/example/goal/internal/platform"
+	"github.com/dsdred/goal/internal/platform"
 )
 
 // State represents the lifecycle state of a managed process.
@@ -42,12 +42,13 @@ const (
 )
 
 // CommandSpec defines how to launch a managed process.
+// Platform-specific setup (SysProcAttr, Job Objects, process groups) is done
+// via platform.Prepare(cmd) — callers do not need to set SysProcAttr here.
 type CommandSpec struct {
 	Executable       string
 	Args             []string
 	WorkingDirectory string
 	Environment      []string
-	SysProcAttr      interface{} // platform-specific SysProcAttr
 }
 
 // Status holds the current status of the managed process.
@@ -133,9 +134,6 @@ func (m *Manager) Start(ctx context.Context, spec CommandSpec) error {
 	cmd := exec.Command(spec.Executable, spec.Args...)
 	cmd.Dir = spec.WorkingDirectory
 	cmd.Env = env
-	if sa, ok := spec.SysProcAttr.(*syscall.SysProcAttr); ok {
-		cmd.SysProcAttr = sa
-	}
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -146,7 +144,8 @@ func (m *Manager) Start(ctx context.Context, spec CommandSpec) error {
 		return err
 	}
 
-	// Platform prepares SysProcAttr (already set above) and returns control handle.
+	// platform.Prepare sets platform-specific attributes (Job Object on Windows,
+	// process group on Linux) and returns a ProcessControl handle.
 	control, err := platform.Prepare(cmd)
 	if err != nil {
 		return err
@@ -205,38 +204,43 @@ func (m *Manager) Stop(ctx context.Context) error {
 	m.mu.Unlock()
 
 	// Send SIGTERM to process group / job.
-	if err := control.GracefulStop(); err != nil {
+	gracefulErr := control.GracefulStop()
+	if gracefulErr != nil {
 		m.publish(LogEvent{
 			Time:    time.Now(),
 			Stream:  "system",
-			Message: fmt.Sprintf("graceful stop signal failed: %v", err),
+			Message: fmt.Sprintf("graceful stop signal failed: %v", gracefulErr),
 		})
 	}
 
 	// Wait for process to exit or force-kill after timeout.
+	var forceErr error
 	select {
 	case <-done:
-		return nil
-	case <-time.After(10 * time.Second):
+		// Process exited gracefully. Return graceful error if present.
+		return gracefulErr
+	case <-time.After(15 * time.Second):
 		// Timeout — force kill.
-		if err := control.ForceKill(); err != nil {
-			// ESRCH means already gone.
-			if err != syscall.ESRCH {
-				m.publish(LogEvent{
-					Time:    time.Now(),
-					Stream:  "system",
-					Message: fmt.Sprintf("force kill failed: %v", err),
-				})
-			}
+		forceErr = control.ForceKill()
+		if forceErr != nil && forceErr != syscall.ESRCH {
+			m.publish(LogEvent{
+				Time:    time.Now(),
+				Stream:  "system",
+				Message: fmt.Sprintf("force kill failed: %v", forceErr),
+			})
 		}
-	case <-ctx.Done():
-		return ctx.Err()
-	}
 
-	// Final wait for cleanup.
-	select {
-	case <-done:
-		return nil
+		// Wait for process to fully terminate after force kill.
+		select {
+		case <-done:
+			// Return the more informative error.
+			if gracefulErr != nil {
+				return gracefulErr
+			}
+			return forceErr
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	case <-ctx.Done():
 		return ctx.Err()
 	}
@@ -341,32 +345,6 @@ func exitCodeFromProcessState(state *os.ProcessState) int {
 	return state.ExitCode()
 }
 
-// exitCodeFromError extracts exit code from the error when possible.
-func exitCodeFromError(err error) (int, bool) {
-	if err == nil {
-		return 0, true
-	}
-	// cmd.Wait() returns nil on success (exit code 0).
-	return 0, false
-}
-
-// exitClassFromError classifies the exit reason from the error type.
-func exitClassFromError(err error) ExitClass {
-	if err == nil {
-		return ExitNormal
-	}
-	if exitErr, ok := err.(*exec.ExitError); ok {
-		// Signal-based termination (e.g., SIGKILL, SIGTERM on some platforms).
-		if waitStatus, ok := exitErr.Sys().(syscall.WaitStatus); ok {
-			if waitStatus.Signaled() {
-				return ExitSignaled
-			}
-		}
-		return ExitFailure
-	}
-	return ExitError
-}
-
 // mergeEnvironment merges user-provided environment variables with the
 // parent process environment. User variables take precedence (overwrite).
 func mergeEnvironment(userEnv []string) []string {
@@ -433,6 +411,7 @@ func mergeEnvironment(userEnv []string) []string {
 }
 
 // publish sends a log event to all subscribers and stores it in the log store.
+// It tracks dropped events and publishes a gap event when messages are lost.
 func (m *Manager) publish(ev LogEvent) {
 	// Store in log store if available.
 	if m.logStore != nil {
@@ -441,11 +420,32 @@ func (m *Manager) publish(ev LogEvent) {
 
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+
+	dropped := 0
 	for ch := range m.logSubs {
 		select {
 		case ch <- ev:
 		default:
-			// Drop if subscriber channel is full.
+			dropped++
+		}
+	}
+
+	// Publish gap event if any messages were dropped.
+	if dropped > 0 {
+		gap := LogEvent{
+			Time:    time.Now(),
+			Stream:  "system",
+			Message: fmt.Sprintf("log gap: %d events dropped", dropped),
+		}
+		if m.logStore != nil {
+			m.logStore.Add(gap)
+		}
+		// Publish gap event to subscribers (non-blocking).
+		for ch := range m.logSubs {
+			select {
+			case ch <- gap:
+			default:
+			}
 		}
 	}
 }

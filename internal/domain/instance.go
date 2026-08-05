@@ -3,7 +3,7 @@ package domain
 import (
 	"time"
 
-	"github.com/example/goal/internal/storage"
+	"github.com/dsdred/goal/internal/storage"
 )
 
 // InstanceID uniquely identifies a launch instance.
