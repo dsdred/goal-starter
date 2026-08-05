@@ -211,11 +211,41 @@ func (s *Supervisor) Shutdown(ctx context.Context) error {
 	return firstErr
 }
 
-// RemoveTerminal removes terminal instances from the active registry.
+// RemoveTerminal removes terminal instances from the active registry and persists state.
 func (s *Supervisor) RemoveTerminal(id domain.InstanceID) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	delete(s.instances, id)
+	ctrl, ok := s.instances[id]
+	if ok {
+		delete(s.instances, id)
+	}
+	s.mu.Unlock()
+
+	if ok && s.store != nil {
+		inst := ctrl.Instance()
+		_ = s.store.Update(inst)
+	}
+}
+
+// ShutdownWithPersistence stops all active instances and persists terminal instances.
+func (s *Supervisor) ShutdownWithPersistence(ctx context.Context) error {
+	// Stop all active instances.
+	if err := s.Shutdown(ctx); err != nil {
+		return err
+	}
+
+	// Persist terminal instances after shutdown.
+	if s.store != nil {
+		s.mu.RLock()
+		for _, ctrl := range s.instances {
+			inst := ctrl.Instance()
+			if inst.IsTerminal() {
+				_ = s.store.Update(inst)
+			}
+		}
+		s.mu.RUnlock()
+	}
+
+	return nil
 }
 
 // InstanceController controls a single launch instance.
