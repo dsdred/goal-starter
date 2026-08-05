@@ -34,12 +34,9 @@ Thumbs.db
 ehthumbs.db
 desktop.ini
 
-# Compiled binary in repo root (kept for convenience)
-!goal.exe
-
-# Any other compiled binaries
+# Compiled binaries
 *.exe
-!goal.exe
+goal
 
 # Generated Linux binary
 goal-linux-amd64
