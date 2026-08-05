@@ -70,8 +70,12 @@ func TestReloadConfig_ReloadDetectsChanges(t *testing.T) {
 	}
 
 	// Reload should detect changes.
-	if err := rc.Reload(); err != nil {
+	changed, err := rc.Reload()
+	if err != nil {
 		t.Fatalf("Reload failed: %v", err)
+	}
+	if !changed {
+		t.Fatal("expected Reload to return changed=true")
 	}
 
 	cfg := rc.Get()
@@ -103,8 +107,12 @@ func TestReloadConfig_NoReloadWhenUnchanged(t *testing.T) {
 	defer rc.Stop()
 
 	// Immediate reload should succeed without error (no changes).
-	if err := rc.Reload(); err != nil {
+	changed, err := rc.Reload()
+	if err != nil {
 		t.Fatalf("Reload should succeed even with no changes: %v", err)
+	}
+	if changed {
+		t.Fatal("expected Reload to return changed=false for unchanged file")
 	}
 
 	// Config should remain unchanged.

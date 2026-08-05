@@ -37,7 +37,14 @@ func NewReloadConfig(path string) (*ReloadConfig, error) {
 }
 
 // load reads and validates the config from disk.
+// Must be called with rc.mu.Lock() held.
 func (rc *ReloadConfig) load() error {
+	// Get file info to capture the actual modification time.
+	info, err := os.Stat(rc.path)
+	if err != nil {
+		return fmt.Errorf("stat config: %w", err)
+	}
+
 	data, err := os.ReadFile(rc.path)
 	if err != nil {
 		return fmt.Errorf("read config: %w", err)
@@ -53,31 +60,33 @@ func (rc *ReloadConfig) load() error {
 		return fmt.Errorf("validate config: %w", err)
 	}
 
-	rc.mu.Lock()
 	rc.cfg = cfg
-	rc.lastMod = time.Now()
+	rc.lastMod = info.ModTime()
 	rc.loaded = true
-	rc.mu.Unlock()
 
 	return nil
 }
 
 // Reload re-reads the config from disk and validates it.
-// Returns nil if config was reloaded successfully, or an error.
-// Returns nil with reloaded=false if no changes detected.
-func (rc *ReloadConfig) Reload() error {
+// Returns (changed, error). changed is true only when the file content
+// actually changed and was successfully applied.
+func (rc *ReloadConfig) Reload() (bool, error) {
 	// Get file info to check modification time.
 	info, err := os.Stat(rc.path)
 	if err != nil {
-		return fmt.Errorf("stat config: %w", err)
+		return false, fmt.Errorf("stat config: %w", err)
 	}
 
 	// Skip if not modified since last load.
 	if !info.ModTime().After(rc.lastMod) {
-		return nil
+		return false, nil
 	}
 
-	return rc.load()
+	if err := rc.load(); err != nil {
+		return false, err
+	}
+
+	return true, nil
 }
 
 // StartWatch begins periodic configuration file watching.
@@ -96,12 +105,17 @@ func (rc *ReloadConfig) watchLoop() {
 		case <-rc.stopCh:
 			return
 		case <-ticker.C:
-			if err := rc.Reload(); err != nil {
+			changed, err := rc.Reload()
+			if err != nil {
 				// Log error but continue watching.
 				continue
 			}
 
-			// Notify watchers if config changed.
+			// Only notify watchers when the file actually changed.
+			if !changed {
+				continue
+			}
+
 			rc.mu.RLock()
 			cfg := rc.cfg
 			rc.mu.RUnlock()

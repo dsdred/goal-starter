@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/example/goal/internal/storage"
@@ -61,12 +62,13 @@ func BuildCommandSpecForPreview(profile *storage.ProfileEntry, runtime *storage.
 	}
 
 	// Merge environment: profile env overrides runtime env.
+	// On Windows, env keys are case-insensitive.
 	envMap := make(map[string]string)
 	for k, v := range runtime.Environment {
-		envMap[k] = v
+		envMap[envKey(k)] = v
 	}
 	for k, v := range profile.Environment {
-		envMap[k] = v
+		envMap[envKey(k)] = v
 	}
 
 	env := make([]string, 0, len(envMap))
@@ -108,10 +110,21 @@ func RuntimeExecutableExists(runtime *storage.RuntimeEntry) error {
 	return nil
 }
 
-// NormalizeEnvKey returns the environment key in a consistent case.
-// On Windows, environment variable names are case-insensitive.
-func NormalizeEnvKey(key string) string {
-	// For simplicity, always uppercase on all platforms.
-	// LaunchResolver overrides this with runtime.GOOS check.
-	return strings.ToUpper(key)
+// envKey returns the normalized environment key.
+// On Windows, environment variable names are case-insensitive,
+// so we normalize to uppercase to avoid duplicates.
+func envKey(key string) string {
+	if runtime.GOOS == "windows" {
+		return strings.ToUpper(key)
+	}
+	return key
+}
+
+// envKeyMap merges environment maps with case-insensitive keys on Windows.
+func envKeyMap(src map[string]string) map[string]string {
+	out := make(map[string]string, len(src))
+	for k, v := range src {
+		out[envKey(k)] = v
+	}
+	return out
 }

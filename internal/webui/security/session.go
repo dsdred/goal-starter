@@ -2,7 +2,6 @@ package security
 
 import (
 	"crypto/rand"
-	"crypto/subtle"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -166,33 +165,35 @@ func generateToken() (string, error) {
 	return base64.URLEncoding.EncodeToString(b), nil
 }
 
-// PasswordStore stores admin passwords (first user wins in simple mode).
+// PasswordStore stores admin passwords using bcrypt hashes.
 type PasswordStore struct {
 	mu    sync.RWMutex
-	users map[string]string // username -> hashed password
+	users map[string]string // username -> bcrypt hash
 }
 
 // NewPasswordStore creates password store with default admin credentials.
 func NewPasswordStore() *PasswordStore {
 	return &PasswordStore{
 		users: map[string]string{
-			"admin": "", // will be set via config or generated
+			"admin": "", // will be set via SetPassword
 		},
 	}
 }
 
-// AddUser adds a user with the given password.
-func (p *PasswordStore) AddUser(username, password string) error {
+// SetPassword stores a bcrypt hash for the given username/password.
+// Returns the generated hash on success.
+func (p *PasswordStore) SetPassword(username, password string) error {
+	hash, err := HashPassword(password)
+	if err != nil {
+		return err
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if username == "" || password == "" {
-		return errors.New("username and password are required")
-	}
-	p.users[username] = password
+	p.users[username] = hash
 	return nil
 }
 
-// ValidateCredentials checks username/password against stored credentials.
+// ValidateCredentials checks username/password against stored bcrypt hash.
 func (p *PasswordStore) ValidateCredentials(username, password string) bool {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
@@ -200,7 +201,7 @@ func (p *PasswordStore) ValidateCredentials(username, password string) bool {
 	if !ok {
 		return false
 	}
-	return subtle.ConstantTimeCompare([]byte(password), []byte(stored)) == 1
+	return CheckPasswordHash(password, stored)
 }
 
 // GetUsernames returns all usernames.

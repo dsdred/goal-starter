@@ -74,7 +74,7 @@ func NewWithSupervisor(cfg config.Config, supervisor *process.Supervisor, mgr *p
 
 	// Initialize default admin user if config has credentials.
 	if cfg.AdminUser != "" && cfg.AdminPassword != "" {
-		_ = pass.AddUser(cfg.AdminUser, cfg.AdminPassword)
+		_ = pass.SetPassword(cfg.AdminUser, cfg.AdminPassword)
 	}
 
 	app := &App{
@@ -898,6 +898,7 @@ func (a *App) checkSession(w http.ResponseWriter, r *http.Request) {
 
 // ---------- rate limiting ----------
 
+// rateLimiter tracks per-IP request timestamps and enforces a limit within a time window.
 type rateLimiter struct {
 	mu       sync.Mutex
 	requests map[string][]time.Time
@@ -905,44 +906,39 @@ type rateLimiter struct {
 	window   time.Duration
 }
 
+// newRateLimiter creates a rate limiter WITHOUT a background goroutine.
+// Cleanup happens lazily during the allow() check.
 func newRateLimiter(limit int, window time.Duration) *rateLimiter {
-	rl := &rateLimiter{
+	return &rateLimiter{
 		requests: make(map[string][]time.Time),
 		limit:    limit,
 		window:   window,
 	}
-	go rl.cleanupLoop()
-	return rl
 }
 
-func (rl *rateLimiter) cleanupLoop() {
-	ticker := time.NewTicker(10 * time.Minute)
-	defer ticker.Stop()
-	for range ticker.C {
-		rl.mu.Lock()
-		now := time.Now().Add(-rl.window)
-		for ip, times := range rl.requests {
-			var filtered []time.Time
-			for _, t := range times {
-				if t.After(now) {
-					filtered = append(filtered, t)
-				}
-			}
-			if len(filtered) == 0 {
-				delete(rl.requests, ip)
-			} else {
-				rl.requests[ip] = filtered
-			}
-		}
-		rl.mu.Unlock()
-	}
-}
-
+// allow checks whether the given IP is allowed within the rate limit.
+// It lazily cleans up expired entries during each call.
 func (rl *rateLimiter) allow(ip string) bool {
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
+
 	now := time.Now()
 	windowStart := now.Add(-rl.window)
+
+	// Lazy cleanup: remove expired entries for all IPs.
+	for ipKey, times := range rl.requests {
+		var filtered []time.Time
+		for _, t := range times {
+			if t.After(windowStart) {
+				filtered = append(filtered, t)
+			}
+		}
+		if len(filtered) == 0 {
+			delete(rl.requests, ipKey)
+		} else {
+			rl.requests[ipKey] = filtered
+		}
+	}
 
 	var times []time.Time
 	for _, t := range rl.requests[ip] {
@@ -968,6 +964,8 @@ func (a *App) rateLimitHandler(next http.Handler) http.Handler {
 			writeError(w, http.StatusTooManyRequests, "rate limit exceeded")
 			return
 		}
+		// Enforce body size limit to prevent large JSON body attacks.
+		r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1MB
 		next.ServeHTTP(w, r)
 	})
 }
