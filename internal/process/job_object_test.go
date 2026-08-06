@@ -39,14 +39,25 @@ func TestWindowsJobObject_cleanup(t *testing.T) {
 
 	pid := status.PID
 
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	// Use a generous context timeout. Stop() uses a 5s internal timeout,
+	// so the context must be > 5s to allow force-kill to complete.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	if err := mgr.Stop(ctx); err != nil {
 		t.Logf("Stop error (may be acceptable): %v", err)
 	}
 
-	status = mgr.Status()
+	// Poll for exited state (Stop() may have force-killed).
+	for i := 0; i < 60; i++ {
+		status = mgr.Status()
+		if status.State == process.StateExited {
+			goto verify_cleaned
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+
+verify_cleaned:
 	if status.State != process.StateExited {
 		t.Fatalf("expected exited, got %s", status.State)
 	}
@@ -87,14 +98,25 @@ func TestWindowsJobObject_nestedChildren(t *testing.T) {
 		t.Fatalf("expected running, got %s", status.State)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	// Use a generous context timeout. Stop() uses a 5s internal timeout,
+	// so the context must be > 5s to allow force-kill to complete.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	if err := mgr.Stop(ctx); err != nil {
 		t.Logf("Stop error (may be acceptable): %v", err)
 	}
 
-	status = mgr.Status()
+	// Poll for exited state (Stop() may have force-killed).
+	for i := 0; i < 60; i++ {
+		status = mgr.Status()
+		if status.State == process.StateExited {
+			goto verify_nested_cleaned
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+
+verify_nested_cleaned:
 	if status.State != process.StateExited {
 		t.Fatalf("expected exited, got %s", status.State)
 	}

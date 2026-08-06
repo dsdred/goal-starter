@@ -101,10 +101,26 @@ func TestStartStop_failureExit(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 
-	if err := mgr.Stop(context.Background()); err != nil {
-		t.Fatalf("Stop: %v", err)
+	// exit-code exits immediately; wait for it without calling Stop().
+	// Calling Stop() sends SIGTERM which may alter the exit code on Windows.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Wait for the process to exit by polling status.
+	for {
+		select {
+		case <-ctx.Done():
+			t.Fatal("timeout waiting for process to exit")
+		default:
+			status := mgr.Status()
+			if status.State == process.StateExited {
+				goto check_exit
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
 	}
 
+check_exit:
 	status := mgr.Status()
 	if status.State != process.StateExited {
 		t.Fatalf("expected exited, got %s", status.State)
@@ -112,8 +128,11 @@ func TestStartStop_failureExit(t *testing.T) {
 	if status.ExitClass != process.ExitFailure {
 		t.Fatalf("expected failure exit, got %s", status.ExitClass)
 	}
-	if status.ExitCode == nil || *status.ExitCode != 42 {
-		t.Fatalf("expected exit code 42, got %v", status.ExitCode)
+	if status.ExitCode == nil {
+		t.Fatalf("expected exit code 42, got nil")
+	}
+	if *status.ExitCode != 42 {
+		t.Fatalf("expected exit code 42, got %d (ptr=%p)", *status.ExitCode, status.ExitCode)
 	}
 }
 
@@ -292,10 +311,24 @@ func TestSubscribe_logs(t *testing.T) {
 		}
 	}()
 
-	// Wait for process to finish.
-	if err := mgr.Stop(context.Background()); err != nil {
-		t.Fatalf("Stop: %v", err)
+	// Wait for process to finish naturally (stdout exits immediately).
+	// Use polling to avoid Stop() sending SIGTERM before logs are collected.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	for {
+		select {
+		case <-ctx.Done():
+			t.Fatal("timeout waiting for process to exit")
+		default:
+			status := mgr.Status()
+			if status.State == process.StateExited {
+				goto check_logs
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
 	}
+
+check_logs:
 	close(stopCollect)
 
 	// Verify we received stdout logs.
@@ -459,19 +492,34 @@ func TestDelayed_exitCode(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	// Wait for the delayed process to exit naturally (code 99 after 1s).
+	// Calling Stop() sends SIGTERM which may interrupt the delay.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	if err := mgr.Stop(ctx); err != nil {
-		t.Fatalf("Stop: %v", err)
+	for {
+		select {
+		case <-ctx.Done():
+			t.Fatal("timeout waiting for delayed process to exit")
+		default:
+			status := mgr.Status()
+			if status.State == process.StateExited {
+				goto check_exit
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
 	}
 
+check_exit:
 	status := mgr.Status()
 	if status.State != process.StateExited {
 		t.Fatalf("expected exited, got %s", status.State)
 	}
-	if status.ExitCode == nil || *status.ExitCode != 99 {
-		t.Fatalf("expected exit code 99, got %v", status.ExitCode)
+	if status.ExitCode == nil {
+		t.Fatalf("expected exit code 99, got nil")
+	}
+	if *status.ExitCode != 99 {
+		t.Fatalf("expected exit code 99, got %d", *status.ExitCode)
 	}
 	if status.ExitClass != process.ExitFailure {
 		t.Fatalf("expected failure exit, got %s", status.ExitClass)

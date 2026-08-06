@@ -219,8 +219,8 @@ func (m *Manager) Stop(ctx context.Context) error {
 	case <-done:
 		// Process exited gracefully. Return graceful error if present.
 		return gracefulErr
-	case <-time.After(15 * time.Second):
-		// Timeout — force kill.
+	case <-time.After(5 * time.Second):
+		// 5-second hard timeout (independent of ctx) to ensure process is killed.
 		forceErr = control.ForceKill()
 		if forceErr != nil && forceErr != syscall.ESRCH {
 			m.publish(LogEvent{
@@ -279,10 +279,17 @@ func (m *Manager) GetDoneChannel() <-chan struct{} {
 func (m *Manager) wait(cmd *exec.Cmd, control platform.ProcessControl) {
 	err := cmd.Wait()
 
+	// Read exit code BEFORE closing platform resources (Job Object on Windows,
+	// process group on Linux). On Windows, closing the Job Object can invalidate
+	// ProcessState._ExitCode, causing GetExitCodeProcess() to return stale/garbage values.
+	var exitCodePtr *int
+	if cmd.ProcessState != nil {
+		exitCodePtr = exitCodeFromProcessState(cmd.ProcessState)
+	}
+
 	// Close platform resources (job object, process group).
 	_ = control.Close()
 
-	exitCode := 0
 	exitClass := ExitNormal
 
 	if err != nil {
@@ -300,20 +307,13 @@ func (m *Manager) wait(cmd *exec.Cmd, control platform.ProcessControl) {
 		})
 	}
 
-	// Determine exit code and class from ProcessState.
-	// ProcessState is available regardless of the error value.
-	if cmd.ProcessState != nil {
-		// On all platforms, ProcessState.ExitCode() gives the real exit code.
-		exitCode = exitCodeFromProcessState(cmd.ProcessState)
-	}
-
 	// Signal-based termination takes priority over exit code classification.
 	// On Windows, Job Object kill-on-close may return exit code 0.
 	if control.WasSignaled() {
 		exitClass = ExitSignaled
-	} else if cmd.ProcessState != nil && exitCode == 0 {
+	} else if exitCodePtr != nil && *exitCodePtr == 0 {
 		exitClass = ExitNormal
-	} else if cmd.ProcessState != nil && exitCode != 0 {
+	} else if exitCodePtr != nil && *exitCodePtr != 0 {
 		exitClass = ExitFailure
 	}
 
@@ -323,7 +323,7 @@ func (m *Manager) wait(cmd *exec.Cmd, control platform.ProcessControl) {
 	// Only update status if we're still the active process.
 	if m.cmd == cmd {
 		m.status.State = StateExited
-		m.status.ExitCode = &exitCode
+		m.status.ExitCode = exitCodePtr
 		m.status.ExitClass = exitClass
 		if err != nil && m.status.LastError == "" {
 			m.status.LastError = err.Error()
@@ -335,14 +335,19 @@ func (m *Manager) wait(cmd *exec.Cmd, control platform.ProcessControl) {
 	close(m.done)
 }
 
-// exitCodeFromProcessState extracts the exit code from *os.ProcessState.
-// This works reliably on all platforms including Windows.
-func exitCodeFromProcessState(state *os.ProcessState) int {
+// exitCodeFromProcessState extracts the exit code from *os.ProcessState
+// and returns a pointer to it, allocated on the heap.
+//
+// Heap allocation is required because the returned pointer is stored in
+// m.status.ExitCode and outlives the wait() goroutine's stack frame.
+func exitCodeFromProcessState(state *os.ProcessState) *int {
 	if state == nil {
-		return 0
+		return nil
 	}
-	// ExitCode() works on all platforms including Windows (Go >= 1.22).
-	return state.ExitCode()
+	code := state.ExitCode()
+	p := new(int)
+	*p = code
+	return p
 }
 
 // mergeEnvironment merges user-provided environment variables with the

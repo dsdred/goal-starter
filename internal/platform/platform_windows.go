@@ -88,16 +88,34 @@ func (w *windowsControl) AfterStart(pid int) error {
 	return nil
 }
 
+var procGenerateConsoleCtrlEvent = windows.NewLazySystemDLL("kernel32.dll").NewProc("GenerateConsoleCtrlEvent")
+
 func (w *windowsControl) GracefulStop() error {
 	w.mu.Lock()
 	proc := w.proc
+	pid := 0
+	if proc != nil {
+		pid = proc.Pid
+	}
 	w.mu.Unlock()
 
 	if proc == nil {
 		return nil
 	}
 
-	// Send SIGINT to the main process.
+	// Send CTRL_BREAK_EVENT to the child's process group. The process group ID
+	// on Windows equals the PID of the process group leader.  GenerateConsoleCtrlEvent
+	// returns non-zero on success.
+	const ctrlBreakEvent = 1
+	ret, _, _ := procGenerateConsoleCtrlEvent.Call(
+		uintptr(ctrlBreakEvent),
+		uintptr(pid),
+	)
+	if ret != 0 {
+		return nil
+	}
+
+	// Fallback: signal the main process directly if GenerateConsoleCtrlEvent failed.
 	return proc.Signal(os.Interrupt)
 }
 
@@ -114,7 +132,7 @@ func (w *windowsControl) ForceKill() error {
 		return nil
 	}
 
-	// Close job to trigger kill-on-close.
+	// Close job to trigger kill-on-close for all processes in the job.
 	w.mu.Lock()
 	if !w.closed {
 		windows.CloseHandle(job)
@@ -123,9 +141,17 @@ func (w *windowsControl) ForceKill() error {
 	}
 	w.mu.Unlock()
 
-	// Fallback: kill the main process if it's still alive.
+	// Fallback: terminate the main process if it's still alive.
 	if proc != nil {
-		return proc.Kill()
+		p2, openErr := os.FindProcess(proc.Pid)
+		if openErr == nil {
+			h, handleErr := windows.OpenProcess(windows.PROCESS_TERMINATE, false, uint32(proc.Pid))
+			if handleErr == nil {
+				windows.TerminateProcess(h, 1)
+				windows.CloseHandle(h)
+			}
+			p2.Release()
+		}
 	}
 	return nil
 }

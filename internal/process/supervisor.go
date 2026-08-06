@@ -30,14 +30,17 @@ type InstanceSummary struct {
 // Supervisor manages multiple launch instances.
 // Each instance has its own process.Manager, allowing concurrent or sequential
 // launches of different profiles.
+//
+// Concurrency limiting uses a single buffered semaphore channel as the sole
+// source of truth. Each acquired token is wrapped in a slotReservation with
+// sync.Once to guarantee exactly-once release.
 type Supervisor struct {
 	mu            sync.RWMutex
 	instances     map[domain.InstanceID]*InstanceController
 	resolver      *domain.LaunchResolver
 	store         InstanceStore
 	maxConcurrent int
-	reservations  atomic.Int64
-	semaphore     chan struct{} // buffered channel for concurrency limiting
+	semaphore     chan struct{} // buffered channel for concurrency limiting, single source of truth
 	lifecycleCtx  context.Context
 	broker        *LogBroker
 }
@@ -100,6 +103,16 @@ func NewSupervisorWithConfig(store InstanceStore, cfg SupervisorConfig) *Supervi
 	return s
 }
 
+// concurrentCount returns the number of currently held slots.
+// For a buffered semaphore, this is len(semaphore) which counts unacquired tokens.
+// Held = maxConcurrent - len(semaphore).
+func (s *Supervisor) concurrentCount() int {
+	if s.semaphore == nil {
+		return 0
+	}
+	return s.maxConcurrent - len(s.semaphore)
+}
+
 // LogBroker returns the log broker for multi-instance subscriptions.
 // Returns nil if broker was not configured.
 func (s *Supervisor) LogBroker() *LogBroker {
@@ -138,19 +151,40 @@ func RuntimeToDomain(id, name, executable, workingDir string, defaultArgs []stri
 type slotReservation struct {
 	releaseOnce sync.Once
 	supervisor  *Supervisor
+	acquired    chan struct{} // the semaphore token
 }
 
 // Release frees the concurrency slot. Safe to call exactly once.
+//
+// The semaphore token is returned by sending back into the channel.
+// During supervisor shutdown the channel may be closed; in that case the
+// recover() silently ignores the panic so that slot cleanup is robust.
 func (r *slotReservation) Release() {
 	r.releaseOnce.Do(func() {
-		r.supervisor.reservations.Add(-1)
+		select {
+		case r.supervisor.semaphore <- struct{}{}:
+			// Token returned successfully.
+		default:
+			// Semaphore channel is closed (shutdown) or full.
+			func() {
+				defer func() { recover() }()
+				r.supervisor.semaphore <- struct{}{}
+			}()
+		}
 	})
 }
 
 // Start creates a new launch instance and starts its process.
-// Uses a buffered semaphore channel to atomically reserve a concurrency slot
-// and guarantee release on any exit path (start error, persistence error,
-// natural exit, stop, force kill, restart).
+// Uses a buffered semaphore channel as the single source of truth for
+// concurrency limiting. A slotReservation is created atomically with the
+// semaphore acquire and guaranteed to be released exactly once via sync.Once.
+//
+// Slot lifecycle:
+//   - Acquired before Start() proceeds
+//   - Released on: Start failure, persistence failure, natural exit, stop,
+//     restart, remove, or supervisor shutdown
+//   - Restart reuses the same reservation (no second acquire)
+//   - No double release (sync.Once)
 func (s *Supervisor) Start(ctx context.Context, profile *domain.Profile, runtime *domain.Runtime, model *domain.Model, customArgs []string, customEnv map[string]string) (*domain.LaunchInstance, error) {
 	inst, err := s.resolver.ResolveToInstance(profile, runtime, model, customArgs, customEnv)
 	if err != nil {
@@ -167,11 +201,15 @@ func (s *Supervisor) Start(ctx context.Context, profile *domain.Profile, runtime
 	s.mu.Unlock()
 
 	// Acquire a concurrency slot via buffered channel. This blocks until a slot
-	// is available or ctx is cancelled.
+	// is available or ctx is cancelled. Wrap in slotReservation for exactly-once release.
+	var reservation *slotReservation
 	if s.maxConcurrent > 0 {
 		select {
-		case s.semaphore <- struct{}{}:
-			// Slot acquired.
+		case <-s.semaphore: // acquire: receive token
+			reservation = &slotReservation{
+				acquired:   s.semaphore,
+				supervisor: s,
+			}
 		case <-ctx.Done():
 			s.mu.Lock()
 			delete(s.instances, inst.ID)
@@ -184,10 +222,9 @@ func (s *Supervisor) Start(ctx context.Context, profile *domain.Profile, runtime
 	if s.store != nil {
 		entry := domain.ToStorageEntry(inst)
 		if err := s.store.Create(entry); err != nil {
-			if s.maxConcurrent > 0 {
-				<-s.semaphore // release slot
-			} else {
-				s.reservations.Add(-1)
+			if reservation != nil {
+				reservation.Release()
+				reservation = nil
 			}
 			s.mu.Lock()
 			delete(s.instances, inst.ID)
@@ -204,16 +241,18 @@ func (s *Supervisor) Start(ctx context.Context, profile *domain.Profile, runtime
 				slog.Error("failed to persist start error", "instance_id", string(inst.ID), "error", uerr)
 			}
 		}
-		if s.maxConcurrent > 0 {
-			<-s.semaphore // release slot
-		} else {
-			s.reservations.Add(-1)
+		if reservation != nil {
+			reservation.Release()
+			reservation = nil
 		}
 		s.mu.Lock()
 		delete(s.instances, inst.ID)
 		s.mu.Unlock()
 		return nil, fmt.Errorf("start instance %s: %w", inst.ID, err)
 	}
+
+	// Store the reservation in the controller so wait() and Stop() can release it.
+	ctrl.reservation = reservation
 
 	return inst, nil
 }
@@ -326,6 +365,10 @@ func (s *Supervisor) Shutdown(ctx context.Context) error {
 
 // RemoveTerminal removes terminal instances from the active registry and persists state.
 // Returns an error if the terminal state could not be persisted.
+//
+// Slot release: calls the instance's reservation.Release() which uses sync.Once
+// to guarantee exactly-once release. If the instance was never started (no
+// reservation), this is a no-op.
 func (s *Supervisor) RemoveTerminal(id domain.InstanceID) error {
 	s.mu.Lock()
 	ctrl, ok := s.instances[id]
@@ -349,16 +392,10 @@ func (s *Supervisor) RemoveTerminal(id domain.InstanceID) error {
 		}
 	}
 
-	// Always release reservation — either the instance was running or it was
-	// just created and never acquired a semaphore slot.
-	if s.maxConcurrent > 0 {
-		// Try drain; safe to drain a slot even if it wasn't acquired.
-		select {
-		case <-s.semaphore:
-		default:
-		}
-	} else {
-		s.reservations.Add(-1)
+	// Release this instance's reservation. Idempotent via sync.Once.
+	if ctrl.reservation != nil {
+		ctrl.reservation.Release()
+		ctrl.reservation = nil
 	}
 
 	return nil
@@ -412,10 +449,8 @@ func (s *Supervisor) SubscribeLogs(instanceID string) *LogSubscription {
 			done:   done,
 			broker: nil, // nil broker -> Cancel() takes the nil-lsub fast path
 			lsub: &logSubscriber{
-				ch:        make(chan LogStreamEvent, 1),
-				cancelled: atomic.Bool{},
-				closed:    atomic.Bool{},
-				closeOnce: sync.Once{},
+				ch:     make(chan LogStreamEvent, 1),
+				closed: atomic.Bool{},
 			},
 		}
 	}
@@ -517,6 +552,9 @@ type InstanceController struct {
 	broker     *LogBroker
 	// supervisorRef points back to the parent Supervisor for reservation release.
 	supervisorRef *Supervisor
+	// reservation is the concurrency slot token acquired by Start().
+	// Release() via sync.Once ensures exactly-once release on exit/stop/restart/remove.
+	reservation *slotReservation
 }
 
 // NewInstanceController creates a controller for an instance.
@@ -719,11 +757,23 @@ func (ic *InstanceController) wait() {
 	if ic.store != nil {
 		entry := domain.ToStorageEntry(ic.instance)
 		if err := ic.store.Update(entry); err != nil {
-			slog.Error("failed to persist final instance state", "instance_id", string(ic.instance.ID), "error", err)
+			// Persistence error after natural exit must be observable — not just logged.
+			// Store the error in the instance snapshot so API/monitoring can detect degradation.
+			persistErr := fmt.Errorf("persist final state: %w", err)
+			if ic.instance.LastError != "" {
+				ic.instance.LastError = ic.instance.LastError + "; " + persistErr.Error()
+			} else {
+				ic.instance.LastError = persistErr.Error()
+			}
 		}
-	} else if ic.supervisorRef != nil {
-		// Store is nil — release reservation so maxConcurrent slot is freed.
-		ic.supervisorRef.reservations.Add(-1)
+	}
+
+	// Release the concurrency slot. The wait() goroutine is the sole owner
+	// of the slot for the lifetime of the running process. When the process
+	// exits, wait() releases the slot via reservation.Release().
+	if ic.reservation != nil {
+		ic.reservation.Release()
+		ic.reservation = nil
 	}
 
 	// Publish exit event via broker.

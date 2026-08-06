@@ -113,14 +113,13 @@ func TestLogBrokerCancelIdempotent(t *testing.T) {
 	sub.Cancel()
 	sub.Cancel() // second cancel must not panic or hang
 
-	// Channel should be closed.
+	// Done channel must be closed after Cancel().
+	// Data channel is closed only by Shutdown() — check Done() instead.
 	select {
-	case _, ok := <-sub.Channel():
-		if ok {
-			t.Error("expected closed channel")
-		}
+	case <-sub.Done():
+		// OK: done channel closed.
 	case <-time.After(100 * time.Millisecond):
-		t.Error("timeout: channel not closed after cancel")
+		t.Error("timeout: done channel not closed after cancel")
 	}
 }
 
@@ -142,15 +141,14 @@ func TestLogBrokerCancelDoesNotHang(t *testing.T) {
 	}
 }
 
-func TestLogBrokerSlowSubscriberDropOldest(t *testing.T) {
+func TestLogBrokerSlowSubscriberDropNewest(t *testing.T) {
 	broker := NewLogBroker(4) // tiny buffer
-	broker.policy = dropOldest
 
 	sub := broker.Subscribe("")
 	// Drain the channel first.
 	drainSubscription(sub)
 
-	// Publish more events than buffer.
+	// Publish more events than buffer — dropNewest policy drops them.
 	for i := 0; i < 20; i++ {
 		broker.Publish(LogStreamEvent{
 			InstanceID: "inst-1",

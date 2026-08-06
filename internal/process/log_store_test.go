@@ -405,3 +405,314 @@ func TestLogStoreConcurrentAppendAndQuery(t *testing.T) {
 
 	wg.Wait()
 }
+
+// === LogBroker lifecycle tests ===
+
+// TestLogBrokerShutdownClosesDone verifies Shutdown closes done channels.
+func TestLogBrokerShutdownClosesDone(t *testing.T) {
+	broker := NewLogBroker(100)
+	sub := broker.Subscribe("")
+
+	broker.Shutdown()
+
+	select {
+	case <-sub.Done():
+		// OK — done channel closed.
+	case <-time.After(1 * time.Second):
+		t.Fatal("Shutdown did not close done channel")
+	}
+}
+
+// TestLogBrokerConcurrentCancelAndPublish verifies no deadlock on cancel/publish race.
+func TestLogBrokerConcurrentCancelAndPublish(t *testing.T) {
+	broker := NewLogBroker(100)
+	sub := broker.Subscribe("")
+
+	done := make(chan struct{})
+	go func() {
+		for i := 0; i < 100; i++ {
+			broker.Publish(LogStreamEvent{
+				InstanceID: "inst-1",
+				Stream:     LogStreamStdout,
+				Message:    "race test",
+				Timestamp:  time.Now(),
+			})
+		}
+		sub.Cancel()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// OK.
+	case <-time.After(5 * time.Second):
+		t.Fatal("Concurrent cancel/publish hung")
+	}
+}
+
+// TestLogBrokerConcurrentShutdownAndCancel verifies no deadlock on shutdown/cancel race.
+func TestLogBrokerConcurrentShutdownAndCancel(t *testing.T) {
+	broker := NewLogBroker(100)
+	sub := broker.Subscribe("")
+
+	done := make(chan struct{})
+	go func() {
+		for i := 0; i < 50; i++ {
+			broker.Publish(LogStreamEvent{
+				InstanceID: "inst-1",
+				Stream:     LogStreamStdout,
+				Message:    "shutdown race",
+				Timestamp:  time.Now(),
+			})
+		}
+		sub.Cancel()
+		close(done)
+	}()
+
+	broker.Shutdown()
+	<-done
+}
+
+// TestLogBrokerNoGoroutineLeakOnCancel verifies subscriber goroutine exits on cancel.
+func TestLogBrokerNoGoroutineLeakOnCancel(t *testing.T) {
+	broker := NewLogBroker(100)
+	sub := broker.Subscribe("")
+
+	done := make(chan struct{})
+	go func() {
+		for {
+			select {
+			case <-sub.Done():
+				close(done)
+				return
+			case <-sub.Channel():
+				// drain.
+			}
+		}
+	}()
+
+	sub.Cancel()
+	<-done
+}
+
+// TestLogBrokerDoubleCancel verifies double Cancel is safe.
+func TestLogBrokerDoubleCancel(t *testing.T) {
+	broker := NewLogBroker(100)
+	sub := broker.Subscribe("")
+
+	sub.Cancel()
+	sub.Cancel() // must not panic or hang
+
+	// Verify done is closed.
+	select {
+	case <-sub.Done():
+		// OK.
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("done not closed after double cancel")
+	}
+}
+
+// TestLogBrokerShutdownDoubleCancel verifies shutdown then cancel is safe.
+func TestLogBrokerShutdownDoubleCancel(t *testing.T) {
+	broker := NewLogBroker(100)
+	sub := broker.Subscribe("")
+
+	broker.Shutdown()
+	// Shutdown does not close done — Cancel must do that.
+	sub.Cancel()
+
+	select {
+	case <-sub.Done():
+		// OK.
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("done not closed after shutdown+cancel")
+	}
+}
+
+// TestQueryLogsSequenceAssigned verifies Sequence is assigned for each event.
+func TestQueryLogsSequenceAssigned(t *testing.T) {
+	broker := NewLogBroker(100)
+
+	// Create subscription BEFORE publishing so events are received.
+	sub := broker.Subscribe("")
+
+	// Publish events for multiple instances.
+	for i := 0; i < 20; i++ {
+		broker.Publish(LogStreamEvent{
+			InstanceID: "inst-1",
+			Stream:     LogStreamStdout,
+			Message:    "msg",
+			Timestamp:  time.Now(),
+		})
+		broker.Publish(LogStreamEvent{
+			InstanceID: "inst-2",
+			Stream:     LogStreamStderr,
+			Message:    "msg",
+			Timestamp:  time.Now(),
+		})
+	}
+
+	// Collect all events.
+	allSeq := make([]uint64, 0, 40)
+	for i := 0; i < 40; i++ {
+		select {
+		case ev := <-sub.Channel():
+			allSeq = append(allSeq, ev.Sequence)
+		case <-time.After(2 * time.Second):
+			t.Fatalf("timeout waiting for event %d", i)
+		}
+	}
+
+	sub.Cancel()
+
+	if len(allSeq) < 40 {
+		t.Fatalf("expected at least 40 events, got %d", len(allSeq))
+	}
+
+	// Verify sequences are monotonically increasing.
+	for i := 1; i < len(allSeq); i++ {
+		if allSeq[i] <= allSeq[i-1] {
+			t.Errorf("sequence[%d]=%d <= sequence[%d]=%d — not monotonically increasing",
+				i, allSeq[i], i-1, allSeq[i-1])
+		}
+	}
+}
+
+// TestQueryLogsStableOrderSameTimestamp verifies deterministic order for same-timestamp events.
+func TestQueryLogsStableOrderSameTimestamp(t *testing.T) {
+	now := time.Now()
+	entries := []AggregatedLogEntry{
+		{InstanceID: "b", Timestamp: now, Stream: "stdout", Message: "msg1"},
+		{InstanceID: "a", Timestamp: now, Stream: "stderr", Message: "msg2"},
+		{InstanceID: "a", Timestamp: now, Stream: "stdout", Message: "msg3"},
+		{InstanceID: "b", Timestamp: now, Stream: "stderr", Message: "msg4"},
+	}
+
+	result := QueryAggregatedLogs(entries, LogQuery{})
+	if len(result.Items) != 4 {
+		t.Fatalf("expected 4 items, got %d", len(result.Items))
+	}
+
+	// With same timestamp and same instance, order by stream ASC.
+	// a/stdout should come before a/stderr? No — DESC timestamp, then ASC instance, then ASC stream.
+	// So order is: a/stderr, a/stdout, b/stderr, b/stdout (DESC timestamp, ASC instanceID, ASC stream)
+	expectedOrder := []string{"msg2", "msg3", "msg4", "msg1"}
+	for i, item := range result.Items {
+		if item.Message != expectedOrder[i] {
+			t.Errorf("item[%d]: expected %q, got %q", i, expectedOrder[i], item.Message)
+		}
+	}
+}
+
+// TestQueryLogsStableOrderSameInstance verifies same instance same timestamp are ordered by stream.
+func TestQueryLogsStableOrderSameInstance(t *testing.T) {
+	now := time.Now()
+	entries := []AggregatedLogEntry{
+		{InstanceID: "inst-1", Timestamp: now, Stream: "stderr", Message: "err"},
+		{InstanceID: "inst-1", Timestamp: now, Stream: "stdout", Message: "out"},
+	}
+
+	result := QueryAggregatedLogs(entries, LogQuery{})
+	if len(result.Items) != 2 {
+		t.Fatalf("expected 2 items, got %d", len(result.Items))
+	}
+	// ASC by stream: stderr < stdout
+	if result.Items[0].Stream != "stderr" {
+		t.Errorf("expected stderr first, got %s", result.Items[0].Stream)
+	}
+	if result.Items[1].Stream != "stdout" {
+		t.Errorf("expected stdout second, got %s", result.Items[1].Stream)
+	}
+}
+
+// TestQueryLogsMultipleInstances verifies deterministic cross-instance ordering.
+func TestQueryLogsMultipleInstances(t *testing.T) {
+	now := time.Now()
+	entries := []AggregatedLogEntry{
+		{InstanceID: "inst-b", Timestamp: now, Stream: "stdout", Message: "b"},
+		{InstanceID: "inst-a", Timestamp: now, Stream: "stdout", Message: "a"},
+		{InstanceID: "inst-a", Timestamp: now.Add(-time.Second), Stream: "stdout", Message: "old-a"},
+		{InstanceID: "inst-b", Timestamp: now.Add(-time.Second), Stream: "stdout", Message: "old-b"},
+	}
+
+	result := QueryAggregatedLogs(entries, LogQuery{})
+	if len(result.Items) != 4 {
+		t.Fatalf("expected 4 items, got %d", len(result.Items))
+	}
+
+	// DESC timestamp: now > now-1s
+	// Same timestamp: ASC instance ID
+	// Order: newest(a,inst-a), newest(b,inst-b), oldest(a,inst-a), oldest(b,inst-b)
+	if result.Items[0].Message != "a" {
+		t.Errorf("expected 'a' first (newest, inst-a < inst-b), got %q", result.Items[0].Message)
+	}
+	if result.Items[1].Message != "b" {
+		t.Errorf("expected 'b' second, got %q", result.Items[1].Message)
+	}
+	if result.Items[2].Message != "old-a" {
+		t.Errorf("expected 'old-a' third (older, inst-a < inst-b), got %q", result.Items[2].Message)
+	}
+	if result.Items[3].Message != "old-b" {
+		t.Errorf("expected 'old-b' fourth, got %q", result.Items[3].Message)
+	}
+}
+
+// TestQueryLogsPaginationAfterAggregation verifies pagination is applied once after aggregation.
+func TestQueryLogsPaginationAfterAggregation(t *testing.T) {
+	entries := make([]AggregatedLogEntry, 100)
+	now := time.Now()
+	for i := 0; i < 100; i++ {
+		entries[i] = AggregatedLogEntry{
+			InstanceID: "inst-1",
+			Timestamp:  now.Add(time.Duration(i) * time.Second),
+			Stream:     "stdout",
+			Message:    "msg",
+		}
+	}
+
+	// Page 1 with size 10 should return 10 items.
+	q := LogQuery{Page: 1, PageSize: 10}
+	result := QueryAggregatedLogs(entries, q)
+	if len(result.Items) != 10 {
+		t.Errorf("expected 10 items on page 1, got %d", len(result.Items))
+	}
+	if result.Total != 100 {
+		t.Errorf("expected total 100, got %d", result.Total)
+	}
+
+	// Page 2 with size 10 should return 10 items.
+	q.Page = 2
+	result = QueryAggregatedLogs(entries, q)
+	if len(result.Items) != 10 {
+		t.Errorf("expected 10 items on page 2, got %d", len(result.Items))
+	}
+
+	// Page 11 should be empty (100 entries / 10 per page = 10 pages).
+	q.Page = 11
+	result = QueryAggregatedLogs(entries, q)
+	if len(result.Items) != 0 {
+		t.Errorf("expected 0 items on page 11, got %d", len(result.Items))
+	}
+}
+
+// TestQueryLogsTotal verifies Total reflects all matching entries.
+func TestQueryLogsTotal(t *testing.T) {
+	entries := []AggregatedLogEntry{
+		{InstanceID: "inst-1", Timestamp: time.Now(), Stream: "stdout", Message: "msg1"},
+		{InstanceID: "inst-2", Timestamp: time.Now(), Stream: "stderr", Message: "msg2"},
+		{InstanceID: "inst-3", Timestamp: time.Now(), Stream: "stdout", Message: "msg3"},
+	}
+
+	// No filter — total should be 3.
+	result := QueryAggregatedLogs(entries, LogQuery{})
+	if result.Total != 3 {
+		t.Errorf("expected total 3, got %d", result.Total)
+	}
+
+	// With empty filter — total should be all 3 entries.
+	q := LogQuery{LogFilter: LogFilter{Stream: ""}} // no stream filter
+	result = QueryAggregatedLogs(entries, q)
+	if result.Total != 3 {
+		t.Errorf("expected total 3 without filter, got %d", result.Total)
+	}
+}
