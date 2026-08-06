@@ -130,7 +130,8 @@ func RuntimeToDomain(id, name, executable, workingDir string, defaultArgs []stri
 }
 
 // Start creates a new launch instance and starts its process.
-// Atomically checks concurrency limit and reserves a slot.
+// Atomically checks concurrency limit and reserves a slot under write lock
+// to prevent race between counting and reservation.
 func (s *Supervisor) Start(ctx context.Context, profile *domain.Profile, runtime *domain.Runtime, model *domain.Model, customArgs []string, customEnv map[string]string) (*domain.LaunchInstance, error) {
 	inst, err := s.resolver.ResolveToInstance(profile, runtime, model, customArgs, customEnv)
 	if err != nil {
@@ -139,24 +140,18 @@ func (s *Supervisor) Start(ctx context.Context, profile *domain.Profile, runtime
 
 	// Atomically check concurrency limit and reserve a slot.
 	if s.maxConcurrent > 0 {
-		for {
-			s.mu.RLock()
-			activeCount := 0
-			for _, ic := range s.instances {
-				if ic.IsRunning() {
-					activeCount++
-				}
-			}
-			s.mu.RUnlock()
-
-			current := s.reservations.Load()
-			if int(current) >= s.maxConcurrent {
-				return nil, fmt.Errorf("maximum concurrent instances (%d) reached", s.maxConcurrent)
-			}
-			if s.reservations.CompareAndSwap(current, current+1) {
-				break
+		s.mu.Lock()
+		activeCount := 0
+		for _, ic := range s.instances {
+			if ic.IsRunning() {
+				activeCount++
 			}
 		}
+		if activeCount >= s.maxConcurrent {
+			s.mu.Unlock()
+			return nil, fmt.Errorf("maximum concurrent instances (%d) reached", s.maxConcurrent)
+		}
+		s.mu.Unlock()
 	}
 
 	// Persist initial pending instance.
