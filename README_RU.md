@@ -263,33 +263,47 @@ SysProcAttr убран из `CommandSpec` — платформенная нас�
 
 **Единое JSON-хранилище** (`goal_repo.json`) — single-file storage для runtimes, моделей, профилей и экземпляров.
 
-Schema version: `4`. Atomic writes через `tmp + rename`.
+Schema version: `4`. Atomic writes через `tmp + rename` + backup recovery.
 
 ```
-goal_repo.json       — active repository
-goal_repo.json.tmp   — temporary write file
+goal_repo.json           — active repository
+goal_repo.json.tmp       — temporary write file
+goal_repo.json.bak       — backup of last known good state
 ```
+
+**Atomic write sequence:**
+1. Сериализация во временный файл в том же каталоге
+2. `fsync` временного файла (через `File.Sync()`)
+3. Сохранение предыдущего корректного файла как `.bak`
+4. `os.Rename` временного файла (atomic на Windows и Linux)
+5. Sync родительского каталога
 
 **Ограничения (текущие):**
-- Нет fsync guarantee (OS handles flushing)
-- Corrupted file требует ручного recovery
-- Нет concurrent write protection кроме mutex
-- Нет schema migration tests
+- fsync не гарантируется на всех платформах (OS handles flushing)
+- Corrupted файл восстанавливается из `.bak` автоматически
+- Concurrent write protection — mutex на уровне repository
+- Schema version validation + migration tests
 
 **Планируемые улучшения:**
-- Transactional backup перед каждой записью
-- fsync после rename
-- Автоматический recovery из `.bak` при corruption
+- fsync после rename на всех платформах
 - Рассмотреть SQLite для v1.0 (всё ещё single-binary)
 
 ### Логирование
 
-Логи процессов хранятся per-instance через ring buffer `process.Manager` (до 10000 записей на экземпляр). Доступ через:
-- SSE стриминг в реальном времени (`/api/v1/logs/stream`)
-- Фильтрация по stream, search, time range
-- Пагинация (page/page_size)
+Логи процессов хранятся per-instance через ring buffer `process.LogStore` (до 10000 записей на экземпляр). Доступ через:
+- SSE стриминг в реальном времени (`GET /api/v1/logs/stream`) — multi-instance LogBroker
+- Фильтрация по stream, search, time range, instance_id
+- Пагинация (page/page_size) — агрегируется после объединения логов всех instances
+- `GET /api/v1/logs` — QueryLogs с instance_id filter
 
-Примечание: Legacy `/api/v1/logs/stream` и `/api/v1/status` читают из первого process manager. Per-instance лог эндпоинты в планах.
+LogBroker (`process.LogBroker`) обеспечивает:
+- Подписку на логи всех запущенных экземпляров
+- Фильтрацию по instance_id
+- Безопасную идемпотентную отмену подписки
+- Drop oldest политику для медленных подписчиков
+- Корректное завершение при shutdown
+
+Legacy `/api/v1/status` удалён. Переход на `GET /api/v1/instances` и `GET /api/v1/instances/{id}`.
 
 ### Health Checks
 
