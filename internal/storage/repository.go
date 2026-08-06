@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"time"
 )
@@ -164,14 +166,22 @@ func NewJSONRepository(filePath string) (Repository, error) {
 	return r, nil
 }
 
-// load reads the JSON file into memory.
+// load reads the JSON file into memory. If the main file is corrupted but a
+// valid .bak backup exists, load falls back to the backup automatically.
 func (r *JSONRepository) load() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	data, err := os.ReadFile(r.filePath)
 	if err != nil {
-		return err
+		if os.IsNotExist(err) {
+			return err
+		}
+		// Non-filesystem error reading main file — try backup.
+		data, err = r.tryBackup()
+		if err != nil {
+			return fmt.Errorf("load repository (main and backup failed): %w", err)
+		}
 	}
 
 	var unified struct {
@@ -183,7 +193,15 @@ func (r *JSONRepository) load() error {
 	}
 
 	if err := json.Unmarshal(data, &unified); err != nil {
-		return fmt.Errorf("decode JSON: %w", err)
+		// Main file corrupted — try backup.
+		log.Printf("WARN: main file corrupted, trying backup: file=%s error=%v", r.filePath, err)
+		data, err = r.tryBackup()
+		if err != nil {
+			return fmt.Errorf("load repository (main and backup failed): %w", err)
+		}
+		if err := json.Unmarshal(data, &unified); err != nil {
+			return fmt.Errorf("backup file also corrupted: %w", err)
+		}
 	}
 
 	r.runtimes = unified.Runtimes
@@ -194,8 +212,32 @@ func (r *JSONRepository) load() error {
 	return nil
 }
 
-// saveLocked writes the data to disk atomically.
+// tryBackup reads and validates the .bak backup file.
+func (r *JSONRepository) tryBackup() ([]byte, error) {
+	bakPath := r.filePath + ".bak"
+	data, err := os.ReadFile(bakPath)
+	if err != nil {
+		return nil, fmt.Errorf("read backup: %w", err)
+	}
+	var unified struct {
+		SchemaVersion int
+	}
+	if err := json.Unmarshal(data, &unified); err != nil {
+		return nil, fmt.Errorf("validate backup: %w", err)
+	}
+	return data, nil
+}
+
+// saveLocked writes the data to disk atomically with backup/recovery and fsync.
 // The caller must hold r.mu (read or write lock).
+//
+// Atomicity strategy:
+// 1. Marshal to temp file in same directory
+// 2. Sync temp file
+// 3. Close and validate temp file by reading it back
+// 4. Save previous good version as .bak
+// 5. Atomic rename temp to target
+// 6. Sync parent directory (where supported)
 func (r *JSONRepository) saveLocked() error {
 	unified := map[string]interface{}{
 		"schema_version": 4,
@@ -211,13 +253,61 @@ func (r *JSONRepository) saveLocked() error {
 	}
 
 	tmp := r.filePath + ".tmp"
+
+	// Write temp file.
 	if err := os.WriteFile(tmp, data, 0600); err != nil {
 		return fmt.Errorf("write temp file: %w", err)
 	}
 
+	// Sync to ensure data is flushed to disk.
+	f, syncErr := os.OpenFile(tmp, os.O_WRONLY, 0)
+	if syncErr != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("open temp file for sync: %w", syncErr)
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		_ = os.Remove(tmp)
+		return fmt.Errorf("sync temp file: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("close temp file: %w", err)
+	}
+
+	// Validate by reading back the temp file.
+	validateData, err := os.ReadFile(tmp)
+	if err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("validate temp file: %w", err)
+	}
+	// Quick validity check - parse as JSON.
+	var validated map[string]interface{}
+	if err := json.Unmarshal(validateData, &validated); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("validate temp file JSON: %w", err)
+	}
+
+	// Save previous good version as .bak if it exists.
+	if _, err := os.Stat(r.filePath); err == nil {
+		bakPath := r.filePath + ".bak"
+		if copyErr := copyFile(r.filePath, bakPath); copyErr != nil {
+			// Don't fail if backup fails; continue with rename.
+			_ = copyErr
+		}
+	}
+
+	// Atomic rename.
 	if err := os.Rename(tmp, r.filePath); err != nil {
 		_ = os.Remove(tmp)
 		return fmt.Errorf("rename temp file: %w", err)
+	}
+
+	// Sync parent directory (best effort, Linux/macOS only).
+	dir := filepath.Dir(r.filePath)
+	if err := syncDir(dir); err != nil {
+		// Non-fatal for Windows.
+		_ = err
 	}
 
 	return nil
@@ -596,6 +686,36 @@ func (r *JSONRepository) ListByProfileID(profileID string) ([]*LaunchInstanceEnt
 // generateID creates a unique ID.
 func generateID() string {
 	return fmt.Sprintf("inst_%d", time.Now().UnixNano())
+}
+
+// copyFile copies a file from src to dst.
+func copyFile(src, dst string) error {
+	data, err := os.ReadFile(src)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(dst, data, 0600)
+}
+
+// syncDir syncs the parent directory metadata. Platform-aware.
+func syncDir(dir string) error {
+	if runtime.GOOS == "windows" {
+		// On Windows, os.File.Sync() works reliably but Sync is a no-op.
+		// We try to open and sync the directory.
+		f, err := os.Open(dir)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+		return f.Sync()
+	}
+	// Unix/Linux: fsync the directory.
+	f, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	return f.Sync()
 }
 
 // CreateInstance delegates to CreateLaunchInstance for InstanceStore compatibility.

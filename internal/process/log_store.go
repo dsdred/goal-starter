@@ -1,8 +1,10 @@
 package process
 
 import (
+	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -55,7 +57,6 @@ func (s *LogStore) Add(event LogEvent) {
 
 	s.events = append(s.events, event)
 	if len(s.events) > s.maxSize {
-		// Remove oldest events to maintain max size.
 		removed := len(s.events) - s.maxSize
 		s.events = s.events[removed:]
 	}
@@ -66,7 +67,6 @@ func (s *LogStore) GetLogs(query LogQuery) *LogResult {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	// Parse time filters if provided.
 	var fromTime, toTime time.Time
 	var hasFrom, hasTo bool
 	if query.From != "" {
@@ -82,41 +82,33 @@ func (s *LogStore) GetLogs(query LogQuery) *LogResult {
 		}
 	}
 
-	// Apply filters.
 	var filtered []LogEvent
 	for _, event := range s.events {
-		// Filter by stream.
 		if query.Stream != "" && event.Stream != query.Stream {
 			continue
 		}
-
-		// Filter by time range.
 		if hasFrom && event.Time.Before(fromTime) {
 			continue
 		}
 		if hasTo && event.Time.After(toTime) {
 			continue
 		}
-
-		// Filter by search substring (case-insensitive).
 		if query.Search != "" {
 			if !strings.Contains(strings.ToLower(event.Message), strings.ToLower(query.Search)) {
 				continue
 			}
 		}
-
 		filtered = append(filtered, event)
 	}
 
 	total := len(filtered)
 
-	// Pagination: calculate start and end indices.
 	pageSize := query.PageSize
 	if pageSize <= 0 {
-		pageSize = 50 // default page size
+		pageSize = 50
 	}
 	if pageSize > 500 {
-		pageSize = 500 // max page size
+		pageSize = 500
 	}
 
 	page := query.Page
@@ -159,9 +151,312 @@ func (s *LogStore) Count() int {
 	return len(s.events)
 }
 
+// CollectAll returns all events as AggregatedLogEntry.
+func (s *LogStore) CollectAll() []AggregatedLogEntry {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	entries := make([]AggregatedLogEntry, 0, len(s.events))
+	for _, event := range s.events {
+		entries = append(entries, AggregatedLogEntry{
+			Timestamp: event.Time,
+			Stream:    event.Stream,
+			Message:   event.Message,
+		})
+	}
+	return entries
+}
+
 // Clear removes all events from the store.
 func (s *LogStore) Clear() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.events = make([]LogEvent, 0, s.maxSize)
+}
+
+// ===== Log Broker for multi-instance subscriptions =====
+
+// LogStream represents a log stream type.
+type LogStream string
+
+const (
+	LogStreamStdout LogStream = "stdout"
+	LogStreamStderr LogStream = "stderr"
+	LogStreamSystem LogStream = "system"
+)
+
+// LogStreamEvent represents an SSE log event with instance context.
+type LogStreamEvent struct {
+	Sequence   uint64    `json:"sequence"`
+	Timestamp  time.Time `json:"time"`
+	InstanceID string    `json:"instance_id"`
+	ProfileID  string    `json:"profile_id"`
+	Stream     LogStream `json:"stream"`
+	Message    string    `json:"message"`
+}
+
+// LogBroker manages multi-instance log subscriptions.
+type LogBroker struct {
+	mu          sync.RWMutex
+	subscribers map[*logSubscriber]struct{}
+	seq         atomic.Uint64
+	dropped     atomic.Uint64
+	bufferSize  int
+	policy      dropPolicy
+}
+
+type dropPolicy int
+
+const (
+	dropOldest dropPolicy = iota
+	dropNewest
+	slowSubscriberDrop
+)
+
+// logSubscriber holds subscriber state.
+type logSubscriber struct {
+	ch         chan LogStreamEvent
+	instanceID string
+	cancelled  atomic.Bool
+}
+
+// NewLogBroker creates a new LogBroker.
+func NewLogBroker(bufferSize int) *LogBroker {
+	if bufferSize <= 0 {
+		bufferSize = 4096
+	}
+	return &LogBroker{
+		subscribers: make(map[*logSubscriber]struct{}),
+		bufferSize:  bufferSize,
+		policy:      dropOldest,
+	}
+}
+
+// Subscribe creates a new log subscription filtered by instanceID.
+// Returns a LogSubscription; Cancel() is idempotent and safe.
+func (b *LogBroker) Subscribe(instanceID string) *LogSubscription {
+	ch := make(chan LogStreamEvent, b.bufferSize)
+	lsub := &logSubscriber{
+		ch:         ch,
+		instanceID: instanceID,
+	}
+
+	b.mu.Lock()
+	b.subscribers[lsub] = struct{}{}
+	b.mu.Unlock()
+
+	return &LogSubscription{
+		ch:     ch,
+		done:   make(chan struct{}),
+		broker: b,
+		lsub:   lsub,
+	}
+}
+
+// Publish sends a log event to matching subscribers.
+func (b *LogBroker) Publish(ev LogStreamEvent) {
+	seq := b.seq.Add(1)
+	ev.Sequence = seq
+
+	b.mu.RLock()
+	subs := make([]*logSubscriber, 0, len(b.subscribers))
+	for ls := range b.subscribers {
+		subs = append(subs, ls)
+	}
+	b.mu.RUnlock()
+
+	dropped := 0
+	for _, ls := range subs {
+		if ls.cancelled.Load() {
+			continue
+		}
+		// Filter by instanceID if subscriber has a filter.
+		if ls.instanceID != "" && ev.InstanceID != ls.instanceID {
+			continue
+		}
+		select {
+		case ls.ch <- ev:
+		default:
+			dropped++
+			if b.policy == slowSubscriberDrop {
+				ls.cancelled.Store(true)
+				close(ls.ch)
+			}
+		}
+	}
+
+	if dropped > 0 {
+		b.dropped.Add(uint64(dropped))
+	}
+}
+
+// DroppedEvents returns the number of dropped events.
+func (b *LogBroker) DroppedEvents() uint64 {
+	return b.dropped.Load()
+}
+
+// LogSubscription represents an active log subscription.
+type LogSubscription struct {
+	ch     chan LogStreamEvent
+	done   chan struct{}
+	broker *LogBroker
+	lsub   *logSubscriber
+}
+
+// Channel returns the log subscription channel.
+func (s *LogSubscription) Channel() <-chan LogStreamEvent {
+	return s.ch
+}
+
+// Done returns the done channel.
+func (s *LogSubscription) Done() <-chan struct{} {
+	return s.done
+}
+
+// Cancel safely cancels the subscription. Idempotent.
+func (s *LogSubscription) Cancel() {
+	if s.lsub == nil {
+		return
+	}
+	if s.lsub.cancelled.Swap(true) {
+		return // already cancelled
+	}
+	s.broker.mu.Lock()
+	delete(s.broker.subscribers, s.lsub)
+	s.broker.mu.Unlock()
+	close(s.done)
+	close(s.ch)
+}
+
+// ===== Multi-instance log aggregation for QueryLogs =====
+
+// AggregatedLogEntry is a unified log entry from multiple instances.
+type AggregatedLogEntry struct {
+	Sequence   uint64
+	InstanceID string
+	Timestamp  time.Time
+	Stream     string
+	Message    string
+}
+
+// AggregateLogs collects log events from multiple log stores into unified sorted entries.
+func AggregateLogs(instances map[string]*LogStore, instanceIDFilter string) []AggregatedLogEntry {
+	var all []AggregatedLogEntry
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+
+	for instID, store := range instances {
+		wg.Add(1)
+		go func(id string, s *LogStore) {
+			defer wg.Done()
+			q := LogQuery{}
+			res := s.GetLogs(q)
+			if res == nil || len(res.Items) == 0 {
+				return
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			for _, item := range res.Items {
+				if instanceIDFilter != "" && id != instanceIDFilter {
+					continue
+				}
+				all = append(all, AggregatedLogEntry{
+					InstanceID: id,
+					Timestamp:  item.Time,
+					Stream:     item.Stream,
+					Message:    item.Message,
+				})
+			}
+		}(instID, store)
+	}
+
+	wg.Wait()
+
+	// Sort by time DESC, then instanceID for determinism.
+	sort.SliceStable(all, func(i, j int) bool {
+		if all[i].Timestamp.Equal(all[j].Timestamp) {
+			if all[i].Stream == all[j].Stream {
+				return all[i].InstanceID < all[j].InstanceID
+			}
+			return all[i].Stream < all[j].Stream
+		}
+		return all[i].Timestamp.After(all[j].Timestamp)
+	})
+
+	return all
+}
+
+// QueryAggregatedLogs performs a filtered, paginated query on aggregated log entries.
+// Entries are sorted DESC by timestamp, then ASC by instance ID, then ASC by stream
+// for deterministic ordering across multiple instances.
+func QueryAggregatedLogs(entries []AggregatedLogEntry, query LogQuery) *LogResult {
+	// Apply filters.
+	var filtered []AggregatedLogEntry
+	for _, e := range entries {
+		if query.Stream != "" && e.Stream != query.Stream {
+			continue
+		}
+		if query.Search != "" {
+			if !strings.Contains(strings.ToLower(e.Message), strings.ToLower(query.Search)) {
+				continue
+			}
+		}
+		filtered = append(filtered, e)
+	}
+
+	// Sort deterministically: DESC timestamp, ASC instance ID, ASC stream.
+	sort.SliceStable(filtered, func(i, j int) bool {
+		if !filtered[i].Timestamp.Equal(filtered[j].Timestamp) {
+			return filtered[i].Timestamp.After(filtered[j].Timestamp)
+		}
+		if filtered[i].InstanceID != filtered[j].InstanceID {
+			return filtered[i].InstanceID < filtered[j].InstanceID
+		}
+		return filtered[i].Stream < filtered[j].Stream
+	})
+
+	total := len(filtered)
+
+	pageSize := query.PageSize
+	if pageSize <= 0 {
+		pageSize = 50
+	}
+	if pageSize > 500 {
+		pageSize = 500
+	}
+
+	page := query.Page
+	if page < 1 {
+		page = 1
+	}
+
+	start := (page - 1) * pageSize
+	if start >= total {
+		return &LogResult{
+			Total: total,
+			Page:  page,
+			Size:  pageSize,
+			Items: []LogEvent{},
+		}
+	}
+
+	end := start + pageSize
+	if end > total {
+		end = total
+	}
+
+	items := make([]LogEvent, 0, end-start)
+	for _, e := range filtered[start:end] {
+		items = append(items, LogEvent{
+			Time:    e.Timestamp,
+			Stream:  e.Stream,
+			Message: e.Message,
+		})
+	}
+
+	return &LogResult{
+		Total: total,
+		Page:  page,
+		Size:  pageSize,
+		Items: items,
+	}
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/dsdred/goal/internal/domain"
@@ -26,13 +27,6 @@ type InstanceSummary struct {
 	PID       int    `json:"pid,omitempty"`
 }
 
-// LogStreamEvent represents an SSE log event.
-type LogStreamEvent struct {
-	Time    time.Time `json:"time"`
-	Stream  string    `json:"stream"`
-	Message string    `json:"message"`
-}
-
 // Supervisor manages multiple launch instances.
 // Each instance has its own process.Manager, allowing concurrent or sequential
 // launches of different profiles.
@@ -42,7 +36,9 @@ type Supervisor struct {
 	resolver      *domain.LaunchResolver
 	store         InstanceStore
 	maxConcurrent int
+	reservations  atomic.Int64
 	lifecycleCtx  context.Context
+	broker        *LogBroker
 }
 
 // InstanceStore persists and retrieves launch instances.
@@ -58,6 +54,7 @@ type InstanceStore interface {
 // SupervisorConfig holds configuration for Supervisor.
 type SupervisorConfig struct {
 	MaxConcurrent int // 0 = unlimited
+	LogBufferSize int // 0 = default (4096)
 }
 
 // NewSupervisor creates a Supervisor.
@@ -93,7 +90,16 @@ func NewSupervisorWithConfig(store InstanceStore, cfg SupervisorConfig) *Supervi
 	if cfg.MaxConcurrent > 0 {
 		s.maxConcurrent = cfg.MaxConcurrent
 	}
+	if cfg.LogBufferSize > 0 {
+		s.broker = NewLogBroker(cfg.LogBufferSize)
+	}
 	return s
+}
+
+// LogBroker returns the log broker for multi-instance subscriptions.
+// Returns nil if broker was not configured.
+func (s *Supervisor) LogBroker() *LogBroker {
+	return s.broker
 }
 
 // Resolver returns the LaunchResolver.
@@ -124,37 +130,46 @@ func RuntimeToDomain(id, name, executable, workingDir string, defaultArgs []stri
 }
 
 // Start creates a new launch instance and starts its process.
+// Atomically checks concurrency limit and reserves a slot.
 func (s *Supervisor) Start(ctx context.Context, profile *domain.Profile, runtime *domain.Runtime, model *domain.Model, customArgs []string, customEnv map[string]string) (*domain.LaunchInstance, error) {
-	// Check concurrency limit.
-	s.mu.RLock()
-	activeCount := 0
-	for _, ic := range s.instances {
-		if ic.Instance().IsActive() {
-			activeCount++
-		}
-	}
-	s.mu.RUnlock()
-
-	if s.maxConcurrent > 0 && activeCount >= s.maxConcurrent {
-		return nil, fmt.Errorf("maximum concurrent instances (%d) reached", s.maxConcurrent)
-	}
-
-	// Create instance record.
 	inst, err := s.resolver.ResolveToInstance(profile, runtime, model, customArgs, customEnv)
 	if err != nil {
 		return nil, fmt.Errorf("resolve instance: %w", err)
+	}
+
+	// Atomically check concurrency limit and reserve a slot.
+	if s.maxConcurrent > 0 {
+		for {
+			s.mu.RLock()
+			activeCount := 0
+			for _, ic := range s.instances {
+				if ic.IsRunning() {
+					activeCount++
+				}
+			}
+			s.mu.RUnlock()
+
+			current := s.reservations.Load()
+			if int(current) >= s.maxConcurrent {
+				return nil, fmt.Errorf("maximum concurrent instances (%d) reached", s.maxConcurrent)
+			}
+			if s.reservations.CompareAndSwap(current, current+1) {
+				break
+			}
+		}
 	}
 
 	// Persist initial pending instance.
 	if s.store != nil {
 		entry := domain.ToStorageEntry(inst)
 		if err := s.store.Create(entry); err != nil {
+			s.reservations.Add(-1)
 			return nil, fmt.Errorf("persist instance: %w", err)
 		}
 	}
 
 	// Create controller.
-	ctrl := NewInstanceController(inst, s.store, s.resolver)
+	ctrl := NewInstanceController(inst, s.store, s.resolver, s.broker)
 
 	s.mu.Lock()
 	s.instances[inst.ID] = ctrl
@@ -164,8 +179,14 @@ func (s *Supervisor) Start(ctx context.Context, profile *domain.Profile, runtime
 	if err := ctrl.Start(s.lifecycleContext()); err != nil {
 		inst.Fail(err.Error(), domain.InstanceExitError)
 		if s.store != nil {
-			_ = s.store.Update(domain.ToStorageEntry(inst))
+			if uerr := s.store.Update(domain.ToStorageEntry(inst)); uerr != nil {
+				slog.Error("failed to persist start error", "instance_id", string(inst.ID), "error", uerr)
+			}
 		}
+		s.reservations.Add(-1)
+		s.mu.Lock()
+		delete(s.instances, inst.ID)
+		s.mu.Unlock()
 		return nil, fmt.Errorf("start instance %s: %w", inst.ID, err)
 	}
 
@@ -198,7 +219,7 @@ func (s *Supervisor) Restart(ctx context.Context, id domain.InstanceID) (*domain
 	return ctrl.Restart(ctx)
 }
 
-// Status returns the status of a specific instance.
+// Status returns a snapshot of a specific instance.
 func (s *Supervisor) Status(id domain.InstanceID) (*domain.LaunchInstance, error) {
 	s.mu.RLock()
 	ctrl, ok := s.instances[id]
@@ -208,30 +229,33 @@ func (s *Supervisor) Status(id domain.InstanceID) (*domain.LaunchInstance, error
 		return nil, fmt.Errorf("instance %s not found", id)
 	}
 
-	return ctrl.Instance(), nil
+	snap := ctrl.Snapshot()
+	return &snap, nil
 }
 
-// List returns all instances.
+// List returns snapshots of all instances.
 func (s *Supervisor) List() ([]*domain.LaunchInstance, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	result := make([]*domain.LaunchInstance, 0, len(s.instances))
 	for _, ctrl := range s.instances {
-		result = append(result, ctrl.Instance())
+		snap := ctrl.Snapshot()
+		result = append(result, &snap)
 	}
 	return result, nil
 }
 
-// ListActive returns only active instances.
+// ListActive returns snapshots of only active instances.
 func (s *Supervisor) ListActive() ([]*domain.LaunchInstance, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	result := make([]*domain.LaunchInstance, 0)
 	for _, ctrl := range s.instances {
-		if ctrl.Instance().IsActive() {
-			result = append(result, ctrl.Instance())
+		if ctrl.IsRunning() {
+			snap := ctrl.Snapshot()
+			result = append(result, &snap)
 		}
 	}
 	return result, nil
@@ -264,7 +288,7 @@ func (s *Supervisor) Shutdown(ctx context.Context) error {
 
 	var firstErr error
 	for _, ctrl := range controllers {
-		if ctrl.Instance().IsActive() {
+		if ctrl.IsRunning() {
 			if err := ctrl.Stop(ctx); err != nil {
 				if firstErr == nil {
 					firstErr = err
@@ -276,7 +300,7 @@ func (s *Supervisor) Shutdown(ctx context.Context) error {
 }
 
 // RemoveTerminal removes terminal instances from the active registry and persists state.
-func (s *Supervisor) RemoveTerminal(id domain.InstanceID) {
+func (s *Supervisor) RemoveTerminal(id domain.InstanceID) error {
 	s.mu.Lock()
 	ctrl, ok := s.instances[id]
 	if ok {
@@ -285,9 +309,15 @@ func (s *Supervisor) RemoveTerminal(id domain.InstanceID) {
 	s.mu.Unlock()
 
 	if ok && s.store != nil {
-		inst := ctrl.Instance()
-		_ = s.store.Update(domain.ToStorageEntry(inst))
+		snap := ctrl.Snapshot()
+		err := s.store.Update(domain.ToStorageEntry(&snap))
+		if err != nil {
+			slog.Error("failed to persist terminal instance", "instance_id", string(id), "error", err)
+			return err
+		}
+		s.reservations.Add(-1)
 	}
+	return nil
 }
 
 // ShutdownWithPersistence stops all active instances and persists terminal instances.
@@ -301,9 +331,11 @@ func (s *Supervisor) ShutdownWithPersistence(ctx context.Context) error {
 	if s.store != nil {
 		s.mu.RLock()
 		for _, ctrl := range s.instances {
-			inst := ctrl.Instance()
-			if inst.IsTerminal() {
-				_ = s.store.Update(domain.ToStorageEntry(inst))
+			snap := ctrl.Snapshot()
+			if snap.IsTerminal() {
+				if err := s.store.Update(domain.ToStorageEntry(&snap)); err != nil {
+					slog.Error("failed to persist terminal instance during shutdown", "instance_id", string(snap.ID), "error", err)
+				}
 			}
 		}
 		s.mu.RUnlock()
@@ -312,43 +344,43 @@ func (s *Supervisor) ShutdownWithPersistence(ctx context.Context) error {
 	return nil
 }
 
-// SubscribeLogs returns a channel for log stream events.
-func (s *Supervisor) SubscribeLogs() (<-chan LogStreamEvent, func()) {
-	ch := make(chan LogStreamEvent, 64)
-	cancelCh := make(chan struct{}, 0)
-	return ch, func() {
-		close(ch)
-		// Drain cancel channel to signal subscriber is done.
-		<-cancelCh
+// SubscribeLogs returns a log subscription via the LogBroker.
+// If no broker is configured, returns an immediately-empty channel.
+func (s *Supervisor) SubscribeLogs(instanceID string) *LogSubscription {
+	if s.broker == nil {
+		// Fallback: create a no-op subscription.
+		return &LogSubscription{
+			ch:   make(chan LogStreamEvent, 1),
+			done: make(chan struct{}),
+		}
 	}
+	return s.broker.Subscribe(instanceID)
 }
 
-// QueryLogs performs a filtered, paginated log query.
-func (s *Supervisor) QueryLogs(q LogQuery) LogResult {
+// QueryLogs performs a filtered, paginated log query across all instances.
+func (s *Supervisor) QueryLogs(q LogQuery, instanceIDFilter string) *LogResult {
 	// Collect all logs from all instance controllers.
-	var allLogs []LogEvent
+	var allEntries []AggregatedLogEntry
 	s.mu.RLock()
 	for _, ctrl := range s.instances {
 		if ctrl.manager != nil {
 			logStore := ctrl.manager.GetLogStore()
 			if logStore != nil {
-				res := logStore.GetLogs(q)
-				if res != nil {
-					allLogs = append(allLogs, res.Items...)
+				entries := logStore.CollectAll()
+				for _, e := range entries {
+					if instanceIDFilter != "" {
+						if ctrl.instanceID != domain.InstanceID(instanceIDFilter) {
+							continue
+						}
+					}
+					allEntries = append(allEntries, e)
 				}
 			}
 		}
 	}
 	s.mu.RUnlock()
 
-	result := LogResult{
-		Total: len(allLogs),
-		Page:  q.Page,
-		Size:  q.PageSize,
-		Items: allLogs,
-	}
-
-	return result
+	return QueryAggregatedLogs(allEntries, q)
 }
 
 // Recover restores instances from the store and marks stale records.
@@ -372,7 +404,9 @@ func (s *Supervisor) Recover(ctx context.Context) error {
 			// The instance was not properly stopped. Mark as stale.
 			inst.UpdateState(domain.InstanceStateStale)
 			if s.store != nil {
-				_ = s.store.Update(domain.ToStorageEntry(inst))
+				if err := s.store.Update(domain.ToStorageEntry(inst)); err != nil {
+					slog.Error("failed to persist stale instance", "instance_id", string(inst.ID), "error", err)
+				}
 			}
 			slog.Warn("marking stale instance", "instance_id", string(inst.ID), "state", string(inst.State))
 		}
@@ -381,25 +415,49 @@ func (s *Supervisor) Recover(ctx context.Context) error {
 	return nil
 }
 
+// ActiveInstances returns a snapshot of active instance IDs for counting.
+func (s *Supervisor) ActiveInstances() []domain.InstanceID {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var ids []domain.InstanceID
+	for id, ctrl := range s.instances {
+		if ctrl.IsRunning() {
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
 // InstanceController controls a single launch instance.
 type InstanceController struct {
-	mu       sync.RWMutex
-	instance *domain.LaunchInstance
-	manager  *Manager
-	store    InstanceStore
-	resolver *domain.LaunchResolver
-	done     chan struct{}
+	mu         sync.RWMutex
+	instance   *domain.LaunchInstance
+	instanceID domain.InstanceID
+	manager    *Manager
+	store      InstanceStore
+	resolver   *domain.LaunchResolver
+	done       chan struct{}
+	broker     *LogBroker
 }
 
 // NewInstanceController creates a controller for an instance.
-func NewInstanceController(inst *domain.LaunchInstance, store InstanceStore, resolver *domain.LaunchResolver) *InstanceController {
+func NewInstanceController(inst *domain.LaunchInstance, store InstanceStore, resolver *domain.LaunchResolver, broker *LogBroker) *InstanceController {
 	return &InstanceController{
-		instance: inst,
-		manager:  NewManager(),
-		store:    store,
-		resolver: resolver,
-		done:     make(chan struct{}),
+		instance:   inst,
+		instanceID: inst.ID,
+		manager:    NewManager(),
+		store:      store,
+		resolver:   resolver,
+		done:       make(chan struct{}),
+		broker:     broker,
 	}
+}
+
+// IsRunning returns true if the instance is in a live state.
+func (ic *InstanceController) IsRunning() bool {
+	ic.mu.RLock()
+	defer ic.mu.RUnlock()
+	return ic.instance.IsActive()
 }
 
 // Start launches the managed process.
@@ -444,6 +502,9 @@ func (ic *InstanceController) Start(operationCtx context.Context) error {
 		slog.Error("persist running state", "instance_id", string(ic.instance.ID), "error", err)
 	}
 
+	// Publish start event via broker.
+	ic.publishBrokerEvent(LogStreamSystem, "instance started")
+
 	// Start wait goroutine.
 	go ic.wait()
 
@@ -453,7 +514,7 @@ func (ic *InstanceController) Start(operationCtx context.Context) error {
 // Stop requests graceful shutdown of the instance process.
 func (ic *InstanceController) Stop(ctx context.Context) error {
 	ic.mu.Lock()
-	if ic.instance.State == domain.InstanceStateExited || ic.instance.State == domain.InstanceStateFailed {
+	if ic.instance.IsTerminal() {
 		ic.mu.Unlock()
 		return nil
 	}
@@ -474,27 +535,46 @@ func (ic *InstanceController) Stop(ctx context.Context) error {
 	return err
 }
 
-// Restart stops and restarts the instance.
+// Restart stops and restarts the instance without time.Sleep.
 func (ic *InstanceController) Restart(ctx context.Context) (*domain.LaunchInstance, error) {
+	// Stop the instance.
 	if err := ic.Stop(ctx); err != nil {
 		return nil, err
 	}
 
-	// Brief delay to ensure process is fully terminated.
-	time.Sleep(100 * time.Millisecond)
+	// Wait for the process to fully terminate (done channel).
+	done := ic.manager.GetDoneChannel()
+	if done != nil {
+		select {
+		case <-done:
+			// Process exited.
+		case <-ctx.Done():
+			// Context cancelled while waiting for exit.
+			return nil, fmt.Errorf("timeout waiting for instance to stop before restart: %w", ctx.Err())
+		}
+	}
 
 	if err := ic.Start(ctx); err != nil {
 		return nil, err
 	}
 
-	return ic.Instance(), nil
+	snap := ic.Snapshot()
+	return &snap, nil
 }
 
-// Instance returns the instance state.
-func (ic *InstanceController) Instance() *domain.LaunchInstance {
+// Snapshot returns a copy of the current instance state.
+func (ic *InstanceController) Snapshot() domain.LaunchInstance {
 	ic.mu.RLock()
 	defer ic.mu.RUnlock()
-	return ic.instance
+
+	snap := *ic.instance
+	snap.Environment = make(map[string]string, len(ic.instance.Environment))
+	for k, v := range ic.instance.Environment {
+		snap.Environment[k] = v
+	}
+	snap.Args = make([]string, len(ic.instance.Args))
+	copy(snap.Args, ic.instance.Args)
+	return snap
 }
 
 // wait monitors the process and updates instance state.
@@ -556,8 +636,27 @@ func (ic *InstanceController) wait() {
 
 	if ic.store != nil {
 		entry := domain.ToStorageEntry(ic.instance)
-		_ = ic.store.Update(entry)
+		if err := ic.store.Update(entry); err != nil {
+			slog.Error("failed to persist final instance state", "instance_id", string(ic.instance.ID), "error", err)
+		}
 	}
+
+	// Publish exit event via broker.
+	ic.publishBrokerEvent(LogStreamSystem, fmt.Sprintf("instance exited: code=%d class=%s", *ic.instance.ExitCode, ic.instance.ExitClass))
+}
+
+// publishBrokerEvent publishes a log event via the broker.
+func (ic *InstanceController) publishBrokerEvent(stream LogStream, message string) {
+	if ic.broker == nil {
+		return
+	}
+	ic.broker.Publish(LogStreamEvent{
+		InstanceID: string(ic.instanceID),
+		ProfileID:  ic.instance.ProfileID,
+		Stream:     stream,
+		Message:    message,
+		Timestamp:  time.Now(),
+	})
 }
 
 // processExitClass represents Manager exit classes.
