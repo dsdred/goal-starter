@@ -103,7 +103,7 @@ Status: **WIP** — reload coordinator and restart-required reporting planned.
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/` | Web dashboard |
-| GET | `/api/v1/status` | Process status |
+| GET | `/api/v1/status` | Process status (legacy) |
 | GET | `/api/v1/health` | Health check (stub) |
 | GET | `/api/v1/version` | Version and metadata |
 | GET | `/api/v1/metrics` | Application metrics |
@@ -188,10 +188,41 @@ Codes: `bad_request`, `unauthorized`, `forbidden`, `not_found`, `conflict`, `inv
 ## Security
 
 - **Authentication** — HTTP-only cookies, session-based
-- **CSRF protection** — CSRF token for all unsafe methods
+- **CSRF protection** — CSRF token for all unsafe methods (GET, HEAD, OPTIONS, DELETE protected)
 - **Rate limiting** — 100 requests per minute per IP
+- **Login rate limit** — 5 attempts / 5 minutes
+- **Request body size limit** — http.MaxBytesReader
+- **Default bind** — 127.0.0.1 (all interfaces requires explicit config)
+- **Secret env vars** — `AdminPassword` cleared on save
+- **External bind** — requires `listenAddress` config change
+- **Runtime path validation** — executable and working directory validated against allowed roots
 
 ## Architecture
+
+### Domain Model: Profile → Instance
+
+**Profile** is a launch template (configuration).
+**Instance** is a running process (runtime entity).
+
+```
+Profile (static)
+  ├─ runtime_id → Runtime
+  ├─ model_id → Model (optional)
+  ├─ args, environment, active
+  └─ ...
+
+Instance (dynamic, created on start)
+  ├─ profile_id → Profile
+  ├─ pid, state, exit_code
+  ├─ started_at, stopped_at
+  └─ ...
+```
+
+Separation means:
+- Profiles are independent of process lifecycle
+- Multiple instances can share one profile
+- Stopping an instance does not delete the profile
+- Restart creates a new instance with a new ID
 
 ### Process Management
 
@@ -202,41 +233,71 @@ GoAl uses a multi-instance `Supervisor` that manages multiple `process.Manager` 
 
 Process environments are merged with the parent process environment (profile variables override system variables).
 
-### Domain Model
+SysProcAttr is removed from `CommandSpec` — platform-specific setup is performed via `platform.Prepare`.
 
-`LaunchResolver` builds `CommandSpec` from `Profile` + `Runtime` + `Model` before launch. Use `POST /api/v1/profiles/{id}/resolve` to preview the resulting command.
+### Recovery on Startup
+
+On startup Supervisor:
+1. Loads all `LaunchInstanceEntry` from repository
+2. Checks which instances were running
+3. Verifies PID liveness
+4. If alive: updates state to `running`, subscribes to logs
+5. If dead: marks as `exited` with `recovered` exit class
+
+### Recovery Policy
+
+- **Restorable**: PID exists, identity matches, pipes owned → restore state to `running`
+- **Stale**: PID exists but identity mismatch or pipes lost → state becomes `stale`
+- **Orphaned**: PID reused by another process → state becomes `orphaned`
+- **Terminal states**: persist reliably via `RemoveTerminal()`
+
+See `docs/adr/` for detailed recovery semantics.
 
 ### Data Storage
 
 **Unified JSON Repository** (`goal_repo.json`) — single-file storage for runtimes, models, profiles, and instances.
 
-Schema version: `4`. Atomic writes via `tmp + rename` pattern.
+Schema version: `4`. Atomic writes via `tmp + rename` pattern with backup recovery.
 
 ```
-goal_repo.json       — active repository
-goal_repo.json.tmp   — temporary write file
+goal_repo.json           — active repository
+goal_repo.json.tmp       — temporary write file
+goal_repo.json.bak       — backup of last known good state
 ```
+
+**Atomic write sequence:**
+1. Serialize to temp file in same directory
+2. `fsync` temp file (via `File.Sync()`)
+3. Save previous correct file as `.bak`
+4. `os.Rename` temp file (atomic on Windows and Linux)
+5. Sync parent directory
 
 **Limitations (current):**
-- No fsync guarantee (OS handles flushing)
-- Corrupted file requires manual recovery
-- No concurrent write protection beyond mutex
-- No schema migration tests
+- No fsync guarantee on all platforms (OS handles flushing)
+- Corrupted file recovers from `.bak` automatically
+- Concurrent write protection beyond mutex — WIP
+- Schema migration tests — in progress
 
 **Planned improvements:**
-- Transactional backup before each write
-- fsync after rename
-- Automatic recovery from `.bak` on corruption
+- fsync after rename on all platforms
 - Consider SQLite for v1.0 (still single-binary)
 
 ### Logging
 
-Process logs are stored per-instance via `process.Manager` ring buffer (up to 10000 entries per instance). Access via:
-- Real-time SSE streaming (`/api/v1/logs/stream`)
-- Filtering by instance stream, search substring, time range
-- Pagination (page/page_size)
+Process logs are stored per-instance via `process.LogStore` ring buffer (up to 10000 entries per instance). Access via:
+- Real-time SSE streaming (`GET /api/v1/logs/stream`) — multi-instance LogBroker
+- Filtering by stream, search, time range, instance_id
+- Pagination (page/page_size) — aggregated after merging logs from all instances
+- `GET /api/v1/logs` — QueryLogs with instance_id filter
 
-Note: Legacy `/api/v1/logs/stream` and `/api/v1/status` still read from the first process manager. Per-instance log endpoints are planned.
+LogBroker (`process.LogBroker`) provides:
+- Subscription to logs from all running instances
+- Filtering by instance_id
+- Safe idempotent subscription cancellation
+- Drop oldest policy for slow subscribers
+- Correct shutdown behavior
+
+Legacy `/api/v1/status` still reads from the first process manager. Per-instance endpoints: `GET /api/v1/instances` and `GET /api/v1/instances/{id}`.
 
 ### Health Checks
 
@@ -283,6 +344,16 @@ See "Configuration hot-reload" section above for details.
 - `.env*` — environment secrets
 - `goal` — dev binary (not tracked in git)
 
-## Read before development
+## Known limitations v0.9
+
+- Hot-reload: not wired into main startup, WIP
+- SQLite storage: not implemented (JSON only)
+- ARM64: not tested
+- Auto-update: GitHub-based only
+- Full reattach to arbitrary PID: not implemented (stale detection only)
+- Audit logging: WIP (metrics available only)
+- Login rate limit: placeholder (not fully implemented)
+
+## Before development
 
 Review `AGENTS.md`, `BACKLOG.md`, `ROADMAP.md`, and `SUBAGENT_MASTER_PROMPT.md`.

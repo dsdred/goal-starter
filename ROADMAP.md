@@ -1,21 +1,57 @@
 # GoAl Roadmap
 
-## Iteration 1 — Reliable process core
+## Current: v0.9 Stabilization (Текущая итерация)
 
-Deliver a tested cross-platform Process Manager with explicit lifecycle ownership, exit classification, log capture, and child-process cleanup.
+Multi-instance supervisor architecture, LogBroker, QueryLogs aggregation, maxConcurrent CAS reservation, Snapshot model, recovery policy, JSON atomicity, hot-reload WIP, security audit.
 
-## Iteration 2 — Domain and storage
+### Deliverables этой итерации:
+- ✅ Multi-instance `Supervisor` с InstanceController
+- ✅ LogBroker — подписка на логи всех instances
+- ✅ QueryLogs — агрегированные логи с глобальной пагинацией
+- ✅ CAS reservation для maxConcurrent
+- ✅ Snapshot model для Safe concurrent access
+- ✅ Recovery policy: restorable/stale/orphaned
+- ✅ JSON repository atomic write + backup
+- ✅ CSRF protection, session security, rate limit
+- ✅ Hot-reload config (WIP: not wired into main)
+- ✅ CI: gofmt, vet, test -race, build (Windows+Linux), govulncheck
+- 📝 Обновлённая документация
 
-Stabilize Runtime, Model, Profile, application settings, schema versioning, validation, and atomic configuration persistence.
+## Next: v0.10 Release Hardening
 
-## Iteration 3 — HTTP API and minimal UI
+### P0 — Production readiness
+- [ ] SQLite storage (с сохранением single-binary)
+- [ ] Full reattach к произвольному PID
+- [ ] Hot-reload wired into main startup
+- [ ] Audit logging (полноценный, не только metrics)
+- [ ] Login rate limit fully implemented
+- [ ] fsync after rename на всех платформах
+- [ ] Transactional backup перед каждой записью
 
-Add profile CRUD, start/stop/restart/activate operations, status, log history, and live SSE logs.
+### P1 — Reliability
+- [ ] Comprehensive integration tests
+- [ ] Chaos testing for Supervisor recovery
+- [ ] Schema migration tests
+- [ ] Concurrent write protection tests
+- [ ] Windows/Linux-specific lifecycle tests
 
-## Iteration 4 — Security
+### P2 — Packaging
+- [ ] .deb/.rpm packages через CI pipeline
+- [ ] GPG signatures для всех артефактов
+- [ ] ARM64 builds и tests
+- [ ] Windows MSI installer (через WiX)
+- [ ] Release automation через GitHub Actions
 
-Add authentication, CSRF, secure sessions, rate limiting, path restrictions, and audit logging.
+## Future: v1.0
 
-## Iteration 5 — Packaging
+Production-ready single-binary manager for local AI runtimes with guaranteed data durability, comprehensive security model, and cross-platform support.
 
-Ship Windows and Linux binaries, Windows Service support, systemd unit, release automation, documentation, and upgrade guidance.
+### Requirements:
+- [ ] Все P0 features из v0.10
+- [ ] Performance benchmarks
+- [ ] Security audit (external)
+- [ ] Documentation complete and reviewed
+- [ ] All tests pass on Windows + Linux + ARM64
+- [ ] CI pipeline with release gating
+- [ ] Upgrade migration tooling
+- [ ] Changelog и release notes

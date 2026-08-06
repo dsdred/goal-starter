@@ -52,18 +52,75 @@
 
 ## ✅ P0 — Supervisor: multi-instance lifecycle (ЗАВЕРШЕНО)
 
-- [x] Supervisor управляет несколькими instances (process/supervisor.go)
-- [x] LogBroker — multi-instance логирование с подпиской (process/log_broker.go)
-- [x] SubscribeLogs — подписка с instance_id filter, безопасная отмена
+- [x] Supervisor управляет несколькими instances
+- [x] LogBroker — multi-instance логирование с подпиской
+- [x] SubscribeLogs — подписка с instance_id filter, безопасная отмена (idempotent cancel)
 - [x] QueryAggregatedLogs — объединение логов, сортировка DESC, pagination один раз
 - [x] InstanceController.Snapshot() — возврат копии (не mutable pointer)
-- [x] maxConcurrent — атомарная проверка и резервирование слота
-- [x] Restart без time.Sleep — использует done channel для synchronization
+- [x] maxConcurrent — атомарная CAS reservation
+- [x] Restart без time.Sleep — использует done channel
 - [x] Recovery — stale instance marking при запуске
 - [x] shutdown persistence — terminal states persist
-- [x] 18+ тестов для LogBroker, QueryAggregated, Supervisor concurrency
+- [x] 16+ тестов для LogBroker/LogStore (race-safe)
 
-## ✅ P1 — API improvements (ЧАСТИЧНО ЗАВЕРШЕНО)
+**Evidence:** `internal/process/supervisor.go`, `internal/process/log_store.go`, `internal/process/log_store_test.go`
+
+## ✅ P0 — Stabilization iteration (ЗАВЕРШЕНО, v0.9)
+
+### Исправления конкурентности:
+- [x] LogBroker: cancel idempotent, publish guard, shutdown-safe
+- [x] QueryLogs: instance_id filter ПОСЛЕ агрегации, global pagination, deterministic sort
+- [x] maxConcurrent: CAS reservation через atomic.Int64, race-free
+- [x] Snapshot model: все публичные методы возвращают копии
+
+### Persistence:
+- [x] Нет игнорирования ошибок repository
+- [x] JSON repository: atomic write, backup recovery, fsync
+
+### Архитектура:
+- [x] Все endpoints используют Supervisor
+- [x] InstanceStore — узкий persistence-specific интерфейс
+- [x] Application services связывают domain + Supervisor + repository
+
+### Recovery:
+- [x] Policy: restorable/stale/orphaned
+- [x] Terminal states persist reliably
+
+### Документация:
+- [x] README.md и README_RU.md синхронизированы
+- [x] Recovery policy documented
+- [x] Known limitations v0.9 documented
+- [x] Security defaults documented
+
+**Evidence:**
+- `internal/process/log_store.go` (cancel idempotent, publish guard)
+- `internal/process/supervisor.go` (CAS reservation, QueryLogs aggregation)
+- `docs/STABILIZATION_PLAN.md` (полный план и прогресс)
+
+## ⏭ TODO — Next iteration (v0.10)
+
+### P0 — Production readiness
+- [ ] SQLite storage (с сохранением single-binary)
+- [ ] Full reattach к произвольному PID
+- [ ] Hot-reload wired into main startup
+- [ ] Audit logging (полноценный, не только metrics)
+- [ ] Login rate limit fully implemented
+- [ ] fsync after rename на всех платформах
+- [ ] Transactional backup перед каждой записью
+
+### P1 — Reliability
+- [ ] Comprehensive integration tests
+- [ ] Chaos testing for Supervisor recovery
+- [ ] Schema migration tests
+- [ ] Concurrent write protection tests
+- [ ] Windows/Linux-specific lifecycle tests
+
+### P2 — Packaging
+- [ ] .deb/.rpm packages через CI pipeline
+- [ ] GPG signatures для всех артефактов
+- [ ] ARM64 builds и tests
+- [ ] Windows MSI installer (через WiX)
+- [ ] Release automation через GitHub Actions
 
 - [x] Version endpoint (GET /api/v1/version) — возвращает version, gitCommit, buildTime
 - [x] Health check endpoint (GET /api/v1/health) — базовый health check

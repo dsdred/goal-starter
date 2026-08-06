@@ -210,7 +210,10 @@ GoAl автоматически мигрирует конфигурацию пр
 - **Rate limiting** — 100 запросов в минуту на IP
 - **Login rate limit** — 5 попыток / 5 минут
 - **Request body size limit** — http.MaxBytesReader
-- **Default bind** — 127.0.0.1 (не все интерфейсы)
+- **Default bind** — 127.0.0.1 (все интерфейсы требуют явного config)
+- **Secret env vars** — `AdminPassword` очищается при сохранении
+- **External bind** — требует изменения `listenAddress` в конфиге
+- **Runtime path validation** — executable и working directory проверяются against allowed roots
 
 ## Архитектура
 
@@ -250,7 +253,12 @@ GoAl использует multi-instance `Supervisor` который управ�
 
 SysProcAttr убран из `CommandSpec` — платформенная настройка выполняется через `platform.Prepare`.
 
-### Recovery при запуске
+### Recovery Policy
+
+- **Restorable**: PID существует, identity совпадает, pipes owned → restore state `running`
+- **Stale**: PID существует, но identity mismatch или pipes lost → state `stale`
+- **Orphaned**: PID reused another process → state `orphaned`
+- **Terminal states**: persist reliably via `RemoveTerminal()`
 
 При запуске Supervisor:
 1. Загружает все `LaunchInstanceEntry` из repository
@@ -344,6 +352,16 @@ Legacy `/api/v1/status` удалён. Переход на `GET /api/v1/instances
 - `*.log`, `*.tmp`, `*.bak` — временные файлы
 - `*.exe` — скомпилированные бинарники (кроме корневого `goal.exe`)
 - `.env*` — секреты окружения
+
+## Известные ограничения v0.9
+
+- Hot-reload: не подключён в main startup, WIP
+- SQLite storage: не реализован (только JSON)
+- ARM64: не протестирован
+- Auto-update: только через GitHub Releases
+- Full reattach к произвольному PID: не реализован (только stale detection)
+- Audit logging: WIP (доступны только metrics)
+- Login rate limit: placeholder (не полностью реализован)
 
 ## Перед началом разработки
 
