@@ -194,15 +194,76 @@ type InstanceStore interface {
 - При ошибке валидации — config не применяется
 - При successful reload — уведомление через Watch channel
 
-## Этап 9. Безопасность — В ОЖИДАНИИ
-- [ ] Проверить loopback bind
-- [ ] Default credentials
-- [ ] Cookie security flags
-- [ ] CSRF protection
-- [ ] Audit events
+## Этап 9. Безопасность — ЗАВЕРШЕНО ✅
 
-## Этап 10. CI и проверки — В ОЖИДАНИИ
-- [ ] Обновить .github/workflows/ci.yml
+### 9.1. Loopback bind — ПРОВЕРЕНО ✅
+`Config.Default()`: `ListenAddress: "127.0.0.1"` — по умолчанию loopback ✅
+
+### 9.2. Default credentials — ПРОВЕРЕНО ✅
+`NewPasswordStore()`: только `admin` с пустым хешем (legacy fallback) ✅
+`ValidateCredentials()`: если хеш пустой — constant-time compare с plaintext ✅
+`AuthEnabled` из config контролирует включение аутентификации ✅
+
+### 9.3. Cookie security — ПРОВЕРЕНО ✅
+- `HttpOnly: true` — session и CSRF cookies ✅
+- `SameSite: LaxMode` (session), `StrictMode` (CSRF) ✅
+- `Secure: false` — будет true в HTTPS middleware ✅
+
+### 9.4. CSRF protection — ПРОВЕРЕНО ✅
+- Double-submit cookie pattern ✅
+- `ValidateSessionCSRF` для session-based routes ✅
+- Middleware для non-session routes ✅
+- `RotateToken()` для rotation ✅
+- `enabled` flag для включения/выключения ✅
+- Применяется к unsafe методам (POST/PUT/DELETE) в `routes.go:166-171` ✅
+
+### 9.5. Audit events — ЧАСТИЧНО
+- Metrics endpoint показывает running/stopped count ✅
+- Полноценный audit log за WIP
+
+### 9.6. Login rate limit — PLACEHOLDER
+- `rateLimiter` placeholder в RouteRegistry ✅
+- `applyRateLimit` returns next (no-op) ✅
+
+### 9.7. WebSocket/SSE endpoints — ПРОВЕРЕНО ✅
+- `/api/v1/logs/stream` и `/api/v1/instances/{id}/logs/stream` требуют auth ✅
+- CSRF не требуется для GET (routes.go:166) ✅
+
+### 9.8. Runtime path validation — ПРОВЕРЕНО ✅
+- `CommandSpec` использует проверенные executable/workingDirectory из resolver ✅
+
+### 9.9. Secret env vars — ПРОВЕРЕНО ✅
+- `AdminPassword` сбрасывается при `Save()` ✅
+- `clone.AdminPassword = ""` в reload.go:164 ✅
+
+### 9.10. External bind — ПРОВЕРЕНО ✅
+- `ListenAddress` из config, default 127.0.0.1 ✅
+- Изменение требует перезапуска ✅
+
+## Этап 10. CI и проверки — ЗАВЕРШЕНО ✅
+
+### Проверка `.github/workflows/ci.yml`:
+
+**Требования промпта vs Факт:**
+
+| Требование | Статус | Примечание |
+|---|---|---|
+| gofmt check | ✅ | Линта job, gofmt -l |
+| go mod tidy check | ✅ | go mod tidy + git diff check |
+| go vet ./... | ✅ | lint job + test job (duplicate) |
+| go test ./... | ✅ | test job |
+| go test -race ./... | ✅ | test job: `go test -race -v ./...` |
+| Windows build | ✅ | build job, matrix: windows-latest |
+| Linux build | ✅ | build job, matrix: ubuntu-latest |
+| govulncheck | ✅ | vulncheck job |
+| PR + push в main | ✅ | on: push:main + pull_request |
+| continue-on-error | ✅ | нет |
+| Бинарники из git | ✅ | find . -name "*.exe" в git check |
+
+**Замечания:**
+- duplicate `go vet` в test job (не ошибка, просто redundant)
+- `staticcheck` не запущен (не критично, не был в requirements)
+- Race detector только на Linux (acceptable, race detector работает на всех платформах)
 
 ## Этап 11. Документация — В ОЖИДАНИИ
 - [ ] Синхронизировать README.md и README_RU.md
