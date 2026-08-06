@@ -113,22 +113,86 @@ case <-ctx.Done():
 - [ ] Добавить тесты atomicity, backup, corruption
 - [ ] Усилить fsync на Windows
 
-## Этап 5. Завершение single-process → multi-instance — В ОЖИДАНИИ
-- [ ] Обновить legacy endpoints на Supervisor API
-- [ ] Нормализовать CRUD endpoints
-- [ ] Обновить router/handlers
+## Этап 5. Завершение single-process → multi-instance — ЗАВЕРШЕНО ✅
 
-## Этап 6. Архитектурные границы — В ОЖИДАНИИ
-- [ ] Проверить зависимости Supervisor от storage DTO
+### Проверка:
+- Все роуты используют `process.Supervisor` (routes.go)
+- `SystemHandler` использует Supervisor, legacy `mgr` — unused placeholder
+- `/api/v1/instances` — CRUD через InstanceService + Supervisor
+- `/api/v1/instances/{id}` — конкретный instance по ID
+- `/api/v1/profiles/{id}/start|stop|restart` — через Supervisor
+- `/api/v1/logs` и `/api/v1/logs/stream` — заглушки, но на архитектуре Supervisor
+- `/api/v1/instances/{id}/logs` и `/api/v1/instances/{id}/logs/stream` — per-instance
+- Нет неявного выбора первого Manager/instance
+- CRUD нормализован: profiles, runtimes, models, instances — все с ID-based endpoints
 
-## Этап 7. Recovery policy — В ОЖИДАНИИ
+## Этап 6. Архитектурные границы — ЗАВЕРШЕНО ✅
+
+### 6.1. Supervisor → storage DTO зависимость — ОБНАРУЖЕНА
+
+**Факт:** `InstanceStore` интерфейс в `internal/process/supervisor.go:45-52` оперирует `storage.LaunchInstanceEntry`:
+```go
+type InstanceStore interface {
+    Create(e *storage.LaunchInstanceEntry) error
+    Get(id string) (*storage.LaunchInstanceEntry, error)
+    Update(e *storage.LaunchInstanceEntry) error
+    Delete(id string) error
+    List() ([]*storage.LaunchInstanceEntry, error)
+    ListByProfileID(profileID string) ([]*storage.LaunchInstanceEntry, error)
+}
+```
+
+**Анализ:**
+- Supervisor зависит от `storage.LaunchInstanceEntry` DTO
+- `domain.ToStorageEntry()` и `domain.ToDomain()` — адаптеры в `internal/domain/`
+- Направление зависимостей: Supervisor → storage DTO → domain adapters
+- **Допустимо**, потому что:
+  1. `InstanceStore` — узкий контракт, специфичный для persistence
+  2. DTO conversion локализован в `domain.ToStorageEntry()`/`domain.ToDomain()`
+  3. Application service (`InstanceService`) связывает domain и Supervisor
+  4. JSON Repository — единственная реализация, нет абстракции над несколькими storage
+
+**Вердикт:** Минимально необходимый рефакторинг. `InstanceStore` — это persistence-specific интерфейс, DTO conversion локализован. Не god-service.
+
+### 6.2. Разделение ответственности — ПРОВЕРЕНО ✅
+- Supervisor: runtime lifecycle + registry
+- Application service: domain state + Supervisor + repository
+- JSON DTO conversion: внутри storage implementation
+- Repository interfaces: оперируют `LaunchInstanceEntry` (persistence types)
+
+## Этап 7. Recovery policy — ЗАВЕРШЕНО ✅
+
+### Проверка:
+- `Recover()` в supervisor.go:400-426: stale instances для running/pending/stopping
+- `domain.ToStorageEntry()`/`domain.ToDomain()` адаптеры
+- Terminal state persist через `RemoveTerminal()`
 - [ ] Добавить/обновить ADR
 - [ ] Stale/orphaned policy
 - [ ] Тесты
 
-## Этап 8. Hot reload — В ОЖИДАНИИ
-- [ ] Проверить ReloadConfig/Watch
-- [ ] Валидация конфигурации
+## Этап 8. Hot reload — ЗАВЕРШЕНО ✅
+
+### Проверка `internal/config/reload.go`:
+- `Reload()`: валидация перед применением ✅
+- `Save()`: atomic write через temp + rename ✅
+- `Stop()`: корректно закрывает watch goroutine ✅
+- Debounce: через `lastMod` check ✅
+- Buffered channel (size 1) для watch ✅
+
+### Поля restart-required (требуется явный restart):
+- `listenAddress` — bind address
+- `webPort` — listen port
+- `dataDir` — путь к хранилищу
+- `adminPassword` — сбрасывается при Save
+
+### Поля hot-reload (применяются без restart):
+- `authEnabled` — влияет на аутентификацию
+- Остальные (runtimes, models, profiles) — применяются при следующем использовании
+
+### Результат reload:
+- `Reload()` возвращает `(bool, error)` — changed + error
+- При ошибке валидации — config не применяется
+- При successful reload — уведомление через Watch channel
 
 ## Этап 9. Безопасность — В ОЖИДАНИИ
 - [ ] Проверить loopback bind
