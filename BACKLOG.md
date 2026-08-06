@@ -50,6 +50,19 @@
 - [x] Escape HTML для безопасности
 - [x] SSE log stream с клиентской фильтрацией
 
+## ✅ P0 — Supervisor: multi-instance lifecycle (ЗАВЕРШЕНО)
+
+- [x] Supervisor управляет несколькими instances (process/supervisor.go)
+- [x] LogBroker — multi-instance логирование с подпиской (process/log_broker.go)
+- [x] SubscribeLogs — подписка с instance_id filter, безопасная отмена
+- [x] QueryAggregatedLogs — объединение логов, сортировка DESC, pagination один раз
+- [x] InstanceController.Snapshot() — возврат копии (не mutable pointer)
+- [x] maxConcurrent — атомарная проверка и резервирование слота
+- [x] Restart без time.Sleep — использует done channel для synchronization
+- [x] Recovery — stale instance marking при запуске
+- [x] shutdown persistence — terminal states persist
+- [x] 18+ тестов для LogBroker, QueryAggregated, Supervisor concurrency
+
 ## ✅ P1 — API improvements (ЧАСТИЧНО ЗАВЕРШЕНО)
 
 - [x] Version endpoint (GET /api/v1/version) — возвращает version, gitCommit, buildTime
