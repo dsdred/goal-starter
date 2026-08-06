@@ -151,16 +151,23 @@ func (s *LogStore) Count() int {
 	return len(s.events)
 }
 
-// CollectAll returns all events as AggregatedLogEntry.
+// CollectAll returns all events as AggregatedLogEntry (without InstanceID).
 func (s *LogStore) CollectAll() []AggregatedLogEntry {
+	return s.CollectAllWithInstanceID("")
+}
+
+// CollectAllWithInstanceID returns all events as AggregatedLogEntry with
+// the given instanceID attached to each entry.
+func (s *LogStore) CollectAllWithInstanceID(instanceID string) []AggregatedLogEntry {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	entries := make([]AggregatedLogEntry, 0, len(s.events))
 	for _, event := range s.events {
 		entries = append(entries, AggregatedLogEntry{
-			Timestamp: event.Time,
-			Stream:    event.Stream,
-			Message:   event.Message,
+			InstanceID: instanceID,
+			Timestamp:  event.Time,
+			Stream:     event.Stream,
+			Message:    event.Message,
 		})
 	}
 	return entries
@@ -217,6 +224,8 @@ type logSubscriber struct {
 	ch         chan LogStreamEvent
 	instanceID string
 	cancelled  atomic.Bool
+	closed     atomic.Bool // true after Cancel completes
+	closeOnce  sync.Once   // ensures channel is closed exactly once
 }
 
 // NewLogBroker creates a new LogBroker.
@@ -266,22 +275,28 @@ func (b *LogBroker) Publish(ev LogStreamEvent) {
 
 	dropped := 0
 	for _, ls := range subs {
-		if ls.cancelled.Load() {
+		if ls.cancelled.Load() || ls.closed.Load() {
 			continue
 		}
 		// Filter by instanceID if subscriber has a filter.
 		if ls.instanceID != "" && ev.InstanceID != ls.instanceID {
 			continue
 		}
-		select {
-		case ls.ch <- ev:
-		default:
-			dropped++
-			if b.policy == slowSubscriberDrop {
-				ls.cancelled.Store(true)
-				close(ls.ch)
+		func() {
+			defer func() {
+				recover() // ignore send on closed channel race
+			}()
+			select {
+			case ls.ch <- ev:
+			default:
+				dropped++
+				if b.policy == slowSubscriberDrop {
+					ls.cancelled.Store(true)
+					ls.closed.Store(true)
+					close(ls.ch)
+				}
 			}
-		}
+		}()
 	}
 
 	if dropped > 0 {
@@ -312,19 +327,45 @@ func (s *LogSubscription) Done() <-chan struct{} {
 	return s.done
 }
 
-// Cancel safely cancels the subscription. Idempotent.
+// Cancel safely cancels the subscription. Idempotent and safe against concurrent publish.
 func (s *LogSubscription) Cancel() {
 	if s.lsub == nil {
+		close(s.done)
+		close(s.ch)
 		return
 	}
-	if s.lsub.cancelled.Swap(true) {
-		return // already cancelled
+	// Mark closed first so subsequent calls are no-op and concurrent Publish sees it.
+	if s.lsub.closed.Swap(true) {
+		// Already cancelled.
+		return
 	}
+	s.lsub.cancelled.Store(true)
+	// Close channel BEFORE removing from map — so concurrent Publish goroutines
+	// iterating the same slice will attempt to send on a closed channel. We guard
+	// with closeOnce to ensure single close.
+	s.lsub.closeOnce.Do(func() { close(s.ch) })
 	s.broker.mu.Lock()
 	delete(s.broker.subscribers, s.lsub)
 	s.broker.mu.Unlock()
 	close(s.done)
-	close(s.ch)
+}
+
+// Shutdown closes all subscriber channels and clears the subscriber map.
+// Called during Supervisor shutdown to prevent goroutine/channel leaks.
+func (b *LogBroker) Shutdown() {
+	b.mu.Lock()
+	subs := make([]*logSubscriber, 0, len(b.subscribers))
+	for ls := range b.subscribers {
+		subs = append(subs, ls)
+	}
+	b.subscribers = make(map[*logSubscriber]struct{})
+	b.mu.Unlock()
+
+	for _, ls := range subs {
+		ls.closed.Store(true)
+		ls.cancelled.Store(true)
+		close(ls.ch)
+	}
 }
 
 // ===== Multi-instance log aggregation for QueryLogs =====

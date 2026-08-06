@@ -130,8 +130,7 @@ func RuntimeToDomain(id, name, executable, workingDir string, defaultArgs []stri
 }
 
 // Start creates a new launch instance and starts its process.
-// Atomically checks concurrency limit and reserves a slot under write lock
-// to prevent race between counting and reservation.
+// Atomically checks concurrency limit and reserves a slot to prevent race.
 func (s *Supervisor) Start(ctx context.Context, profile *domain.Profile, runtime *domain.Runtime, model *domain.Model, customArgs []string, customEnv map[string]string) (*domain.LaunchInstance, error) {
 	inst, err := s.resolver.ResolveToInstance(profile, runtime, model, customArgs, customEnv)
 	if err != nil {
@@ -140,18 +139,29 @@ func (s *Supervisor) Start(ctx context.Context, profile *domain.Profile, runtime
 
 	// Atomically check concurrency limit and reserve a slot.
 	if s.maxConcurrent > 0 {
-		s.mu.Lock()
-		activeCount := 0
-		for _, ic := range s.instances {
-			if ic.IsRunning() {
-				activeCount++
+		for {
+			s.mu.Lock()
+			activeCount := 0
+			for _, ic := range s.instances {
+				if ic.IsRunning() {
+					activeCount++
+				}
 			}
-		}
-		if activeCount >= s.maxConcurrent {
+			if activeCount >= s.maxConcurrent {
+				s.mu.Unlock()
+				return nil, fmt.Errorf("maximum concurrent instances (%d) reached", s.maxConcurrent)
+			}
+			// Reserve: tryCAS will atomically increment, back off on failure.
+			reserved := s.reservations.Add(1)
+			if reserved <= int64(s.maxConcurrent) {
+				s.mu.Unlock()
+				break
+			}
+			s.reservations.Add(-1) // undo
 			s.mu.Unlock()
-			return nil, fmt.Errorf("maximum concurrent instances (%d) reached", s.maxConcurrent)
+			// Brief wait before retry to avoid tight spin.
+			time.Sleep(time.Millisecond)
 		}
-		s.mu.Unlock()
 	}
 
 	// Persist initial pending instance.
@@ -353,27 +363,32 @@ func (s *Supervisor) SubscribeLogs(instanceID string) *LogSubscription {
 }
 
 // QueryLogs performs a filtered, paginated log query across all instances.
+// Entries are sorted DESC by timestamp, then ASC by instance ID for determinism.
+// Pagination is applied once after aggregation (not per-instance).
 func (s *Supervisor) QueryLogs(q LogQuery, instanceIDFilter string) *LogResult {
-	// Collect all logs from all instance controllers.
 	var allEntries []AggregatedLogEntry
 	s.mu.RLock()
 	for _, ctrl := range s.instances {
 		if ctrl.manager != nil {
 			logStore := ctrl.manager.GetLogStore()
 			if logStore != nil {
-				entries := logStore.CollectAll()
-				for _, e := range entries {
-					if instanceIDFilter != "" {
-						if ctrl.instanceID != domain.InstanceID(instanceIDFilter) {
-							continue
-						}
-					}
-					allEntries = append(allEntries, e)
-				}
+				entries := logStore.CollectAllWithInstanceID(string(ctrl.instanceID))
+				allEntries = append(allEntries, entries...)
 			}
 		}
 	}
 	s.mu.RUnlock()
+
+	// Apply instanceID filter after aggregation.
+	if instanceIDFilter != "" {
+		var filtered []AggregatedLogEntry
+		for _, e := range allEntries {
+			if e.InstanceID == instanceIDFilter {
+				filtered = append(filtered, e)
+			}
+		}
+		allEntries = filtered
+	}
 
 	return QueryAggregatedLogs(allEntries, q)
 }
