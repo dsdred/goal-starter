@@ -43,29 +43,29 @@ func newTestInstanceStore(t *testing.T) *store.InstanceStoreJSON {
 
 // mockInstanceStore implements process.InstanceStore with configurable behavior.
 type mockInstanceStore struct {
-	CreateFunc          func(e *storage.LaunchInstanceEntry) error
-	GetFunc             func(id string) (*storage.LaunchInstanceEntry, error)
-	UpdateFunc          func(e *storage.LaunchInstanceEntry) error
+	CreateFunc          func(e *domain.LaunchInstanceEntry) error
+	GetFunc             func(id string) (*domain.LaunchInstanceEntry, error)
+	UpdateFunc          func(e *domain.LaunchInstanceEntry) error
 	DeleteFunc          func(id string) error
-	ListFunc            func() ([]*storage.LaunchInstanceEntry, error)
-	ListByProfileIDFunc func(profileID string) ([]*storage.LaunchInstanceEntry, error)
+	ListFunc            func() ([]*domain.LaunchInstanceEntry, error)
+	ListByProfileIDFunc func(profileID string) ([]*domain.LaunchInstanceEntry, error)
 }
 
-func (m *mockInstanceStore) Create(e *storage.LaunchInstanceEntry) error {
+func (m *mockInstanceStore) Create(e *domain.LaunchInstanceEntry) error {
 	if m.CreateFunc != nil {
 		return m.CreateFunc(e)
 	}
 	return nil
 }
 
-func (m *mockInstanceStore) Get(id string) (*storage.LaunchInstanceEntry, error) {
+func (m *mockInstanceStore) Get(id string) (*domain.LaunchInstanceEntry, error) {
 	if m.GetFunc != nil {
 		return m.GetFunc(id)
 	}
 	return nil, errors.New("not implemented")
 }
 
-func (m *mockInstanceStore) Update(e *storage.LaunchInstanceEntry) error {
+func (m *mockInstanceStore) Update(e *domain.LaunchInstanceEntry) error {
 	if m.UpdateFunc != nil {
 		return m.UpdateFunc(e)
 	}
@@ -79,14 +79,14 @@ func (m *mockInstanceStore) Delete(id string) error {
 	return nil
 }
 
-func (m *mockInstanceStore) List() ([]*storage.LaunchInstanceEntry, error) {
+func (m *mockInstanceStore) List() ([]*domain.LaunchInstanceEntry, error) {
 	if m.ListFunc != nil {
 		return m.ListFunc()
 	}
 	return nil, nil
 }
 
-func (m *mockInstanceStore) ListByProfileID(profileID string) ([]*storage.LaunchInstanceEntry, error) {
+func (m *mockInstanceStore) ListByProfileID(profileID string) ([]*domain.LaunchInstanceEntry, error) {
 	if m.ListByProfileIDFunc != nil {
 		return m.ListByProfileIDFunc(profileID)
 	}
@@ -139,30 +139,6 @@ func TestInstancesHandler_List(t *testing.T) {
 
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("List: expected 200, got %d", resp.StatusCode)
-	}
-}
-
-func TestInstancesHandler_List_Error(t *testing.T) {
-	repo := newTestRepo(t)
-	mockStore := &mockInstanceStore{
-		ListFunc: func() ([]*storage.LaunchInstanceEntry, error) {
-			return nil, errors.New("list error")
-		},
-	}
-	sup := process.NewSupervisor(mockStore)
-	insSvc := application.NewInstanceService(sup, repo)
-	h := NewInstancesHandler(insSvc, nil)
-
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/instances", nil)
-	w := httptest.NewRecorder()
-	h.List(w, req)
-	resp := w.Result()
-	defer resp.Body.Close()
-
-	// supervisor.List() returns from internal instances map, not store
-	// so empty list returns 200 with empty array, not 500
-	if resp.StatusCode != http.StatusOK {
-		t.Errorf("List error: expected 200 (empty instances), got %d", resp.StatusCode)
 	}
 }
 

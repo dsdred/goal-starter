@@ -262,6 +262,8 @@ func (b *LogBroker) Subscribe(instanceID string) *LogSubscription {
 }
 
 // Publish sends a log event to matching subscribers.
+// Safe for concurrent use. Uses closed flag as first gate and recover() as
+// second gate for the narrow window between snapshot-iteration and Cancel().
 func (b *LogBroker) Publish(ev LogStreamEvent) {
 	seq := b.seq.Add(1)
 	ev.Sequence = seq
@@ -275,7 +277,8 @@ func (b *LogBroker) Publish(ev LogStreamEvent) {
 
 	dropped := 0
 	for _, ls := range subs {
-		if ls.cancelled.Load() || ls.closed.Load() {
+		// Fast path: skip already-cancelled/closed subscribers.
+		if ls.closed.Load() {
 			continue
 		}
 		// Filter by instanceID if subscriber has a filter.
@@ -284,15 +287,22 @@ func (b *LogBroker) Publish(ev LogStreamEvent) {
 		}
 		func() {
 			defer func() {
-				recover() // ignore send on closed channel race
+				recover() // second gate: catch send-on-closed-channel in the narrow race window
 			}()
+			// Re-check cancelled inside the closure (after lock release).
+			if ls.cancelled.Load() {
+				return
+			}
 			select {
 			case ls.ch <- ev:
 			default:
 				dropped++
 				if b.policy == slowSubscriberDrop {
 					ls.cancelled.Store(true)
-					ls.closed.Store(true)
+					if ls.closed.Swap(true) {
+						// Already closed by concurrent Cancel/Shutdown.
+						return
+					}
 					close(ls.ch)
 				}
 			}
@@ -311,10 +321,11 @@ func (b *LogBroker) DroppedEvents() uint64 {
 
 // LogSubscription represents an active log subscription.
 type LogSubscription struct {
-	ch     chan LogStreamEvent
-	done   chan struct{}
-	broker *LogBroker
-	lsub   *logSubscriber
+	closeOnce sync.Once
+	ch        chan LogStreamEvent
+	done      chan struct{}
+	broker    *LogBroker
+	lsub      *logSubscriber
 }
 
 // Channel returns the log subscription channel.
@@ -330,8 +341,10 @@ func (s *LogSubscription) Done() <-chan struct{} {
 // Cancel safely cancels the subscription. Idempotent and safe against concurrent publish.
 func (s *LogSubscription) Cancel() {
 	if s.lsub == nil {
-		close(s.done)
-		close(s.ch)
+		s.closeOnce.Do(func() {
+			close(s.done)
+			close(s.ch)
+		})
 		return
 	}
 	// Mark closed first so subsequent calls are no-op and concurrent Publish sees it.
@@ -352,6 +365,7 @@ func (s *LogSubscription) Cancel() {
 
 // Shutdown closes all subscriber channels and clears the subscriber map.
 // Called during Supervisor shutdown to prevent goroutine/channel leaks.
+// Uses closeOnce on each subscriber to prevent double-close with concurrent Cancel().
 func (b *LogBroker) Shutdown() {
 	b.mu.Lock()
 	subs := make([]*logSubscriber, 0, len(b.subscribers))
@@ -364,7 +378,7 @@ func (b *LogBroker) Shutdown() {
 	for _, ls := range subs {
 		ls.closed.Store(true)
 		ls.cancelled.Store(true)
-		close(ls.ch)
+		ls.closeOnce.Do(func() { close(ls.ch) })
 	}
 }
 

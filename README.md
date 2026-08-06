@@ -103,13 +103,11 @@ Status: **WIP** — reload coordinator and restart-required reporting planned.
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/` | Web dashboard |
-| GET | `/api/v1/status` | Process status (legacy) |
-| GET | `/api/v1/health` | Health check (stub) |
-| GET | `/api/v1/version` | Version and metadata |
+| GET | `/api/v1/health` | Health check |
 | GET | `/api/v1/metrics` | Application metrics |
-| GET | `/api/v1/logs/stream` | SSE log stream |
-| GET | `/api/v1/logs/query` | Log filtering and pagination |
 | GET | `/api/v1/migration/status` | Migration status |
+
+> `/api/v1/status` removed. Use `GET /api/v1/instances` and `GET /api/v1/instances/{id}`.
 
 ### Instance Management
 
@@ -167,12 +165,14 @@ Profile is a launch template, not a process.
 | PUT | `/api/v1/models/` | Update model |
 | DELETE | `/api/v1/models/` | Delete model |
 
-### SSE / WebSocket
+### Logs
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/api/v1/logs/stream` | SSE log stream |
-| GET | `/api/v1/logs/query` | Log filtering and pagination |
+| GET | `/api/v1/logs/stream` | SSE log stream (stub) |
+| GET | `/api/v1/logs` | QueryLogs with instance_id filter (stub) |
+| GET | `/api/v1/instances/{id}/logs` | Logs for specific instance (stub) |
+| GET | `/api/v1/instances/{id}/logs/stream` | SSE instance logs (stub) |
 | GET | `/ws` | WebSocket log stream (WIP) |
 
 ### Structured API errors
@@ -289,6 +289,7 @@ Process logs are stored per-instance via `process.LogStore` ring buffer (up to 1
 - Filtering by stream, search, time range, instance_id
 - Pagination (page/page_size) — aggregated after merging logs from all instances
 - `GET /api/v1/logs` — QueryLogs with instance_id filter
+- `GET /api/v1/instances/{id}/logs` — Logs for specific instance
 
 LogBroker (`process.LogBroker`) provides:
 - Subscription to logs from all running instances
@@ -297,7 +298,7 @@ LogBroker (`process.LogBroker`) provides:
 - Drop oldest policy for slow subscribers
 - Correct shutdown behavior
 
-Legacy `/api/v1/status` still reads from the first process manager. Per-instance endpoints: `GET /api/v1/instances` and `GET /api/v1/instances/{id}`.
+Legacy `/api/v1/status` removed. Use `GET /api/v1/instances` and `GET /api/v1/instances/{id}` instead.
 
 ### Health Checks
 
@@ -353,6 +354,7 @@ See "Configuration hot-reload" section above for details.
 - Full reattach to arbitrary PID: not implemented (stale detection only)
 - Audit logging: WIP (metrics available only)
 - Login rate limit: placeholder (not fully implemented)
+- Logs API: `/api/v1/logs`, `/api/v1/logs/stream` — stubs (not implemented)
 
 ## Before development
 

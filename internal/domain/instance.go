@@ -1,10 +1,6 @@
 package domain
 
-import (
-	"time"
-
-	"github.com/dsdred/goal/internal/storage"
-)
+import "time"
 
 // InstanceID uniquely identifies a launch instance.
 type InstanceID string
@@ -131,13 +127,13 @@ func (i *LaunchInstance) EnvironmentToList() []string {
 	return result
 }
 
-// ToStorageEntry converts domain.LaunchInstance to storage.LaunchInstanceEntry.
-func ToStorageEntry(i *LaunchInstance) *storage.LaunchInstanceEntry {
+// ToStorageEntry converts domain.LaunchInstance to domain.LaunchInstanceEntry.
+func ToStorageEntry(i *LaunchInstance) *LaunchInstanceEntry {
 	exitCode := 0
 	if i.ExitCode != nil {
 		exitCode = *i.ExitCode
 	}
-	return &storage.LaunchInstanceEntry{
+	return &LaunchInstanceEntry{
 		ID:               string(i.ID),
 		ProfileID:        i.ProfileID,
 		RuntimeID:        i.RuntimeID,
@@ -158,8 +154,8 @@ func ToStorageEntry(i *LaunchInstance) *storage.LaunchInstanceEntry {
 	}
 }
 
-// ToDomain converts storage.LaunchInstanceEntry to domain.LaunchInstance.
-func ToDomain(e *storage.LaunchInstanceEntry) *LaunchInstance {
+// ToDomain converts LaunchInstanceEntry to domain.LaunchInstance.
+func ToDomain(e *LaunchInstanceEntry) *LaunchInstance {
 	exitCode := e.ExitCode
 	var exitCodePtr *int
 	if exitCode != 0 {

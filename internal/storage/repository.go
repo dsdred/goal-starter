@@ -10,7 +10,13 @@ import (
 	"runtime"
 	"sync"
 	"time"
+
+	"github.com/dsdred/goal/internal/domain"
 )
+
+// LaunchInstanceEntry is an alias for domain.LaunchInstanceEntry.
+// All persistence layers use this type for JSON serialization.
+type LaunchInstanceEntry = domain.LaunchInstanceEntry
 
 // RuntimeEntry represents a runtime definition.
 type RuntimeEntry struct {
@@ -48,27 +54,6 @@ type ProfileEntry struct {
 	Active      bool              `json:"active"`
 	CreatedAt   time.Time         `json:"created_at"`
 	UpdatedAt   time.Time         `json:"updated_at"`
-}
-
-// LaunchInstanceEntry represents a persisted launch instance.
-type LaunchInstanceEntry struct {
-	ID               string            `json:"id"`
-	ProfileID        string            `json:"profile_id"`
-	RuntimeID        string            `json:"runtime_id"`
-	ModelID          string            `json:"model_id,omitempty"`
-	Executable       string            `json:"executable,omitempty"`
-	Args             []string          `json:"args,omitempty"`
-	WorkingDirectory string            `json:"working_directory,omitempty"`
-	Environment      map[string]string `json:"environment,omitempty"`
-	State            string            `json:"state"`
-	PID              int               `json:"pid,omitempty"`
-	ExitCode         int               `json:"exit_code,omitempty"`
-	ExitClass        string            `json:"exit_class,omitempty"`
-	LastError        string            `json:"last_error,omitempty"`
-	StartedAt        time.Time         `json:"started_at,omitempty"`
-	StoppedAt        time.Time         `json:"stopped_at,omitempty"`
-	CreatedAt        time.Time         `json:"created_at"`
-	UpdatedAt        time.Time         `json:"updated_at"`
 }
 
 // InstanceStore is a minimal interface for instance operations needed by supervisor.
@@ -289,11 +274,13 @@ func (r *JSONRepository) saveLocked() error {
 	}
 
 	// Save previous good version as .bak if it exists.
+	// Contract: if main file exists, backup MUST succeed — this ensures we can
+	// recover from corruption. If backup fails, the main file is not replaced.
 	if _, err := os.Stat(r.filePath); err == nil {
 		bakPath := r.filePath + ".bak"
-		if copyErr := copyFile(r.filePath, bakPath); copyErr != nil {
-			// Don't fail if backup fails; continue with rename.
-			_ = copyErr
+		if err = copyFile(r.filePath, bakPath); err != nil {
+			_ = os.Remove(tmp)
+			return fmt.Errorf("create backup %s: %w", bakPath, err)
 		}
 	}
 

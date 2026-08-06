@@ -2,6 +2,7 @@ package process
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -9,7 +10,6 @@ import (
 	"time"
 
 	"github.com/dsdred/goal/internal/domain"
-	"github.com/dsdred/goal/internal/storage"
 )
 
 // SupervisorStatus describes the overall supervisor state.
@@ -37,18 +37,20 @@ type Supervisor struct {
 	store         InstanceStore
 	maxConcurrent int
 	reservations  atomic.Int64
+	semaphore     chan struct{} // buffered channel for concurrency limiting
 	lifecycleCtx  context.Context
 	broker        *LogBroker
 }
 
 // InstanceStore persists and retrieves launch instances.
+// Uses domain.LaunchInstanceEntry to avoid dependency on storage package.
 type InstanceStore interface {
-	Create(e *storage.LaunchInstanceEntry) error
-	Get(id string) (*storage.LaunchInstanceEntry, error)
-	Update(e *storage.LaunchInstanceEntry) error
+	Create(e *domain.LaunchInstanceEntry) error
+	Get(id string) (*domain.LaunchInstanceEntry, error)
+	Update(e *domain.LaunchInstanceEntry) error
 	Delete(id string) error
-	List() ([]*storage.LaunchInstanceEntry, error)
-	ListByProfileID(profileID string) ([]*storage.LaunchInstanceEntry, error)
+	List() ([]*domain.LaunchInstanceEntry, error)
+	ListByProfileID(profileID string) ([]*domain.LaunchInstanceEntry, error)
 }
 
 // SupervisorConfig holds configuration for Supervisor.
@@ -63,6 +65,7 @@ func NewSupervisor(store InstanceStore) *Supervisor {
 		instances: make(map[domain.InstanceID]*InstanceController),
 		resolver:  domain.NewLaunchResolver(),
 		store:     store,
+		semaphore: make(chan struct{}, 0),
 	}
 }
 
@@ -89,6 +92,7 @@ func NewSupervisorWithConfig(store InstanceStore, cfg SupervisorConfig) *Supervi
 	s := NewSupervisor(store)
 	if cfg.MaxConcurrent > 0 {
 		s.maxConcurrent = cfg.MaxConcurrent
+		s.semaphore = make(chan struct{}, cfg.MaxConcurrent)
 	}
 	if cfg.LogBufferSize > 0 {
 		s.broker = NewLogBroker(cfg.LogBufferSize)
@@ -129,38 +133,50 @@ func RuntimeToDomain(id, name, executable, workingDir string, defaultArgs []stri
 	}
 }
 
+// slotReservation is a token for a concurrency slot. Release() must be called
+// exactly once — via sync.Once — when the instance exits or is removed.
+type slotReservation struct {
+	releaseOnce sync.Once
+	supervisor  *Supervisor
+}
+
+// Release frees the concurrency slot. Safe to call exactly once.
+func (r *slotReservation) Release() {
+	r.releaseOnce.Do(func() {
+		r.supervisor.reservations.Add(-1)
+	})
+}
+
 // Start creates a new launch instance and starts its process.
-// Atomically checks concurrency limit and reserves a slot to prevent race.
+// Uses a buffered semaphore channel to atomically reserve a concurrency slot
+// and guarantee release on any exit path (start error, persistence error,
+// natural exit, stop, force kill, restart).
 func (s *Supervisor) Start(ctx context.Context, profile *domain.Profile, runtime *domain.Runtime, model *domain.Model, customArgs []string, customEnv map[string]string) (*domain.LaunchInstance, error) {
 	inst, err := s.resolver.ResolveToInstance(profile, runtime, model, customArgs, customEnv)
 	if err != nil {
 		return nil, fmt.Errorf("resolve instance: %w", err)
 	}
 
-	// Atomically check concurrency limit and reserve a slot.
+	// Create controller immediately (before reservation) so that RemoveTerminal
+	// can find it and persist its state even if reservation is not yet acquired.
+	ctrl := NewInstanceController(inst, s.store, s.resolver, s.broker)
+	ctrl.supervisorRef = s
+
+	s.mu.Lock()
+	s.instances[inst.ID] = ctrl
+	s.mu.Unlock()
+
+	// Acquire a concurrency slot via buffered channel. This blocks until a slot
+	// is available or ctx is cancelled.
 	if s.maxConcurrent > 0 {
-		for {
+		select {
+		case s.semaphore <- struct{}{}:
+			// Slot acquired.
+		case <-ctx.Done():
 			s.mu.Lock()
-			activeCount := 0
-			for _, ic := range s.instances {
-				if ic.IsRunning() {
-					activeCount++
-				}
-			}
-			if activeCount >= s.maxConcurrent {
-				s.mu.Unlock()
-				return nil, fmt.Errorf("maximum concurrent instances (%d) reached", s.maxConcurrent)
-			}
-			// Reserve: tryCAS will atomically increment, back off on failure.
-			reserved := s.reservations.Add(1)
-			if reserved <= int64(s.maxConcurrent) {
-				s.mu.Unlock()
-				break
-			}
-			s.reservations.Add(-1) // undo
+			delete(s.instances, inst.ID)
 			s.mu.Unlock()
-			// Brief wait before retry to avoid tight spin.
-			time.Sleep(time.Millisecond)
+			return nil, fmt.Errorf("acquire concurrency slot: %w", ctx.Err())
 		}
 	}
 
@@ -168,17 +184,17 @@ func (s *Supervisor) Start(ctx context.Context, profile *domain.Profile, runtime
 	if s.store != nil {
 		entry := domain.ToStorageEntry(inst)
 		if err := s.store.Create(entry); err != nil {
-			s.reservations.Add(-1)
+			if s.maxConcurrent > 0 {
+				<-s.semaphore // release slot
+			} else {
+				s.reservations.Add(-1)
+			}
+			s.mu.Lock()
+			delete(s.instances, inst.ID)
+			s.mu.Unlock()
 			return nil, fmt.Errorf("persist instance: %w", err)
 		}
 	}
-
-	// Create controller.
-	ctrl := NewInstanceController(inst, s.store, s.resolver, s.broker)
-
-	s.mu.Lock()
-	s.instances[inst.ID] = ctrl
-	s.mu.Unlock()
 
 	// Start process using the supervisor lifecycle context (not HTTP request ctx).
 	if err := ctrl.Start(s.lifecycleContext()); err != nil {
@@ -188,7 +204,11 @@ func (s *Supervisor) Start(ctx context.Context, profile *domain.Profile, runtime
 				slog.Error("failed to persist start error", "instance_id", string(inst.ID), "error", uerr)
 			}
 		}
-		s.reservations.Add(-1)
+		if s.maxConcurrent > 0 {
+			<-s.semaphore // release slot
+		} else {
+			s.reservations.Add(-1)
+		}
 		s.mu.Lock()
 		delete(s.instances, inst.ID)
 		s.mu.Unlock()
@@ -305,6 +325,7 @@ func (s *Supervisor) Shutdown(ctx context.Context) error {
 }
 
 // RemoveTerminal removes terminal instances from the active registry and persists state.
+// Returns an error if the terminal state could not be persisted.
 func (s *Supervisor) RemoveTerminal(id domain.InstanceID) error {
 	s.mu.Lock()
 	ctrl, ok := s.instances[id]
@@ -313,50 +334,89 @@ func (s *Supervisor) RemoveTerminal(id domain.InstanceID) error {
 	}
 	s.mu.Unlock()
 
-	if ok && s.store != nil {
+	if !ok {
+		return nil
+	}
+
+	if s.store != nil {
 		snap := ctrl.Snapshot()
-		err := s.store.Update(domain.ToStorageEntry(&snap))
-		if err != nil {
+		if err := s.store.Update(domain.ToStorageEntry(&snap)); err != nil {
 			slog.Error("failed to persist terminal instance", "instance_id", string(id), "error", err)
-			return err
+			s.mu.Lock()
+			s.instances[id] = ctrl
+			s.mu.Unlock()
+			return fmt.Errorf("persist terminal instance %s: %w", string(id), err)
 		}
+	}
+
+	// Always release reservation — either the instance was running or it was
+	// just created and never acquired a semaphore slot.
+	if s.maxConcurrent > 0 {
+		// Try drain; safe to drain a slot even if it wasn't acquired.
+		select {
+		case <-s.semaphore:
+		default:
+		}
+	} else {
 		s.reservations.Add(-1)
 	}
+
 	return nil
 }
 
 // ShutdownWithPersistence stops all active instances and persists terminal instances.
+// Returns an aggregated error if any persistence operation failed, while attempting
+// to persist all instances even if some fail.
 func (s *Supervisor) ShutdownWithPersistence(ctx context.Context) error {
 	// Stop all active instances.
-	if err := s.Shutdown(ctx); err != nil {
-		return err
-	}
+	shutdownErr := s.Shutdown(ctx)
 
 	// Persist terminal instances after shutdown.
+	var persistErrs []error
 	if s.store != nil {
 		s.mu.RLock()
 		for _, ctrl := range s.instances {
 			snap := ctrl.Snapshot()
 			if snap.IsTerminal() {
 				if err := s.store.Update(domain.ToStorageEntry(&snap)); err != nil {
-					slog.Error("failed to persist terminal instance during shutdown", "instance_id", string(snap.ID), "error", err)
+					persistErrs = append(persistErrs, fmt.Errorf("persist instance %s: %w", string(snap.ID), err))
 				}
 			}
 		}
 		s.mu.RUnlock()
 	}
 
-	return nil
+	// Combine shutdown and persistence errors.
+	var allErrs []error
+	if shutdownErr != nil {
+		allErrs = append(allErrs, fmt.Errorf("shutdown instances: %w", shutdownErr))
+	}
+	if len(persistErrs) > 0 {
+		allErrs = append(allErrs, fmt.Errorf("persist terminal instances: %w", errors.Join(persistErrs...)))
+	}
+	if len(allErrs) == 0 {
+		return nil
+	}
+	return errors.Join(allErrs...)
 }
 
 // SubscribeLogs returns a log subscription via the LogBroker.
-// If no broker is configured, returns an immediately-empty channel.
+// If no broker is configured, returns a safe no-op subscription whose
+// Cancel() is idempotent and never panics on repeated calls.
 func (s *Supervisor) SubscribeLogs(instanceID string) *LogSubscription {
 	if s.broker == nil {
-		// Fallback: create a no-op subscription.
+		// Fallback: create a no-op subscription with closed.Swap(true) for idempotent Cancel.
+		done := make(chan struct{})
 		return &LogSubscription{
-			ch:   make(chan LogStreamEvent, 1),
-			done: make(chan struct{}),
+			ch:     make(chan LogStreamEvent, 1),
+			done:   done,
+			broker: nil, // nil broker -> Cancel() takes the nil-lsub fast path
+			lsub: &logSubscriber{
+				ch:        make(chan LogStreamEvent, 1),
+				cancelled: atomic.Bool{},
+				closed:    atomic.Bool{},
+				closeOnce: sync.Once{},
+			},
 		}
 	}
 	return s.broker.Subscribe(instanceID)
@@ -396,6 +456,7 @@ func (s *Supervisor) QueryLogs(q LogQuery, instanceIDFilter string) *LogResult {
 // Recover restores instances from the store and marks stale records.
 // This is called during Supervisor startup to handle instances that were
 // running when the application previously stopped.
+// Returns an aggregated error if any stale instance failed to persist.
 func (s *Supervisor) Recover(ctx context.Context) error {
 	if s.store == nil {
 		return nil
@@ -406,6 +467,7 @@ func (s *Supervisor) Recover(ctx context.Context) error {
 		return fmt.Errorf("list instances for recovery: %w", err)
 	}
 
+	var persistErrs []error
 	for _, entry := range entries {
 		inst := domain.ToDomain(entry)
 
@@ -415,13 +477,18 @@ func (s *Supervisor) Recover(ctx context.Context) error {
 			inst.UpdateState(domain.InstanceStateStale)
 			if s.store != nil {
 				if err := s.store.Update(domain.ToStorageEntry(inst)); err != nil {
+					persistErrs = append(persistErrs, fmt.Errorf("persist stale instance %s: %w", string(inst.ID), err))
 					slog.Error("failed to persist stale instance", "instance_id", string(inst.ID), "error", err)
+					continue
 				}
 			}
 			slog.Warn("marking stale instance", "instance_id", string(inst.ID), "state", string(inst.State))
 		}
 	}
 
+	if len(persistErrs) > 0 {
+		return fmt.Errorf("recover: %w", errors.Join(persistErrs...))
+	}
 	return nil
 }
 
@@ -448,18 +515,21 @@ type InstanceController struct {
 	resolver   *domain.LaunchResolver
 	done       chan struct{}
 	broker     *LogBroker
+	// supervisorRef points back to the parent Supervisor for reservation release.
+	supervisorRef *Supervisor
 }
 
 // NewInstanceController creates a controller for an instance.
 func NewInstanceController(inst *domain.LaunchInstance, store InstanceStore, resolver *domain.LaunchResolver, broker *LogBroker) *InstanceController {
 	return &InstanceController{
-		instance:   inst,
-		instanceID: inst.ID,
-		manager:    NewManager(),
-		store:      store,
-		resolver:   resolver,
-		done:       make(chan struct{}),
-		broker:     broker,
+		instance:      inst,
+		instanceID:    inst.ID,
+		manager:       NewManager(),
+		store:         store,
+		resolver:      resolver,
+		done:          make(chan struct{}),
+		broker:        broker,
+		supervisorRef: nil, // set by Supervisor.Start after construction
 	}
 }
 
@@ -495,7 +565,9 @@ func (ic *InstanceController) Start(operationCtx context.Context) error {
 		ic.mu.Lock()
 		ic.instance.Fail(err.Error(), domain.InstanceExitError)
 		ic.mu.Unlock()
-		_ = ic.persistState()
+		if persistErr := ic.persistState(); persistErr != nil {
+			slog.Error("persist start failure state", "instance_id", string(ic.instance.ID), "persist_error", persistErr)
+		}
 		return err
 	}
 
@@ -509,7 +581,7 @@ func (ic *InstanceController) Start(operationCtx context.Context) error {
 
 	// Persist running state with PID.
 	if err := ic.persistState(); err != nil {
-		slog.Error("persist running state", "instance_id", string(ic.instance.ID), "error", err)
+		return fmt.Errorf("persist running state: %w", err)
 	}
 
 	// Publish start event via broker.
@@ -649,6 +721,9 @@ func (ic *InstanceController) wait() {
 		if err := ic.store.Update(entry); err != nil {
 			slog.Error("failed to persist final instance state", "instance_id", string(ic.instance.ID), "error", err)
 		}
+	} else if ic.supervisorRef != nil {
+		// Store is nil — release reservation so maxConcurrent slot is freed.
+		ic.supervisorRef.reservations.Add(-1)
 	}
 
 	// Publish exit event via broker.

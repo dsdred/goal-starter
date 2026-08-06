@@ -103,13 +103,11 @@ GoAl автоматически мигрирует конфигурацию пр
 | Method | Path | Описание |
 |--------|------|----------|
 | GET | `/` | Веб-панель управления |
-| GET | `/api/v1/status` | Статус процесса |
-| GET | `/api/v1/health` | Health check (заглушка) |
-| GET | `/api/v1/version` | Версия и metadata |
+| GET | `/api/v1/health` | Health check |
 | GET | `/api/v1/metrics` | Метрики приложения |
-| GET | `/api/v1/logs/stream` | SSE поток логов |
-| GET | `/api/v1/logs/query` | Поиск и пагинация логов |
 | GET | `/api/v1/migration/status` | Статус миграции конфигурации |
+
+> `/api/v1/status` удалён. Используйте `GET /api/v1/instances` и `GET /api/v1/instances/{id}`.
 
 ### Управление экземплярами (Instances)
 
@@ -167,12 +165,14 @@ GoAl автоматически мигрирует конфигурацию пр
 | PUT | `/api/v1/models/` | Обновить модель |
 | DELETE | `/api/v1/models/` | Удалить модель |
 
-### SSE / WebSocket
+### Логи
 
 | Method | Path | Описание |
 |--------|------|----------|
-| GET | `/api/v1/logs/stream` | SSE поток логов |
-| GET | `/api/v1/logs/query` | Поиск и пагинация логов |
+| GET | `/api/v1/logs/stream` | SSE поток логов (заглушка) |
+| GET | `/api/v1/logs` | QueryLogs с instance_id filter (заглушка) |
+| GET | `/api/v1/instances/{id}/logs` | Логи конкретного instance (заглушка) |
+| GET | `/api/v1/instances/{id}/logs/stream` | SSE логов instance (заглушка) |
 | GET | `/ws` | WebSocket поток логов (WIP) |
 
 ### Structured API errors
@@ -303,6 +303,7 @@ goal_repo.json.bak       — backup of last known good state
 - Фильтрация по stream, search, time range, instance_id
 - Пагинация (page/page_size) — агрегируется после объединения логов всех instances
 - `GET /api/v1/logs` — QueryLogs с instance_id filter
+- `GET /api/v1/instances/{id}/logs` — Логи конкретного instance
 
 LogBroker (`process.LogBroker`) обеспечивает:
 - Подписку на логи всех запущенных экземпляров
@@ -362,6 +363,7 @@ Legacy `/api/v1/status` удалён. Переход на `GET /api/v1/instances
 - Full reattach к произвольному PID: не реализован (только stale detection)
 - Audit logging: WIP (доступны только metrics)
 - Login rate limit: placeholder (не полностью реализован)
+- Logs API: `/api/v1/logs`, `/api/v1/logs/stream` — заглушки (не реализованы)
 
 ## Перед началом разработки
 
