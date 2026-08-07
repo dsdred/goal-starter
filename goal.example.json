@@ -6,7 +6,44 @@
   "adminUser": "admin",
   "adminPassword": "",
   "authEnabled": false,
-  "runtimes": [],
-  "models": [],
-  "profiles": []
+  "runtimes": [
+    {
+      "id": "llama-cpp",
+      "name": "llama.cpp",
+      "executable": "./llama-server",
+      "workingDirectory": ".",
+      "defaultArgs": ["--host", "127.0.0.1"],
+      "environment": {}
+    }
+  ],
+  "models": [
+    {
+      "id": "qwen36-35b",
+      "name": "Qwen3.6-35B-A3B-Uncensored",
+      "runtimeId": "llama-cpp",
+      "arguments": [
+        "-m", "path/to/model.gguf",
+        "--mmproj", "path/to/mmproj.gguf",
+        "--jinja",
+        "-c", "200000",
+        "-ngl", "99",
+        "--port", "8085",
+        "--host", "0.0.0.0",
+        "--image-min-tokens", "1024"
+      ],
+      "environment": {}
+    }
+  ],
+  "profiles": [
+    {
+      "id": "qwen36",
+      "name": "Qwen 3.6 35B Vision",
+      "runtimeId": "llama-cpp",
+      "modelId": "qwen36-35b",
+      "host": "127.0.0.1",
+      "port": 8085,
+      "arguments": [],
+      "environment": {}
+    }
+  ]
 }

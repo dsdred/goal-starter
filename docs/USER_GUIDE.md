@@ -159,6 +159,33 @@ The `goal.json` file is located in the same directory as the binary. It is **exc
 
 ### Model Configuration
 
+Models can be configured in two ways: via `arguments` (inline args for the server) or via `path` (direct GGUF file path).
+
+**Option A: via arguments (for llama.cpp server and similar):**
+
+```json
+{
+  "models": [
+    {
+      "id": "qwen35b",
+      "name": "Qwen 3.6 35B",
+      "runtimeId": "llama-cpp",
+      "arguments": [
+        "-m", "E:/models/qwen/model.gguf",
+        "--mmproj", "E:/models/qwen/mmproj.gguf",
+        "--jinja",
+        "-c", "200000",
+        "--port", "8085",
+        "--host", "0.0.0.0"
+      ],
+      "environment": {}
+    }
+  ]
+}
+```
+
+**Option B: via path (simple GGUF file):**
+
 ```json
 {
   "models": [
@@ -166,8 +193,7 @@ The `goal.json` file is located in the same directory as the binary. It is **exc
       "id": "llama3",
       "name": "Llama 3",
       "runtimeId": "ollama",
-      "model": "llama3:8b",
-      "active": true
+      "path": "E:/models/llama3/model.gguf"
     }
   ]
 }
@@ -180,8 +206,9 @@ The `goal.json` file is located in the same directory as the binary. It is **exc
 | `id` | Unique identifier |
 | `name` | Display name |
 | `runtimeId` | ID of the runtime where the model will run |
-| `model` | Model name |
-| `active` | Whether the model is enabled |
+| `path` | Path to GGUF file (alternative to arguments) |
+| `arguments` | Command-line arguments array (alternative to path) |
+| `environment` | Process environment variables |
 
 ### Launch Profile Configuration
 

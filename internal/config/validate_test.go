@@ -148,25 +148,60 @@ func TestValidateModelValid(t *testing.T) {
 	modelPath := filepath.Join(tmpDir, "model.gguf")
 	os.WriteFile(modelPath, []byte("test model data"), 0644)
 
+	// Test with path (legacy GGUF-based model).
 	cfg := Config{
 		Version:       1,
 		ListenAddress: "127.0.0.1",
 		WebPort:       8080,
 		Models: []Model{
 			{
-				Name:   "test-model",
-				Path:   modelPath,
-				Format: "gguf",
+				Name: "test-model",
+				Path: modelPath,
 			},
 		},
 	}
 
 	if err := cfg.ValidateFull(); err != nil {
-		t.Errorf("expected valid model config, got error: %v", err)
+		t.Errorf("expected valid model config (path-based), got error: %v", err)
+	}
+
+	// Test with arguments (inline args model).
+	cfg2 := Config{
+		Version:       1,
+		ListenAddress: "127.0.0.1",
+		WebPort:       8080,
+		Models: []Model{
+			{
+				Name:      "test-model-args",
+				Path:      modelPath,
+				Arguments: []string{"-m", modelPath, "--port", "8080"},
+			},
+		},
+	}
+
+	if err := cfg2.ValidateFull(); err != nil {
+		t.Errorf("expected valid model config (args-based), got error: %v", err)
 	}
 }
 
-func TestValidateModelInvalidFormat(t *testing.T) {
+func TestValidateModelMissingPathAndArgs(t *testing.T) {
+	cfg := Config{
+		Version:       1,
+		ListenAddress: "127.0.0.1",
+		WebPort:       8080,
+		Models: []Model{
+			{
+				Name: "test",
+			},
+		},
+	}
+
+	if err := cfg.ValidateFull(); err == nil {
+		t.Error("expected error for model with neither path nor arguments, got nil")
+	}
+}
+
+func TestValidateModelEmptyArg(t *testing.T) {
 	tmpDir := t.TempDir()
 	modelPath := filepath.Join(tmpDir, "model.gguf")
 	os.WriteFile(modelPath, []byte("test"), 0644)
@@ -177,15 +212,15 @@ func TestValidateModelInvalidFormat(t *testing.T) {
 		WebPort:       8080,
 		Models: []Model{
 			{
-				Name:   "test",
-				Path:   modelPath,
-				Format: "invalid-format",
+				Name:      "test",
+				Path:      modelPath,
+				Arguments: []string{"-m", "", "--port", "8080"},
 			},
 		},
 	}
 
 	if err := cfg.ValidateFull(); err == nil {
-		t.Error("expected error for invalid model format, got nil")
+		t.Error("expected error for model with empty argument, got nil")
 	}
 }
 
@@ -196,9 +231,8 @@ func TestValidateModelEmptyName(t *testing.T) {
 		WebPort:       8080,
 		Models: []Model{
 			{
-				Name:   "",
-				Path:   "/tmp/model.gguf",
-				Format: "gguf",
+				Name: "",
+				Path: "/tmp/model.gguf",
 			},
 		},
 	}
@@ -322,29 +356,26 @@ func TestValidateEnvKeyInvalid(t *testing.T) {
 	}
 }
 
-func TestValidateModelFormatCaseInsensitive(t *testing.T) {
+func TestValidateModelWithEnvironment(t *testing.T) {
 	tmpDir := t.TempDir()
 	modelPath := filepath.Join(tmpDir, "model.gguf")
 	os.WriteFile(modelPath, []byte("test"), 0644)
 
-	formats := []string{"GGUF", "Gguf", "safetensors", "SAFETENSORS"}
-	for _, format := range formats {
-		cfg := Config{
-			Version:       1,
-			ListenAddress: "127.0.0.1",
-			WebPort:       8080,
-			Models: []Model{
-				{
-					Name:   "test",
-					Path:   modelPath,
-					Format: format,
-				},
+	cfg := Config{
+		Version:       1,
+		ListenAddress: "127.0.0.1",
+		WebPort:       8080,
+		Models: []Model{
+			{
+				Name:        "test",
+				Path:        modelPath,
+				Environment: map[string]string{"CUDA_VISIBLE_DEVICES": "0"},
 			},
-		}
+		},
+	}
 
-		if err := cfg.ValidateFull(); err != nil {
-			t.Errorf("expected format %q to be valid, got error: %v", format, err)
-		}
+	if err := cfg.ValidateFull(); err != nil {
+		t.Errorf("expected valid model config with environment, got error: %v", err)
 	}
 }
 

@@ -44,11 +44,12 @@ type RuntimeHealthCheck struct {
 }
 
 type Model struct {
-	ID     string `json:"id"`
-	Name   string `json:"name"`
-	Path   string `json:"path"`
-	MMProj string `json:"mmproj,omitempty"`
-	Format string `json:"format,omitempty"`
+	ID          string            `json:"id"`
+	Name        string            `json:"name"`
+	Path        string            `json:"path,omitempty"`
+	RuntimeID   string            `json:"runtimeId,omitempty"`
+	Arguments   []string          `json:"arguments,omitempty"`
+	Environment map[string]string `json:"environment,omitempty"`
 }
 
 type Profile struct {
@@ -101,7 +102,7 @@ func Load(path string) (Config, error) {
 		return Config{}, fmt.Errorf("decode config: %w", err)
 	}
 	// Migrate from older config versions.
-	if cfg.Version < 2 {
+	if cfg.Version < 1 {
 		if err := migrateV1ToV2(&cfg); err != nil {
 			return Config{}, fmt.Errorf("config migration v1->v2: %w", err)
 		}
@@ -113,7 +114,9 @@ func Load(path string) (Config, error) {
 }
 
 // migrateV1ToV2 upgrades config from version 1 to version 2.
-// Adds profile-level health check config (healthCheckEnabled, healthCheckInterval, healthCheckTimeout).
+// Adds profile-level and runtime-level health check config.
+// Also normalizes model entries: if a model has "arguments" or "runtimeId" instead of "path",
+// it is left as-is since version 2 models support both legacy path-based and new argument-based configs.
 func migrateV1ToV2(cfg *Config) error {
 	if cfg.Version >= 2 {
 		return nil // already migrated

@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"strings"
 
 	"github.com/dsdred/goal/internal/webui/validation"
 )
@@ -105,43 +104,37 @@ func validateRuntime(rt *Runtime) error {
 }
 
 // validateModel checks model configuration.
+// Models can be configured either with a "path" (legacy GGUF-based) or with "arguments" (inline args).
 func validateModel(m *Model) error {
 	if m.Name == "" {
 		return fmt.Errorf("name is required")
 	}
-	if m.Path == "" {
-		return fmt.Errorf("path is required")
+
+	// At least one of path or arguments is required.
+	if m.Path == "" && len(m.Arguments) == 0 {
+		return fmt.Errorf("either path or arguments is required")
 	}
 
-	// Check if model file exists.
-	if abs, err := filepath.Abs(m.Path); err != nil {
-		return fmt.Errorf("cannot resolve model path: %w", err)
-	} else if _, err := os.Stat(abs); err != nil {
-		// Model file is optional (might be loaded later).
-	}
-
-	// Validate mmproj path if specified.
-	if m.MMProj != "" {
-		if abs, err := filepath.Abs(m.MMProj); err != nil {
-			return fmt.Errorf("cannot resolve mmproj path: %w", err)
+	// Validate path if specified.
+	if m.Path != "" {
+		if abs, err := filepath.Abs(m.Path); err != nil {
+			return fmt.Errorf("cannot resolve model path: %w", err)
 		} else if _, err := os.Stat(abs); err != nil {
-			// mmproj file is optional (some models don't use it).
+			// Model file is optional (might be loaded later).
 		}
 	}
 
-	// Validate format.
-	if m.Format != "" {
-		validFormats := []string{"gguf", "bin", "safetensors", "pt", "pth"}
-		lowerFormat := strings.ToLower(m.Format)
-		valid := false
-		for _, f := range validFormats {
-			if lowerFormat == f {
-				valid = true
-				break
-			}
+	// Validate arguments if specified.
+	for _, arg := range m.Arguments {
+		if arg == "" {
+			return fmt.Errorf("model arguments must not contain empty entries")
 		}
-		if !valid {
-			return fmt.Errorf("unknown model format %q, expected one of: %s", m.Format, strings.Join(validFormats, ", "))
+	}
+
+	// Validate environment variables.
+	for k := range m.Environment {
+		if err := validateEnvKey(k); err != nil {
+			return fmt.Errorf("invalid env key %q: %w", k, err)
 		}
 	}
 
