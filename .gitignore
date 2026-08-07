@@ -1,6 +1,9 @@
 # Build output directory
 /bin/
 
+# Release archives
+/releases/
+
 # Data directory
 /data/
 
