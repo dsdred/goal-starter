@@ -271,7 +271,10 @@ func (s *Supervisor) Start(ctx context.Context, profile *domain.Profile, runtime
 	}
 
 	// Store the reservation in the controller so wait() and Stop() can release it.
+	// Use ctrl.mu to synchronize the write — wait() reads ic.reservation under ic.mu.
+	ctrl.mu.Lock()
 	ctrl.reservation = reservation
+	ctrl.mu.Unlock()
 
 	return inst, nil
 }
@@ -412,9 +415,16 @@ func (s *Supervisor) RemoveTerminal(id domain.InstanceID) error {
 	}
 
 	// Release this instance's reservation. Idempotent via sync.Once.
-	if ctrl.reservation != nil {
-		ctrl.reservation.Release()
-		ctrl.reservation = nil
+	// Take reservation under lock to avoid data race with wait() which also
+	// accesses ic.reservation.
+	var ctrlRes *slotReservation
+	ctrl.mu.Lock()
+	ctrlRes = ctrl.reservation
+	ctrl.reservation = nil
+	ctrl.mu.Unlock()
+
+	if ctrlRes != nil {
+		ctrlRes.Release()
 	}
 
 	return nil
@@ -748,8 +758,10 @@ func (ic *InstanceController) wait() {
 	}
 	<-done
 
+	// Step 1: Acquire lock once to update all state atomically.
+	// We collect all data under lock, then release it before doing
+	// external side effects (store.Update, reservation.Release).
 	ic.mu.Lock()
-	defer ic.mu.Unlock()
 
 	// Signal that InstanceController.wait is fully complete.
 	// This allows callers (tests, supervisor) to wait for persist-final-state
@@ -803,29 +815,39 @@ func (ic *InstanceController) wait() {
 	ic.instance.StoppedAt = time.Now()
 	ic.instance.UpdatedAt = ic.instance.StoppedAt
 
+	// Take reservation under lock before releasing it outside.
+	var reservation *slotReservation
 	if ic.store != nil {
 		entry := domain.ToStorageEntry(ic.instance)
+		reservation = ic.reservation
+		ic.reservation = nil
+		ic.mu.Unlock()
+
+		// Persist final state OUTSIDE the lock to avoid holding mutex during I/O.
 		if err := ic.store.Update(entry); err != nil {
-			// Persistence error after natural exit must be observable — not just logged.
-			// Store the error in the instance snapshot so API/monitoring can detect degradation.
 			persistErr := fmt.Errorf("persist final state: %w", err)
+			// Update LastError — caller has already seen the snapshot,
+			// but we record it for monitoring.
+			ic.mu.Lock()
 			if ic.instance.LastError != "" {
 				ic.instance.LastError = ic.instance.LastError + "; " + persistErr.Error()
 			} else {
 				ic.instance.LastError = persistErr.Error()
 			}
+			ic.mu.Unlock()
 		}
-	}
-
-	// Release the concurrency slot. The wait() goroutine is the sole owner
-	// of the slot for the lifetime of the running process. When the process
-	// exits, wait() releases the slot via reservation.Release().
-	if ic.reservation != nil {
-		ic.reservation.Release()
+	} else {
+		reservation = ic.reservation
 		ic.reservation = nil
+		ic.mu.Unlock()
 	}
 
-	// Publish exit event via broker.
+	// Release the concurrency slot OUTSIDE the lock to avoid holding mutex during I/O.
+	if reservation != nil {
+		reservation.Release()
+	}
+
+	// Publish exit event via broker (no lock needed).
 	ic.publishBrokerEvent(LogStreamSystem, fmt.Sprintf("instance exited: code=%d class=%s", *ic.instance.ExitCode, ic.instance.ExitClass))
 }
 
