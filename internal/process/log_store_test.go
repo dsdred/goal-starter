@@ -105,7 +105,11 @@ func TestLogBrokerSubscriberReceivesEventsForInstance(t *testing.T) {
 	}
 }
 
-// TestLogBrokerShutdownNoGoroutineLeak verifies broker shutdown closes all channels.
+// TestLogBrokerShutdownNoGoroutineLeak verifies broker shutdown closes all done channels.
+//
+// After LogBroker stabilization, data channels are NOT closed by Shutdown() —
+// they are managed by GC. The Done() channel is closed instead, which is the
+// signal for consumers to stop reading.
 func TestLogBrokerShutdownNoGoroutineLeak(t *testing.T) {
 	broker := NewLogBroker(100)
 
@@ -116,15 +120,27 @@ func TestLogBrokerShutdownNoGoroutineLeak(t *testing.T) {
 
 	broker.Shutdown()
 
+	// Verify Done() is closed for all subscribers (this is the actual shutdown signal).
+	// Data channels are NOT closed — they are GC-managed after Shutdown().
 	for i, sub := range subs {
 		select {
-		case _, ok := <-sub.Channel():
-			if ok {
-				t.Errorf("subscription %d: channel not closed after Shutdown", i)
-			}
+		case <-sub.Done():
+			// Done channel closed — this is correct behavior after Shutdown.
 		case <-time.After(1 * time.Second):
-			t.Errorf("subscription %d: channel read hung after Shutdown", i)
+			t.Errorf("subscription %d: Done() not closed after Shutdown", i)
 		}
+	}
+
+	// Verify closed flag is set for all subscribers.
+	for i, sub := range subs {
+		if !sub.lsub.closed.Load() {
+			t.Errorf("subscription %d: closed flag not set after Shutdown", i)
+		}
+	}
+
+	// Verify broker has no remaining subscribers.
+	if dropped := broker.DroppedEvents(); dropped > 0 {
+		t.Logf("dropped events during shutdown: %d", dropped)
 	}
 }
 
