@@ -72,6 +72,17 @@ func NewSupervisor(store InstanceStore) *Supervisor {
 	}
 }
 
+// newSemaphore creates a buffered semaphore channel pre-filled with maxConcurrent tokens.
+// Each token represents one available concurrency slot. Acquire takes a token; Release returns it.
+// Pre-filling ensures Release() is guaranteed to succeed (no blocking, no silent drop).
+func newSemaphore(capacity int) chan struct{} {
+	sem := make(chan struct{}, capacity)
+	for i := 0; i < capacity; i++ {
+		sem <- struct{}{}
+	}
+	return sem
+}
+
 // NewSupervisorWithContext creates a Supervisor with an application-level lifecycle context.
 // The lifecycle context is used for all instance processes, so HTTP request
 // timeouts do not kill running processes.
@@ -95,7 +106,7 @@ func NewSupervisorWithConfig(store InstanceStore, cfg SupervisorConfig) *Supervi
 	s := NewSupervisor(store)
 	if cfg.MaxConcurrent > 0 {
 		s.maxConcurrent = cfg.MaxConcurrent
-		s.semaphore = make(chan struct{}, cfg.MaxConcurrent)
+		s.semaphore = newSemaphore(cfg.MaxConcurrent)
 	}
 	if cfg.LogBufferSize > 0 {
 		s.broker = NewLogBroker(cfg.LogBufferSize)
@@ -146,31 +157,33 @@ func RuntimeToDomain(id, name, executable, workingDir string, defaultArgs []stri
 	}
 }
 
+// newSlotReservation creates a slotReservation for the given semaphore channel.
+// The semaphore must be a buffered channel of capacity >= 1, pre-filled with tokens.
+func newSlotReservation(sem chan struct{}) *slotReservation {
+	return &slotReservation{
+		semaphore: sem,
+	}
+}
+
 // slotReservation is a token for a concurrency slot. Release() must be called
 // exactly once — via sync.Once — when the instance exits or is removed.
 type slotReservation struct {
 	releaseOnce sync.Once
-	supervisor  *Supervisor
-	acquired    chan struct{} // the semaphore token
+	semaphore   chan struct{} // the semaphore channel to return the token to
 }
 
-// Release frees the concurrency slot. Safe to call exactly once.
-//
-// The semaphore token is returned by sending back into the channel.
-// During supervisor shutdown the channel may be closed; in that case the
-// recover() silently ignores the panic so that slot cleanup is robust.
+// Release frees the concurrency slot by returning the token to the semaphore channel.
+// Uses sync.Once to guarantee exactly-once release.
+// Because the semaphore channel is pre-filled with exactly maxConcurrent tokens,
+// Release() is guaranteed to succeed — there is always exactly one token slot available.
 func (r *slotReservation) Release() {
 	r.releaseOnce.Do(func() {
-		select {
-		case r.supervisor.semaphore <- struct{}{}:
-			// Token returned successfully.
-		default:
-			// Semaphore channel is closed (shutdown) or full.
-			func() {
-				defer func() { recover() }()
-				r.supervisor.semaphore <- struct{}{}
-			}()
+		if r.semaphore == nil {
+			return
 		}
+		// Guaranteed send: the channel has exactly maxConcurrent capacity,
+		// and at most maxConcurrent tokens can be outstanding simultaneously.
+		r.semaphore <- struct{}{}
 	})
 }
 
@@ -206,10 +219,7 @@ func (s *Supervisor) Start(ctx context.Context, profile *domain.Profile, runtime
 	if s.maxConcurrent > 0 {
 		select {
 		case <-s.semaphore: // acquire: receive token
-			reservation = &slotReservation{
-				acquired:   s.semaphore,
-				supervisor: s,
-			}
+			reservation = newSlotReservation(s.semaphore)
 		case <-ctx.Done():
 			s.mu.Lock()
 			delete(s.instances, inst.ID)
@@ -234,21 +244,30 @@ func (s *Supervisor) Start(ctx context.Context, profile *domain.Profile, runtime
 	}
 
 	// Start process using the supervisor lifecycle context (not HTTP request ctx).
-	if err := ctrl.Start(s.lifecycleContext()); err != nil {
-		inst.Fail(err.Error(), domain.InstanceExitError)
-		if s.store != nil {
-			if uerr := s.store.Update(domain.ToStorageEntry(inst)); uerr != nil {
-				slog.Error("failed to persist start error", "instance_id", string(inst.ID), "error", uerr)
+	ctrlInst, err := ctrl.Start(s.lifecycleContext())
+	if err != nil {
+		if ctrlInst != nil {
+			// Rollback returned an instance — it's in the supervisor's instances map.
+		} else {
+			inst.Fail(err.Error(), domain.InstanceExitError)
+			if s.store != nil {
+				if uerr := s.store.Update(domain.ToStorageEntry(inst)); uerr != nil {
+					// Join process error and persistence error — caller gets both.
+					err = errors.Join(err, fmt.Errorf("persist start error: %w", uerr))
+				}
 			}
+			s.mu.Lock()
+			delete(s.instances, inst.ID)
+			s.mu.Unlock()
+			return nil, fmt.Errorf("start instance %s: %w", inst.ID, err)
 		}
+		// Rollback returned instance — it's already in the supervisor's instances map.
+		// Clean up reservation from the map if present.
 		if reservation != nil {
 			reservation.Release()
 			reservation = nil
 		}
-		s.mu.Lock()
-		delete(s.instances, inst.ID)
-		s.mu.Unlock()
-		return nil, fmt.Errorf("start instance %s: %w", inst.ID, err)
+		return ctrlInst, fmt.Errorf("start instance %s: %w", inst.ID, err)
 	}
 
 	// Store the reservation in the controller so wait() and Stop() can release it.
@@ -581,14 +600,16 @@ func (ic *InstanceController) IsRunning() bool {
 // Start launches the managed process.
 // The operationCtx parameter is used only for the Start() operation timeout.
 // The process lifecycle uses the instance-specific context (supervisor lifecycle).
-func (ic *InstanceController) Start(operationCtx context.Context) error {
+// Returns the instance and error if persistence fails after process started —
+// the instance is left in a degraded (running) state with LastError set.
+func (ic *InstanceController) Start(operationCtx context.Context) (*domain.LaunchInstance, error) {
 	ic.mu.Lock()
 	ic.instance.UpdateState(domain.InstanceStateStarting)
 	ic.mu.Unlock()
 
 	// Persist the starting state immediately so restart sees starting, not pending.
 	if err := ic.persistState(); err != nil {
-		return fmt.Errorf("persist starting state: %w", err)
+		return nil, fmt.Errorf("persist starting state: %w", err)
 	}
 
 	// Resolve the command spec from stored instance data.
@@ -606,7 +627,7 @@ func (ic *InstanceController) Start(operationCtx context.Context) error {
 		if persistErr := ic.persistState(); persistErr != nil {
 			slog.Error("persist start failure state", "instance_id", string(ic.instance.ID), "persist_error", persistErr)
 		}
-		return err
+		return nil, err
 	}
 
 	// Copy PID from manager immediately after successful start.
@@ -618,8 +639,18 @@ func (ic *InstanceController) Start(operationCtx context.Context) error {
 	ic.mu.Unlock()
 
 	// Persist running state with PID.
+	// If persistence fails but process is running, degraded success:
+	// set LastError, process continues running, caller gets nil error.
 	if err := ic.persistState(); err != nil {
-		return fmt.Errorf("persist running state: %w", err)
+		ic.mu.Lock()
+		if ic.instance.LastError == "" {
+			ic.instance.LastError = fmt.Sprintf("persist running state: %v", err)
+		} else {
+			ic.instance.LastError = ic.instance.LastError + "; persist running state: " + err.Error()
+		}
+		ic.mu.Unlock()
+		slog.Error("failed to persist running state", "instance_id", string(ic.instance.ID), "error", err)
+		// Process continues running — degraded success.
 	}
 
 	// Publish start event via broker.
@@ -628,7 +659,7 @@ func (ic *InstanceController) Start(operationCtx context.Context) error {
 	// Start wait goroutine.
 	go ic.wait()
 
-	return nil
+	return ic.instance, nil
 }
 
 // Stop requests graceful shutdown of the instance process.
@@ -640,6 +671,11 @@ func (ic *InstanceController) Stop(ctx context.Context) error {
 	}
 	ic.instance.UpdateState(domain.InstanceStateStopping)
 	ic.mu.Unlock()
+
+	// Persist stopping state. If persistence fails, return error immediately.
+	if err := ic.persistState(); err != nil {
+		return err
+	}
 
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
@@ -674,8 +710,12 @@ func (ic *InstanceController) Restart(ctx context.Context) (*domain.LaunchInstan
 		}
 	}
 
-	if err := ic.Start(ctx); err != nil {
+	if inst, err := ic.Start(ctx); err != nil {
 		return nil, err
+	} else if inst != nil {
+		// Rollback path — return the instance returned by Start.
+		snap := ic.Snapshot()
+		return &snap, nil
 	}
 
 	snap := ic.Snapshot()
@@ -710,6 +750,11 @@ func (ic *InstanceController) wait() {
 
 	ic.mu.Lock()
 	defer ic.mu.Unlock()
+
+	// Signal that InstanceController.wait is fully complete.
+	// This allows callers (tests, supervisor) to wait for persist-final-state
+	// to finish before inspecting instance state.
+	close(ic.done)
 
 	finalStatus := ic.manager.Status()
 
@@ -748,7 +793,11 @@ func (ic *InstanceController) wait() {
 
 	ic.instance.ExitClass = domainExitClass
 	if finalStatus.LastError != "" {
-		ic.instance.LastError = finalStatus.LastError
+		if ic.instance.LastError == "" {
+			ic.instance.LastError = finalStatus.LastError
+		} else {
+			ic.instance.LastError = ic.instance.LastError + "; " + finalStatus.LastError
+		}
 	}
 	ic.instance.State = targetState
 	ic.instance.StoppedAt = time.Now()
@@ -823,4 +872,16 @@ func (ic *InstanceController) GetDoneChannel() <-chan struct{} {
 		return nil
 	}
 	return ic.manager.GetDoneChannel()
+}
+
+// GetControllerDone returns the InstanceController's internal done channel.
+// This channel is closed after InstanceController.wait() completes entirely,
+// including persist-final-state and reservation.Release().
+// It allows callers to wait for ALL controller-side effects to finish
+// before inspecting instance state (e.g., LastError).
+func (ic *InstanceController) GetControllerDone() <-chan struct{} {
+	if ic == nil {
+		return nil
+	}
+	return ic.done
 }

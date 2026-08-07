@@ -73,7 +73,7 @@ jobs:
       - name: Build
         run: go build ./cmd/goal
 
-  test:
+  test-linux:
     name: Test (Linux, race)
     runs-on: ubuntu-latest
     steps:
@@ -85,7 +85,25 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
 
-      - name: Run tests
+      - name: Run tests with race detector
+        run: go test -race -v ./...
+
+      - name: Run go vet
+        run: go vet ./...
+
+  test-windows:
+    name: Test (Windows, race)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Run tests with race detector
         run: go test -race -v ./...
 
       - name: Run go vet

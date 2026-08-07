@@ -24,6 +24,20 @@ import (
 //   - infinite        Run until killed (SIGKILL)
 
 func main() {
+	// Check for -sleep <duration> flag (used by supervisor tests).
+	sleepSeconds := 0
+	if len(os.Args) >= 3 && os.Args[1] == "-sleep" {
+		if n, err := strconv.Atoi(os.Args[2]); err == nil && n >= 0 {
+			sleepSeconds = n
+		} else if err == nil {
+			os.Exit(1)
+		}
+	}
+	if sleepSeconds > 0 {
+		time.Sleep(time.Duration(sleepSeconds) * time.Second)
+		os.Exit(0)
+	}
+
 	if len(os.Args) < 2 {
 		fmt.Fprintf(os.Stderr, "Usage: fake-runtime <mode> [options]\n")
 		os.Exit(1)

@@ -15,6 +15,7 @@ import (
 // TestWindowsJobObject_cleanup verifies that child processes are cleaned up
 // when the parent process ends via Job Object kill-on-close.
 func TestWindowsJobObject_cleanup(t *testing.T) {
+	t.Parallel()
 	fake := fakeRuntime(t)
 	mgr := process.NewManager()
 
@@ -79,6 +80,7 @@ verify_cleaned:
 // TestWindowsJobObject_nestedChildren verifies that child processes
 // are also cleaned up via the Job Object when we stop an infinite process.
 func TestWindowsJobObject_nestedChildren(t *testing.T) {
+	t.Parallel()
 	fake := fakeRuntime(t)
 	mgr := process.NewManager()
 

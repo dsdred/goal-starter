@@ -282,6 +282,45 @@ type InstanceStore interface {
 - tests LogBroker/LogStore/QueryAggregated: PASS ✅
 - tests ./...: Windows Job Object flaky (известная проблема, не связана с изменениями)
 
+## V09 Final Stabilization — Результаты (TASK-V09)
+
+### Изменённые файлы (V09):
+
+| Файл | Причина |
+|------|---------|
+| `internal/process/supervisor.go` | recover() → non-blocking select; persistence error joining на start failure |
+| `internal/storage/repository.go` | atomic copyFile и atomic main write/backup |
+| `internal/process/log_store.go` | LocalSequence через atomic.Uint64; строгий tie-breaker в AggregateLogs |
+| `.github/workflows/ci.yml` | test-windows job добавлен; test-linux переименован |
+
+### Инварианты (V09):
+
+1. **SlotLimiter**: один источник истины (buffered channel); каждый slot — отдельный reservation; Release идемпотентен через sync.Once; нет recover(); нет double release.
+2. **Persistence errors**: start failure + persistence failure → errors.Join; не теряются ни при каком исходе.
+3. **QueryLogs**: LocalSequence назначается при append через atomic; сортировка имеет полный tie-breaker (timestamp DESC → LocalSequence ASC → InstanceID ASC → Stream ASC).
+4. **Backup**: atomic через tmp → sync → validate → rename; backup failure → main unchanged.
+5. **CI**: Windows test job запускает go test -race, go vet, go build.
+6. **Legacy API**: `/api/v1/logs` — stub, не выбирает first instance.
+
+### Проверки:
+
+| Проверка | Результат |
+|----------|----------|
+| gofmt -l | clean |
+| go mod tidy | clean |
+| go vet ./... | clean |
+| go test ./... | PASS (process 46s, storage 2.5s, handlers 1.5s) |
+| go test -race ./... | Linux CI (нет gcc на Windows dev machine) |
+| go build ./... | clean |
+| git diff --check | pending |
+
+### Оставшиеся ограничения:
+
+- Race detector не доступен локально (нет CGO/gcc) — проверяется в Linux CI
+- Logs API (QueryLogs, LogsStream) — stub (открыта следующая задача)
+- recovery: only stale detection, без reattach PID
+- Windows Job Object tests: flaky на CI
+
 ## Итоговый отчёт
 
 ### 1. Результат

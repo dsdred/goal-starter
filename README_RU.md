@@ -364,6 +364,21 @@ Legacy `/api/v1/status` удалён. Переход на `GET /api/v1/instances
 - Audit logging: WIP (доступны только metrics)
 - Login rate limit: placeholder (не полностью реализован)
 - Logs API: `/api/v1/logs`, `/api/v1/logs/stream` — заглушки (не реализованы)
+- Race detector: локально не проверялся (нет CGO/gcc на Windows), CI pending
+- Supervisor concurrency model: buffered semaphore (не mutex-based pool)
+- Persistence: degraded success (running + persist fail = LastError set, process continues)
+- Recovery: stale detection только, без reattach PID
+
+## Стабилизация v0.9
+
+Полный отчёт стабилизации: [`docs/tasks/TASK-V09-STABILIZATION-FINAL.md`](docs/tasks/TASK-V09-STABILIZATION-FINAL.md)
+
+В рамках стабилизации завершены:
+- SlotReservation: guaranteed release без `recover()` и `default`
+- LogBroker: race-free Publish/Cancel/Shutdown, GC-managed data channels
+- Persistence error semantics: full matrix coverage
+- QueryLogs: deterministic ordering с strict tie-breaker
+- Atomic backup: validated + fsync + atomic rename
 
 ## Перед началом разработки
 

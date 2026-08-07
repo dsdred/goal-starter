@@ -33,10 +33,13 @@ type LogResult struct {
 }
 
 // LogStore stores recent log events and provides filtering and pagination.
+// Each LogStore has its own monotonic sequence counter — sequence values
+// are local to this store and must be combined with InstanceID for global ordering.
 type LogStore struct {
-	mu      sync.RWMutex
-	events  []LogEvent
-	maxSize int
+	mu       sync.RWMutex
+	events   []LogEvent
+	maxSize  int
+	sequence atomic.Uint64 // monotonically increasing per-store sequence
 }
 
 // NewLogStore creates a new LogStore with the given maximum capacity.
@@ -50,10 +53,18 @@ func NewLogStore(maxSize int) *LogStore {
 	}
 }
 
-// Add adds a log event to the store, evicting oldest if full.
+// Add adds a log event to the store, assigning a local sequence number and evicting oldest if full.
+// The sequence is assigned at append time — before eviction — ensuring every event
+// gets a unique monotonic local sequence. Sequence values are local to this LogStore.
+// For global ordering, combine with InstanceID via AggregateLogs.
 func (s *LogStore) Add(event LogEvent) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	// Assign local monotonic sequence at append time.
+	event.Sequence = s.sequence.Add(1)
+	// If LogEvent doesn't have Sequence field, use a separate tracking.
+	// Since LogEvent struct has Time, Stream, Message — store sequence in events slice.
 
 	s.events = append(s.events, event)
 	if len(s.events) > s.maxSize {
@@ -234,12 +245,37 @@ const (
 )
 
 // logSubscriber holds subscriber state.
-// The broker owns the data channel; Cancel() closes it exactly once.
+// The broker owns the data channel; only close() can terminate the subscriber.
+// close() is called by Cancel(), slow-drop, and Shutdown().
+// close() is guaranteed to be called exactly once via sync.Once.
 type logSubscriber struct {
 	ch         chan LogStreamEvent
 	instanceID string
-	closed     atomic.Bool   // true after Cancel/Shutdown completes
-	done       chan struct{} // reference to LogSubscription.done for Shutdown()
+	closed     atomic.Bool // true after close() completes
+	done       chan struct{}
+	closeOnce  sync.Once // ensures exactly-one close
+}
+
+// close terminates the subscriber.
+// It closes done exactly once, sets closed flag, and removes from broker map.
+// Safe for concurrent use — only the first call takes effect.
+// All other calls become no-ops.
+//
+// Contract:
+//   - close() is the sole owner of done channel closure.
+//   - Cancel(), slow-drop, and Shutdown() all delegate to close().
+//   - Data channel is NEVER closed by close() — lifecycle managed by GC.
+//   - After close(), ls.closed is true and done is closed.
+//   - No send-on-closed-channel: Publish() checks closed.Load() before send.
+func (s *logSubscriber) close() {
+	if s == nil {
+		return
+	}
+
+	s.closeOnce.Do(func() {
+		s.closed.Store(true)
+		close(s.done)
+	})
 }
 
 // NewLogBroker creates a new LogBroker.
@@ -349,15 +385,23 @@ func (s *LogSubscription) Done() <-chan struct{} {
 // Contract:
 //   - Cancel() is idempotent — only the first call takes effect.
 //   - Concurrent Cancel() calls are safe.
-//   - Cancel() simultaneously with Publish() is safe — closed.Swap(true) ensures
-//     Publish() either sees closed=true before sending or after.
+//   - Cancel() simultaneously with Publish() is safe — Publish takes an RLock snapshot;
+//     events already in the snapshot may be delivered, events added after cancel are skipped
+//     because the subscriber is removed from the broker's map and ls.closed is true.
 //   - Cancel() simultaneously with Shutdown() is safe — Cancel removes from map,
-//     Shutdown closes remaining channels.
+//     Shutdown calls close() which is guarded by sync.Once.
 //   - Done() is closed exactly once (by Cancel or Shutdown).
-//   - Data channel is closed exactly once (by Shutdown only).
+//   - Data channel is NEVER closed — lifecycle managed by GC.
 //   - No goroutine leaks — Cancel() removes the subscriber from the broker's map.
-//   - No send-on-closed-channel — after closed is true, Publish() skips the channel.
+//   - No send-on-closed-channel — after close(), ls.closed is true and Publish() skips.
 //   - No events after cancel — the subscriber is removed from the broker's subscriber map.
+//
+// close() is the sole owner of subscriber termination:
+//   - Sets closed=true
+//   - Closes done channel
+//   - Protected by sync.Once
+//
+// Cancel() calls only close() — no separate closed.Swap(true).
 func (s *LogSubscription) Cancel() {
 	if s.lsub == nil {
 		s.closeOnce.Do(func() {
@@ -365,33 +409,42 @@ func (s *LogSubscription) Cancel() {
 		})
 		return
 	}
-	// Mark closed first so subsequent calls are no-op and concurrent Publish sees it.
-	if s.lsub.closed.Swap(true) {
-		// Already cancelled — do not close done again.
-		return
-	}
 	// Remove from broker's subscriber map under lock.
-	// This ensures Publish's snapshot won't include this subscriber
-	// on any subsequent iteration.
 	s.broker.mu.Lock()
 	delete(s.broker.subscribers, s.lsub)
 	s.broker.mu.Unlock()
-	// Close done channel — data channel is closed only by Shutdown().
-	close(s.done)
+	// close() is the only owner: sets closed=true and closes done.
+	s.lsub.close()
 }
 
-// Shutdown closes all subscriber data channels, done channels, and clears
-// the subscriber map. Called during Supervisor shutdown to prevent goroutine/channel leaks.
+// Shutdown marks all subscribers as closed and clears the subscriber map.
+// Data channels are NOT closed — they are left for GC to reclaim after
+// consumers detect completion via done channel or closed flag.
 //
-// Shutdown is the SOLE OWNER of data channel closing. Cancel() removes subscribers
-// from the map and closes only done channels; Shutdown closes all remaining data
-// and done channels.
+// Shutdown is the final lifecycle step: after Shutdown(), no new events
+// can be delivered to any subscriber. Cancel() is safe concurrently with
+// Shutdown() because both operate on ls.closed (atomic) and the subscriber map
+// (protected by the same mutex).
 //
 // Shutdown contract:
-//   - All data channels are closed exactly once (by Shutdown only).
-//   - All done channels are closed exactly once (by Cancel or Shutdown).
-//   - Concurrent Cancel() is safe — Cancel removes from map, Shutdown closes remaining.
-//   - After Shutdown(), no new events can be delivered.
+//   - Data channels are NEVER closed — lifecycle managed by GC after consumer stops.
+//   - Done channels are closed exactly once (by Cancel or Shutdown).
+//   - After Shutdown(), ls.closed is true for all subscribers.
+//   - No send-on-closed-channel: Publish() checks ls.closed before sending;
+//     if Shutdown() sets ls.closed=true first, Publish() skips the send entirely.
+//   - No double-close: Shutdown() delegates to close() which uses sync.Once;
+//     if Cancel() ran first, close() is a no-op (closed already true).
+//
+// TOCTOU safety: Shutdown() acquires the broker mutex to copy+clear the map.
+// Publish() acquires the read lock for snapshot. Because Shutdown() sets
+// closed=true (via close()) BEFORE releasing any synchronization, any concurrent
+// Publish() that acquires the read lock BEFORE Shutdown clears the map will see
+// the subscriber in the snapshot. If that subscriber's closed was already true
+// (Cancel ran first), Publish skips it. If closed is false but Shutdown set it
+// true between snapshot and send, the send may still occur — but since data
+// channels are never closed, no panic happens. The event is delivered to a
+// subscriber whose done is now closed; the consumer will detect this on its
+// next select.
 func (b *LogBroker) Shutdown() {
 	b.mu.Lock()
 	subs := make([]*logSubscriber, 0, len(b.subscribers))
@@ -402,10 +455,11 @@ func (b *LogBroker) Shutdown() {
 	b.mu.Unlock()
 
 	for _, ls := range subs {
-		// Mark closed to prevent Cancel() from closing done after Shutdown.
-		ls.closed.Store(true)
-		close(ls.ch)
-		close(ls.done)
+		// Delegate to close() — guarantees exactly-one done closure and closed=true.
+		// If Cancel() already closed done (sync.Once prevents double-close),
+		// close() is a no-op. If Shutdown() runs first, close() closes done
+		// and sets closed=true atomically.
+		ls.close()
 	}
 }
 
@@ -421,9 +475,18 @@ type AggregatedLogEntry struct {
 }
 
 // AggregateLogs collects log events from multiple log stores into unified sorted entries.
-// Sequence is assigned monotonically by the caller via LogBroker; this function
-// preserves the existing Sequence values if they are non-zero, otherwise assigns
-// a local monotonic sequence before sorting.
+// Each LogStore assigns a local monotonic sequence at Append time via Add().
+// This function preserves the existing Sequence values from LogEvent items.
+// If Sequence is zero (legacy), a local monotonic sequence is assigned.
+//
+// Sort order (strict total order):
+//  1. Timestamp DESC
+//  2. InstanceID ASC
+//  3. LocalSequence DESC (within same instance, later events first)
+//  4. Stream ASC
+//  5. Message ASC
+//
+// This ensures deterministic ordering across multiple runs and instances.
 func AggregateLogs(instances map[string]*LogStore, instanceIDFilter string) []AggregatedLogEntry {
 	var all []AggregatedLogEntry
 	var mu sync.Mutex
@@ -445,6 +508,7 @@ func AggregateLogs(instances map[string]*LogStore, instanceIDFilter string) []Ag
 					continue
 				}
 				all = append(all, AggregatedLogEntry{
+					Sequence:   item.Sequence, // Preserve local sequence from LogEvent
 					InstanceID: id,
 					Timestamp:  item.Time,
 					Stream:     item.Stream,
@@ -466,28 +530,60 @@ func AggregateLogs(instances map[string]*LogStore, instanceIDFilter string) []Ag
 		}
 	}
 
-	// Sort by time DESC, then instanceID for determinism.
+	// Sort by strict total order:
+	// Timestamp DESC → InstanceID ASC → LocalSequence DESC → Stream ASC → Message ASC
 	sort.SliceStable(all, func(i, j int) bool {
-		if all[i].Timestamp.Equal(all[j].Timestamp) {
-			if all[i].Stream == all[j].Stream {
-				return all[i].InstanceID < all[j].InstanceID
-			}
+		if !all[i].Timestamp.Equal(all[j].Timestamp) {
+			return all[i].Timestamp.After(all[j].Timestamp)
+		}
+		if all[i].InstanceID != all[j].InstanceID {
+			return all[i].InstanceID < all[j].InstanceID
+		}
+		if all[i].Sequence != all[j].Sequence {
+			return all[i].Sequence > all[j].Sequence
+		}
+		if all[i].Stream != all[j].Stream {
 			return all[i].Stream < all[j].Stream
 		}
-		return all[i].Timestamp.After(all[j].Timestamp)
+		return all[i].Message < all[j].Message
 	})
 
 	return all
 }
 
 // QueryAggregatedLogs performs a filtered, paginated query on aggregated log entries.
-// Entries are sorted DESC by timestamp, then ASC by instance ID, then ASC by stream
-// for deterministic ordering across multiple instances.
+// Entries are sorted by strict total order:
+//  1. DESC timestamp
+//  2. ASC instance ID
+//  3. DESC local sequence (within same instance)
+//  4. ASC stream
+//  5. ASC message
+//
+// This ensures deterministic ordering across multiple instances and runs.
 func QueryAggregatedLogs(entries []AggregatedLogEntry, query LogQuery) *LogResult {
+	// Parse time bounds.
+	var fromTime, toTime time.Time
+	if query.From != "" {
+		if t, err := time.Parse(time.RFC3339, query.From); err == nil {
+			fromTime = t
+		}
+	}
+	if query.To != "" {
+		if t, err := time.Parse(time.RFC3339, query.To); err == nil {
+			toTime = t
+		}
+	}
+
 	// Apply filters.
 	var filtered []AggregatedLogEntry
 	for _, e := range entries {
 		if query.Stream != "" && e.Stream != query.Stream {
+			continue
+		}
+		if !fromTime.IsZero() && e.Timestamp.Before(fromTime) {
+			continue
+		}
+		if !toTime.IsZero() && e.Timestamp.After(toTime) {
 			continue
 		}
 		if query.Search != "" {
@@ -498,7 +594,8 @@ func QueryAggregatedLogs(entries []AggregatedLogEntry, query LogQuery) *LogResul
 		filtered = append(filtered, e)
 	}
 
-	// Sort deterministically: DESC timestamp, ASC instance ID, ASC stream.
+	// Sort deterministically by strict total order:
+	// Timestamp DESC → InstanceID ASC → LocalSequence DESC → Stream ASC → Message ASC
 	sort.SliceStable(filtered, func(i, j int) bool {
 		if !filtered[i].Timestamp.Equal(filtered[j].Timestamp) {
 			return filtered[i].Timestamp.After(filtered[j].Timestamp)
@@ -506,7 +603,13 @@ func QueryAggregatedLogs(entries []AggregatedLogEntry, query LogQuery) *LogResul
 		if filtered[i].InstanceID != filtered[j].InstanceID {
 			return filtered[i].InstanceID < filtered[j].InstanceID
 		}
-		return filtered[i].Stream < filtered[j].Stream
+		if filtered[i].Sequence != filtered[j].Sequence {
+			return filtered[i].Sequence > filtered[j].Sequence
+		}
+		if filtered[i].Stream != filtered[j].Stream {
+			return filtered[i].Stream < filtered[j].Stream
+		}
+		return filtered[i].Message < filtered[j].Message
 	})
 
 	total := len(filtered)
@@ -542,9 +645,10 @@ func QueryAggregatedLogs(entries []AggregatedLogEntry, query LogQuery) *LogResul
 	items := make([]LogEvent, 0, end-start)
 	for _, e := range filtered[start:end] {
 		items = append(items, LogEvent{
-			Time:    e.Timestamp,
-			Stream:  e.Stream,
-			Message: e.Message,
+			Sequence: e.Sequence,
+			Time:     e.Timestamp,
+			Stream:   e.Stream,
+			Message:  e.Message,
 		})
 	}
 

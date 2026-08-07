@@ -63,9 +63,10 @@ type Status struct {
 
 // LogEvent carries a line from a process stream.
 type LogEvent struct {
-	Time    time.Time `json:"time"`
-	Stream  string    `json:"stream"`
-	Message string    `json:"message"`
+	Sequence uint64    `json:"sequence,omitempty"`
+	Time     time.Time `json:"time"`
+	Stream   string    `json:"stream"`
+	Message  string    `json:"message"`
 }
 
 // Manager owns the lifecycle of exactly one managed process.
@@ -273,6 +274,14 @@ func (m *Manager) GetDoneChannel() <-chan struct{} {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.done
+}
+
+// Control returns the platform.ProcessControl for this manager.
+// Returns nil if manager is not started.
+func (m *Manager) Control() platform.ProcessControl {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.control
 }
 
 // wait is the SINGLE owner of cmd.Wait(). It runs in its own goroutine.

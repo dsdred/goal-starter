@@ -355,6 +355,21 @@ See "Configuration hot-reload" section above for details.
 - Audit logging: WIP (metrics available only)
 - Login rate limit: placeholder (not fully implemented)
 - Logs API: `/api/v1/logs`, `/api/v1/logs/stream` — stubs (not implemented)
+- Race detector: not checked locally (no CGO/gcc on Windows), CI pending
+- Supervisor concurrency model: buffered semaphore (not mutex-based pool)
+- Persistence: degraded success (running + persist fail = LastError set, process continues)
+- Recovery: stale detection only, without reattach PID
+
+## Stabilization v0.9
+
+Full stabilization report: [`docs/tasks/TASK-V09-STABILIZATION-FINAL.md`](docs/tasks/TASK-V09-STABILIZATION-FINAL.md)
+
+Completed stabilization items:
+- SlotReservation: guaranteed release without `recover()` or silent `default`
+- LogBroker: race-free Publish/Cancel/Shutdown, GC-managed data channels
+- Persistence error semantics: full matrix coverage
+- QueryLogs: deterministic ordering with strict tie-breaker
+- Atomic backup: validated + fsync + atomic rename
 
 ## Before development
 

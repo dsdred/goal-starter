@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -16,6 +17,7 @@ import (
 var doneCh chan struct{}
 
 // fakeRuntime returns the path to the compiled fake-runtime binary.
+// On Windows the path includes .exe suffix for exec.Command compatibility.
 // The testdata directory is relative to the module root.
 func fakeRuntime(t *testing.T) string {
 	t.Helper()
@@ -38,7 +40,12 @@ func fakeRuntime(t *testing.T) string {
 		root = parent
 	}
 
-	candidate := filepath.Join(root, "testdata", "fake-runtime", "fake-runtime")
+	binName := "fake-runtime"
+	if runtime.GOOS == "windows" {
+		binName = "fake-runtime.exe"
+	}
+
+	candidate := filepath.Join(root, "testdata", "fake-runtime", binName)
 	if _, err := os.Stat(candidate); err == nil {
 		return candidate
 	}

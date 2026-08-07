@@ -675,13 +675,82 @@ func generateID() string {
 	return fmt.Sprintf("inst_%d", time.Now().UnixNano())
 }
 
-// copyFile copies a file from src to dst.
+// copyFile copies a file from src to dst atomically with validation.
+//
+// Atomicity strategy:
+// 1. Read and validate src
+// 2. Write dst.tmp
+// 3. Sync dst.tmp
+// 4. Close dst.tmp
+// 5. Validate dst.tmp by reading back
+// 6. Atomic rename dst.tmp → dst
+// 7. Sync parent directory
+//
+// If any step fails, dst.tmp is cleaned up and the original dst is preserved.
 func copyFile(src, dst string) error {
+	// Step 1: Read and validate src.
 	data, err := os.ReadFile(src)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(dst, data, 0600)
+	if len(data) == 0 {
+		return fmt.Errorf("src file is empty")
+	}
+
+	tmp := dst + ".tmp"
+
+	// Step 2: Write temp file.
+	if err := os.WriteFile(tmp, data, 0600); err != nil {
+		return fmt.Errorf("write temp file: %w", err)
+	}
+
+	// Step 3: Sync temp file to ensure data is flushed to disk.
+	f, syncErr := os.OpenFile(tmp, os.O_WRONLY, 0)
+	if syncErr != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("open temp file for sync: %w", syncErr)
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		_ = os.Remove(tmp)
+		return fmt.Errorf("sync temp file: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("close temp file: %w", err)
+	}
+
+	// Step 4: Validate temp file by reading it back.
+	validateData, err := os.ReadFile(tmp)
+	if err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("validate temp file: %w", err)
+	}
+	if len(validateData) == 0 || len(validateData) != len(data) {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("temp file validation failed: expected %d bytes, got %d", len(data), len(validateData))
+	}
+	// Parse as JSON to ensure structural validity.
+	var validated map[string]interface{}
+	if err := json.Unmarshal(validateData, &validated); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("temp file JSON validation: %w", err)
+	}
+
+	// Step 5: Atomic rename.
+	if err := os.Rename(tmp, dst); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("rename temp file: %w", err)
+	}
+
+	// Step 6: Sync parent directory (best effort, platform-aware).
+	dir := filepath.Dir(dst)
+	if err := syncDir(dir); err != nil {
+		// Non-fatal for Windows.
+		_ = err
+	}
+
+	return nil
 }
 
 // syncDir syncs the parent directory metadata. Platform-aware.
