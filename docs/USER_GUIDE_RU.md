@@ -159,6 +159,33 @@ sudo ./goal          # Linux
 
 ### Настройка модели
 
+Модели можно настроить двумя способами: через `arguments` (inline-аргументы для сервера) или через `path` (прямой путь к GGUF-файлу).
+
+**Вариант A: через arguments (для llama.cpp server и подобных):**
+
+```json
+{
+  "models": [
+    {
+      "id": "qwen35b",
+      "name": "Qwen 3.6 35B",
+      "runtimeId": "llama-cpp",
+      "arguments": [
+        "-m", "E:/models/qwen/model.gguf",
+        "--mmproj", "E:/models/qwen/mmproj.gguf",
+        "--jinja",
+        "-c", "200000",
+        "--port", "8085",
+        "--host", "0.0.0.0"
+      ],
+      "environment": {}
+    }
+  ]
+}
+```
+
+**Вариант B: через path (простой GGUF-файл):**
+
 ```json
 {
   "models": [
@@ -166,8 +193,7 @@ sudo ./goal          # Linux
       "id": "llama3",
       "name": "Llama 3",
       "runtimeId": "ollama",
-      "model": "llama3:8b",
-      "active": true
+      "path": "E:/models/llama3/model.gguf"
     }
   ]
 }
@@ -180,8 +206,9 @@ sudo ./goal          # Linux
 | `id` | Уникальный идентификатор |
 | `name` | Отображаемое имя |
 | `runtimeId` | ID рантайна, где будет запущена |
-| `model` | Имя модели |
-| `active` | Активна ли модель |
+| `path` | Путь к GGUF-файлу (альтернатива arguments) |
+| `arguments` | Массив аргументов командной строки (альтернатива path) |
+| `environment` | Переменные окружения процесса |
 
 ### Настройка профиля запуска
 
@@ -289,7 +316,7 @@ sudo ./goal          # Linux
 
 | Метод | Путь | Описание |
 |-------|------|----------|
-| GET | `/api/v1/runtimes` | Список рантайнов |
+| GET | `/api/v1/runtimes` | Список рантаймов |
 | GET | `/api/v1/runtimes/{id}` | Получить рантайм |
 | POST | `/api/v1/runtimes` | Создать рантайм |
 | PUT | `/api/v1/runtimes/{id}` | Обновить рантайм |
