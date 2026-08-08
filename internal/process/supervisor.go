@@ -689,11 +689,13 @@ func (ic *InstanceController) Stop(ctx context.Context) error {
 	// Signal the process to stop.
 	stopErr := ic.manager.Stop(ctx)
 
-	// Wait for the process to fully exit to ensure wait() goroutine
-	// has finished updating ic.instance fields before we persist state.
-	// This prevents a data race between Stop()'s persistState() and wait()'s
+	// Wait for the InstanceController goroutine to fully exit to ensure
+	// wait() has finished updating ic.instance fields before we persist state.
+	// We wait on ic.done (closed by wait() after ALL field writes),
+	// NOT ic.manager.done (signaled when the process exits), to prevent
+	// a data race between Stop()'s persistState() and wait()'s
 	// ic.instance field writes.
-	done := ic.manager.GetDoneChannel()
+	done := ic.GetControllerDone()
 	if done != nil {
 		select {
 		case <-done:
