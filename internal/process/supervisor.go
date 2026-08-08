@@ -695,10 +695,18 @@ func (ic *InstanceController) Stop(ctx context.Context) error {
 	// NOT ic.manager.done (signaled when the process exits), to prevent
 	// a data race between Stop()'s persistState() and wait()'s
 	// ic.instance field writes.
+	// After receiving on ic.done, take ic.mu to establish happens-before:
+	// wait() releases ic.mu BEFORE close(ic.done), so Stop()'s ic.mu lock
+	// synchronizes with wait()'s ic.mu unlock, ensuring we see all field writes.
 	done := ic.GetControllerDone()
 	if done != nil {
 		select {
 		case <-done:
+			// Synchronize with wait()'s ic.mu release to see all field writes.
+			// wait() does: ic.mu.Lock() → write fields → ic.mu.Unlock() → close(ic.done)
+			// So Stop()'s ic.mu lock here happens-after wait()'s unlock.
+			ic.mu.Lock()
+			ic.mu.Unlock()
 		case <-ctx.Done():
 			if stopErr == nil {
 				stopErr = ctx.Err()
