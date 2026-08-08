@@ -578,6 +578,7 @@ type InstanceController struct {
 	store      InstanceStore
 	resolver   *domain.LaunchResolver
 	done       chan struct{}
+	doneOnce   sync.Once
 	broker     *LogBroker
 	// supervisorRef points back to the parent Supervisor for reservation release.
 	supervisorRef *Supervisor
@@ -781,9 +782,8 @@ func (ic *InstanceController) wait() {
 	ic.mu.Lock()
 
 	// Signal that InstanceController.wait is fully complete.
-	// This allows callers (tests, supervisor) to wait for persist-final-state
-	// to finish before inspecting instance state.
-	close(ic.done)
+	// Use sync.Once to allow multiple wait() calls (e.g. during Restart).
+	ic.doneOnce.Do(func() { close(ic.done) })
 
 	finalStatus := ic.manager.Status()
 
