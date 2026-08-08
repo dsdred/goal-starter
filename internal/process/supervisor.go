@@ -722,9 +722,16 @@ func (ic *InstanceController) Stop(ctx context.Context) error {
 	ic.mu.Unlock()
 
 	// Persist final state. If persistence fails, return error.
-	if err := ic.persistState(); err != nil {
-		return err
+	// Hold ic.mu to synchronize with wait()'s field writes —
+	// wait() closes ic.done AFTER ic.mu.Unlock(), so our Lock() here
+	// happens-after wait()'s unlocks, seeing all updated fields.
+	ic.mu.Lock()
+	persistErr := ic.persistState()
+	if persistErr != nil {
+		ic.mu.Unlock()
+		return persistErr
 	}
+	ic.mu.Unlock()
 
 	return stopErr
 }
