@@ -682,23 +682,40 @@ func (ic *InstanceController) Stop(ctx context.Context) error {
 	ic.instance.UpdateState(domain.InstanceStateStopping)
 	ic.mu.Unlock()
 
-	// Persist stopping state. If persistence fails, return error immediately.
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	// Signal the process to stop.
+	stopErr := ic.manager.Stop(ctx)
+
+	// Wait for the process to fully exit to ensure wait() goroutine
+	// has finished updating ic.instance fields before we persist state.
+	// This prevents a data race between Stop()'s persistState() and wait()'s
+	// ic.instance field writes.
+	done := ic.manager.GetDoneChannel()
+	if done != nil {
+		select {
+		case <-done:
+		case <-ctx.Done():
+			if stopErr == nil {
+				stopErr = ctx.Err()
+			}
+		}
+	}
+
+	// Update instance error if stop failed.
+	ic.mu.Lock()
+	if stopErr != nil {
+		ic.instance.UpdateError(stopErr.Error(), domain.InstanceExitError)
+	}
+	ic.mu.Unlock()
+
+	// Persist final state. If persistence fails, return error.
 	if err := ic.persistState(); err != nil {
 		return err
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
-
-	err := ic.manager.Stop(ctx)
-
-	ic.mu.Lock()
-	if err != nil {
-		ic.instance.UpdateError(err.Error(), domain.InstanceExitError)
-	}
-	ic.mu.Unlock()
-
-	return err
+	return stopErr
 }
 
 // Restart stops and restarts the instance without time.Sleep.

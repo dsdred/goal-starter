@@ -16,18 +16,23 @@ import (
 // doneCh is a channel returned by TestContextCancellation workaround.
 var doneCh chan struct{}
 
-// fakeRuntime returns the path to the compiled fake-runtime binary.
-// On Windows the path includes .exe suffix for exec.Command compatibility.
-// The testdata directory is relative to the module root.
+// fakeRuntime returns the path to a freshly compiled fake-runtime binary
+// in a test-scoped temp directory. This ensures the binary matches the
+// current GOOS/GOARCH and avoids cross-platform execution issues.
 func fakeRuntime(t *testing.T) string {
 	t.Helper()
+	tmpDir := t.TempDir()
+	binName := "fake-runtime"
+	if runtime.GOOS == "windows" {
+		binName = "fake-runtime.exe"
+	}
+	dst := filepath.Join(tmpDir, binName)
 
-	// Determine module root by walking up from test file location.
+	// Walk up from current working directory to find module root (go.mod).
 	cwd, err := os.Getwd()
 	if err != nil {
 		t.Fatalf("get cwd: %v", err)
 	}
-	// Walk up to find go.mod.
 	root := cwd
 	for {
 		if _, err := os.Stat(filepath.Join(root, "go.mod")); err == nil {
@@ -39,25 +44,15 @@ func fakeRuntime(t *testing.T) string {
 		}
 		root = parent
 	}
+	srcDir := filepath.Join(root, "testdata", "fake-runtime")
 
-	binName := "fake-runtime"
-	if runtime.GOOS == "windows" {
-		binName = "fake-runtime.exe"
-	}
-
-	candidate := filepath.Join(root, "testdata", "fake-runtime", binName)
-	if _, err := os.Stat(candidate); err == nil {
-		return candidate
-	}
-
-	// Compile the fake runtime from the module root.
-	buildCmd := exec.Command("go", "build", "-o", candidate, "./testdata/fake-runtime")
-	buildCmd.Dir = root
+	buildCmd := exec.Command("go", "build", "-o", dst, ".")
+	buildCmd.Dir = srcDir
 	out, err := buildCmd.CombinedOutput()
 	if err != nil {
-		t.Fatalf("failed to compile fake-runtime: %v\n%s", err, out)
+		t.Fatalf("build fake-runtime: %v\n%s", err, out)
 	}
-	return candidate
+	return dst
 }
 
 func TestStartStop_normalExit(t *testing.T) {
@@ -303,8 +298,11 @@ func TestSubscribe_logs(t *testing.T) {
 
 	// Collect log events.
 	logs := make([]process.LogEvent, 0)
+	var logsMu sync.Mutex
 	stopCollect := make(chan struct{})
+	collectDone := make(chan struct{})
 	go func() {
+		defer close(collectDone)
 		for {
 			select {
 			case <-stopCollect:
@@ -313,7 +311,9 @@ func TestSubscribe_logs(t *testing.T) {
 				if !ok {
 					return
 				}
+				logsMu.Lock()
 				logs = append(logs, ev)
+				logsMu.Unlock()
 			}
 		}
 	}()
@@ -337,8 +337,10 @@ func TestSubscribe_logs(t *testing.T) {
 
 check_logs:
 	close(stopCollect)
+	<-collectDone
 
 	// Verify we received stdout logs.
+	logsMu.Lock()
 	foundStdout := false
 	for _, ev := range logs {
 		if ev.Stream == "stdout" && len(ev.Message) > 0 {
