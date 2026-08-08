@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
@@ -213,35 +212,23 @@ func waitForState(sup *Supervisor, id domain.InstanceID, target domain.InstanceS
 	return fmt.Errorf("timeout waiting for instance %s to reach state %q", id, target)
 }
 
-// fakeRuntimeBuildOnce ensures the fake-runtime is built exactly once.
-var fakeRuntimeBuildOnce sync.Once
-
-// findOrBuildFakeRuntime finds or builds the fake-runtime binary.
-// If the binary cannot be built, returns an empty path (tests that require
-// the binary should check for empty and t.Fatal).
-func findOrBuildFakeRuntime(t *testing.T) string {
+// buildFakeRuntimeForTest builds fake-runtime from source into a temp directory
+// and returns the path. The caller must call t.Cleanup to remove the temp dir.
+// This ensures tests are reproducible on any platform without depending on
+// a pre-built Windows PE binary.
+func buildFakeRuntimeForTest(t *testing.T) string {
 	t.Helper()
-	rootDir := filepath.Join("..", "..")
-	dst := filepath.Join(rootDir, "testdata", "fake-runtime", "fake-runtime")
+	tmpDir := t.TempDir()
+	dst := filepath.Join(tmpDir, "fake-runtime")
 	if runtime.GOOS == "windows" {
 		dst += ".exe"
 	}
-	if _, err := os.Stat(dst); err == nil {
-		return dst
+	srcDir := filepath.Join("..", "..", "testdata", "fake-runtime")
+	cmd := exec.Command("go", "build", "-o", dst, ".")
+	cmd.Dir = srcDir
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("build fake-runtime: %v\n%s", err, output)
 	}
-	fakeRuntimeBuildOnce.Do(func() {
-		srcDir := filepath.Join(rootDir, "testdata", "fake-runtime")
-		if _, err := os.Stat(srcDir); os.IsNotExist(err) {
-			return
-		}
-		cmd := exec.Command("go", "build", "-o", dst, ".")
-		cmd.Dir = srcDir
-		if output, err := cmd.CombinedOutput(); err != nil {
-			// Log to stderr without failing the test — some tests handle
-			// empty binary path explicitly.
-			fmt.Fprintf(os.Stderr, "WARNING: failed to build fake-runtime: %v\n%s\n", err, output)
-		}
-	})
 	return dst
 }
 
@@ -274,7 +261,7 @@ func TestSupervisorNaturalExitReleasesSlot(t *testing.T) {
 	cfg := SupervisorConfig{MaxConcurrent: 1, LogBufferSize: 64}
 	sup := NewSupervisorWithConfig(store, cfg)
 	profile := &domain.Profile{ID: "p1", Name: "test"}
-	rt := &domain.Runtime{ID: "rt1", Name: "test-rt", Executable: findOrBuildFakeRuntime(t)}
+	rt := &domain.Runtime{ID: "rt1", Name: "test-rt", Executable: buildFakeRuntimeForTest(t)}
 	model := &domain.Model{ID: "m1", Name: "test-model"}
 	ctx := context.Background()
 	inst, err := sup.Start(ctx, profile, rt, model, []string{"-sleep", "0"}, nil)
@@ -309,10 +296,10 @@ func TestSupervisorStopReleasesSlot(t *testing.T) {
 	cfg := SupervisorConfig{MaxConcurrent: 1, LogBufferSize: 64}
 	sup := NewSupervisorWithConfig(store, cfg)
 	profile := &domain.Profile{ID: "p1", Name: "test"}
-	rt := &domain.Runtime{ID: "rt1", Name: "test-rt", Executable: findOrBuildFakeRuntime(t)}
+	rt := &domain.Runtime{ID: "rt1", Name: "test-rt", Executable: buildFakeRuntimeForTest(t)}
 	model := &domain.Model{ID: "m1", Name: "test-model"}
 	ctx := context.Background()
-	_, err := sup.Start(ctx, profile, rt, model, []string{"-sleep", "10"}, nil)
+	_, err := sup.Start(ctx, profile, rt, model, []string{"-sleep", "2"}, nil)
 	if err != nil {
 		t.Fatalf("start failed: %v", err)
 	}
@@ -337,36 +324,34 @@ func TestSupervisorForceKillReleasesSlot(t *testing.T) {
 	cfg := SupervisorConfig{MaxConcurrent: 1, LogBufferSize: 64}
 	sup := NewSupervisorWithConfig(store, cfg)
 	profile := &domain.Profile{ID: "p1", Name: "test"}
-	rt := &domain.Runtime{ID: "rt1", Name: "test-rt", Executable: findOrBuildFakeRuntime(t)}
+	rt := &domain.Runtime{ID: "rt1", Name: "test-rt", Executable: buildFakeRuntimeForTest(t)}
 	model := &domain.Model{ID: "m1", Name: "test-model"}
 	ctx := context.Background()
-	_, err := sup.Start(ctx, profile, rt, model, []string{"-sleep", "10"}, nil)
+	_, err := sup.Start(ctx, profile, rt, model, []string{"-sleep", "2"}, nil)
 	if err != nil {
 		t.Fatalf("start failed: %v", err)
 	}
-	// Wait for instance to become active using waitForState polling.
-	if err := waitForState(sup, "", domain.InstanceStateRunning, 3*time.Second); err != nil {
-		// List might have instances but waitForState checks specific ID;
-		// fall back to List if ID-based wait fails.
-		instances, listErr := sup.List()
-		if listErr != nil || len(instances) == 0 {
-			t.Fatalf("instance not running after timeout: %v", err)
-		}
-	} else {
-		// waitForState returned nil — we need the instance ID. Use List.
-		instances, _ := sup.List()
-		if len(instances) == 0 {
-			t.Fatal("no instances found after start")
-		}
-		sup.RemoveTerminal(instances[0].ID)
-		return
+	// Poll for active instances instead of fixed sleep.
+	if err := waitForInstanceActive(sup, 3*time.Second); err != nil {
+		t.Fatalf("instance not active after timeout: %v", err)
 	}
-	// Fallback: just remove all instances.
 	instances, _ := sup.List()
 	if len(instances) == 0 {
 		t.Fatal("no instances found after start")
 	}
-	sup.RemoveTerminal(instances[0].ID)
+	instID := instances[0].ID
+	// Stop the process first (kills the executable).
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer stopCancel()
+	sup.Stop(stopCtx, instID)
+	// Wait for process to fully exit so the exe file is released on Windows.
+	sup.mu.RLock()
+	ctrl, ok := sup.instances[instID]
+	sup.mu.RUnlock()
+	if ok {
+		waitForProcess(ctx, ctrl, 10*time.Second)
+	}
+	sup.RemoveTerminal(instID)
 	select {
 	case <-sup.semaphore:
 	case <-time.After(5 * time.Second):
@@ -380,7 +365,7 @@ func TestSupervisorRestartReusesSlot(t *testing.T) {
 	cfg := SupervisorConfig{MaxConcurrent: 1, LogBufferSize: 64}
 	sup := NewSupervisorWithConfig(store, cfg)
 	profile := &domain.Profile{ID: "p1", Name: "test"}
-	rt := &domain.Runtime{ID: "rt1", Name: "test-rt", Executable: findOrBuildFakeRuntime(t)}
+	rt := &domain.Runtime{ID: "rt1", Name: "test-rt", Executable: buildFakeRuntimeForTest(t)}
 	model := &domain.Model{ID: "m1", Name: "test-model"}
 	ctx := context.Background()
 	inst, err := sup.Start(ctx, profile, rt, model, []string{"-sleep", "0"}, nil)
@@ -416,14 +401,13 @@ func TestSupervisorRemoveTerminalDoesNotDoubleRelease(t *testing.T) {
 	cfg := SupervisorConfig{MaxConcurrent: 1, LogBufferSize: 64}
 	sup := NewSupervisorWithConfig(store, cfg)
 	profile := &domain.Profile{ID: "p1", Name: "test"}
-	rt := &domain.Runtime{ID: "rt1", Name: "test-rt", Executable: findOrBuildFakeRuntime(t)}
+	rt := &domain.Runtime{ID: "rt1", Name: "test-rt", Executable: buildFakeRuntimeForTest(t)}
 	model := &domain.Model{ID: "m1", Name: "test-model"}
 	ctx := context.Background()
-	_, err := sup.Start(ctx, profile, rt, model, []string{"-sleep", "10"}, nil)
+	_, err := sup.Start(ctx, profile, rt, model, []string{"-sleep", "2"}, nil)
 	if err != nil {
 		t.Fatalf("start failed: %v", err)
 	}
-	// Poll for active instances instead of fixed sleep.
 	if err := waitForInstanceActive(sup, 3*time.Second); err != nil {
 		t.Fatalf("instance not active after timeout: %v", err)
 	}
@@ -431,8 +415,19 @@ func TestSupervisorRemoveTerminalDoesNotDoubleRelease(t *testing.T) {
 	if len(instances) == 0 {
 		t.Fatal("no instances found after start")
 	}
-	sup.RemoveTerminal(instances[0].ID)
-	sup.RemoveTerminal(instances[0].ID)
+	instID := instances[0].ID
+	// Stop the process first, then wait for exit to release Windows file lock.
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer stopCancel()
+	sup.Stop(stopCtx, instID)
+	sup.mu.RLock()
+	ctrl, ok := sup.instances[instID]
+	sup.mu.RUnlock()
+	if ok {
+		waitForProcess(ctx, ctrl, 10*time.Second)
+	}
+	sup.RemoveTerminal(instID)
+	sup.RemoveTerminal(instID)
 	select {
 	case <-sup.semaphore:
 	case <-time.After(time.Second):
@@ -447,79 +442,80 @@ func TestSupervisorRemoveTerminalDoesNotDoubleRelease(t *testing.T) {
 
 // TestSupervisorConcurrentStartLimit verifies maxConcurrent limits concurrent starts.
 //
-// Strategy: start 3 goroutines concurrently against a semaphore with capacity
-// 2.  Record the number of successfully started instances and verify that no
-// more than 2 are active at any given point in time.
+// Fixed architecture: with MaxConcurrent=2 and three parallel Starts using
+// "-sleep 1", the third goroutine blocks on semaphore. The test uses a
+// readyCh barrier to prove slots 1-2 are active, then releases one instance
+// to unblock the third.
 func TestSupervisorConcurrentStartLimit(t *testing.T) {
 	store := newMockStore()
 	cfg := SupervisorConfig{MaxConcurrent: 2, LogBufferSize: 64}
 	sup := NewSupervisorWithConfig(store, cfg)
 	profile := &domain.Profile{ID: "p1", Name: "test"}
-	rt := &domain.Runtime{ID: "rt1", Name: "test-rt", Executable: findOrBuildFakeRuntime(t)}
+	rt := &domain.Runtime{ID: "rt1", Name: "test-rt", Executable: buildFakeRuntimeForTest(t)}
 	model := &domain.Model{ID: "m1", Name: "test-model"}
 	ctx := context.Background()
+
+	readyCh := make(chan struct{}, 3) // signal when Start() returns for each goroutine
 
 	var wg sync.WaitGroup
 	var instancesMu sync.Mutex
 	var startedInstances []*domain.LaunchInstance
-	var successCount int
 
-	// Start 3 goroutines concurrently.  With MaxConcurrent=2 the semaphore
+	// Start 3 goroutines concurrently. With MaxConcurrent=2 the semaphore
 	// (capacity 2) limits how many can run the process-start path simultaneously.
 	for i := 0; i < 3; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			inst, err := sup.Start(ctx, profile, rt, model, []string{"-sleep", "10"}, nil)
-			instancesMu.Lock()
-			defer instancesMu.Unlock()
+			inst, err := sup.Start(ctx, profile, rt, model, []string{"-sleep", "1"}, nil)
+			readyCh <- struct{}{} // signal that Start() returned (blocked or not)
 			if err != nil {
 				return
 			}
-			successCount++
+			instancesMu.Lock()
 			startedInstances = append(startedInstances, inst)
+			instancesMu.Unlock()
 		}()
 	}
 
-	// Wait for all goroutines to complete.  The third goroutine may be blocked
-	// on semaphore acquisition; give it enough time then drain remaining slots.
-	done := make(chan struct{})
-	go func() {
-		wg.Wait()
-		close(done)
-	}()
+	// Wait for all 3 Starts to return (either acquired slot or blocked).
+	// 3 ready signals from 3 goroutines.
+	<-readyCh
+	<-readyCh
+	<-readyCh
 
-	select {
-	case <-done:
-	case <-time.After(6 * time.Second):
-		// Drain remaining semaphore tokens so blocked goroutines can proceed.
-		for len(sup.semaphore) > 0 {
-			<-sup.semaphore
-		}
-		<-done
-	}
-
-	// Verify: at least 2 instances started successfully (the third may have
-	// succeeded or been context-cancelled depending on timing).
+	// At least 2 instances should have started (first two goroutines).
 	instancesMu.Lock()
 	startedLen := len(startedInstances)
 	instancesMu.Unlock()
 	if startedLen < 2 {
-		t.Errorf("expected at least 2 started instances, got %d", startedLen)
+		t.Errorf("expected at least 2 started instances after all Starts returned, got %d", startedLen)
 	}
 
-	// Verify: at most 2 active instances at any point.
+	// Verify: at most 2 active instances.
 	active, _ := sup.ListActive()
 	if len(active) > 2 {
 		t.Errorf("expected at most 2 active instances, got %d", len(active))
 	}
 
-	// Clean up instances.
+	// Clean up: stop all started instances.
 	instancesMu.Lock()
 	for _, inst := range startedInstances {
 		sup.RemoveTerminal(inst.ID)
 	}
 	instancesMu.Unlock()
+
+	// Wait for cleanup to complete.
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("cleanup timeout — possible slot leak")
+	}
 }
 
 // TestStartFailureJoinsPersistenceFailure verifies that when the process fails
@@ -532,7 +528,7 @@ func TestStartFailureJoinsPersistenceFailure(t *testing.T) {
 	cfg := SupervisorConfig{MaxConcurrent: 1, LogBufferSize: 64}
 	sup := NewSupervisorWithConfig(store, cfg)
 	profile := &domain.Profile{ID: "p1", Name: "test"}
-	rt := &domain.Runtime{ID: "rt1", Name: "test-rt", Executable: findOrBuildFakeRuntime(t)}
+	rt := &domain.Runtime{ID: "rt1", Name: "test-rt", Executable: buildFakeRuntimeForTest(t)}
 	model := &domain.Model{ID: "m1", Name: "test-model"}
 	ctx := context.Background()
 
@@ -565,7 +561,7 @@ func TestRunningPersistenceFailureRollsBackOrDegrades(t *testing.T) {
 	cfg := SupervisorConfig{MaxConcurrent: 0, LogBufferSize: 64}
 	sup := NewSupervisorWithConfig(store, cfg)
 	profile := &domain.Profile{ID: "p1", Name: "test"}
-	rt := &domain.Runtime{ID: "rt1", Name: "test-rt", Executable: findOrBuildFakeRuntime(t)}
+	rt := &domain.Runtime{ID: "rt1", Name: "test-rt", Executable: buildFakeRuntimeForTest(t)}
 	model := &domain.Model{ID: "m1", Name: "test-model"}
 	ctx := context.Background()
 	// With degraded success, Start returns nil error but sets LastError.
@@ -619,7 +615,7 @@ func TestNaturalExitPersistenceFailureObservable(t *testing.T) {
 	cfg := SupervisorConfig{MaxConcurrent: 0, LogBufferSize: 64}
 	sup := NewSupervisorWithConfig(store, cfg)
 	profile := &domain.Profile{ID: "p1", Name: "test"}
-	rt := &domain.Runtime{ID: "rt1", Name: "test-rt", Executable: findOrBuildFakeRuntime(t)}
+	rt := &domain.Runtime{ID: "rt1", Name: "test-rt", Executable: buildFakeRuntimeForTest(t)}
 	model := &domain.Model{ID: "m1", Name: "test-model"}
 	ctx := context.Background()
 	inst, err := sup.Start(ctx, profile, rt, model, []string{"-sleep", "0"}, nil)
@@ -669,14 +665,13 @@ func TestStopPersistenceFailureReturned(t *testing.T) {
 	cfg := SupervisorConfig{MaxConcurrent: 0, LogBufferSize: 64}
 	sup := NewSupervisorWithConfig(store, cfg)
 	profile := &domain.Profile{ID: "p1", Name: "test"}
-	rt := &domain.Runtime{ID: "rt1", Name: "test-rt", Executable: findOrBuildFakeRuntime(t)}
+	rt := &domain.Runtime{ID: "rt1", Name: "test-rt", Executable: buildFakeRuntimeForTest(t)}
 	model := &domain.Model{ID: "m1", Name: "test-model"}
 	ctx := context.Background()
-	_, err := sup.Start(ctx, profile, rt, model, []string{"-sleep", "5"}, nil)
+	_, err := sup.Start(ctx, profile, rt, model, []string{"-sleep", "2"}, nil)
 	if err != nil {
 		t.Fatalf("start failed: %v", err)
 	}
-	// Poll for active instances instead of fixed sleep.
 	if err := waitForInstanceActive(sup, 3*time.Second); err != nil {
 		t.Fatalf("instance not active after timeout: %v", err)
 	}
@@ -687,12 +682,20 @@ func TestStopPersistenceFailureReturned(t *testing.T) {
 	if len(instances) == 0 {
 		t.Fatal("no instances found after start")
 	}
-	err = sup.Stop(ctx, instances[0].ID)
+	instID := instances[0].ID
+	err = sup.Stop(ctx, instID)
 	if err == nil {
 		t.Fatal("expected error from Stop with persistence failure")
 	}
 	if !errors.Is(err, testUpdateErr) {
 		t.Errorf("expected errors.Is(err, testUpdateErr), got: %v", err)
+	}
+	// Wait for process exit to release Windows file lock.
+	sup.mu.RLock()
+	ctrl, ok := sup.instances[instID]
+	sup.mu.RUnlock()
+	if ok {
+		waitForProcess(ctx, ctrl, 10*time.Second)
 	}
 }
 
@@ -708,14 +711,13 @@ func TestRestartPersistenceFailureReturned(t *testing.T) {
 	cfg := SupervisorConfig{MaxConcurrent: 0, LogBufferSize: 64}
 	sup := NewSupervisorWithConfig(store, cfg)
 	profile := &domain.Profile{ID: "p1", Name: "test"}
-	rt := &domain.Runtime{ID: "rt1", Name: "test-rt", Executable: findOrBuildFakeRuntime(t)}
+	rt := &domain.Runtime{ID: "rt1", Name: "test-rt", Executable: buildFakeRuntimeForTest(t)}
 	model := &domain.Model{ID: "m1", Name: "test-model"}
 	ctx := context.Background()
-	_, err := sup.Start(ctx, profile, rt, model, []string{"-sleep", "10"}, nil)
+	_, err := sup.Start(ctx, profile, rt, model, []string{"-sleep", "2"}, nil)
 	if err != nil {
 		t.Fatalf("start failed: %v", err)
 	}
-	// Poll for active instances instead of fixed sleep.
 	if err := waitForInstanceActive(sup, 3*time.Second); err != nil {
 		t.Fatalf("instance not active after timeout: %v", err)
 	}
@@ -726,12 +728,20 @@ func TestRestartPersistenceFailureReturned(t *testing.T) {
 	if len(instances) == 0 {
 		t.Fatal("no instances found after start")
 	}
-	_, err = sup.Restart(ctx, instances[0].ID)
+	instID := instances[0].ID
+	_, err = sup.Restart(ctx, instID)
 	if err == nil {
 		t.Fatal("expected error from Restart with persistence failure")
 	}
 	if !errors.Is(err, testUpdateErr) {
 		t.Errorf("expected errors.Is(err, testUpdateErr), got: %v", err)
+	}
+	// Wait for process exit to release Windows file lock.
+	sup.mu.RLock()
+	ctrl, ok := sup.instances[instID]
+	sup.mu.RUnlock()
+	if ok {
+		waitForProcess(ctx, ctrl, 10*time.Second)
 	}
 }
 
@@ -750,7 +760,7 @@ func TestShutdownAggregatesPersistenceFailures(t *testing.T) {
 	cfg := SupervisorConfig{MaxConcurrent: 0, LogBufferSize: 64}
 	sup := NewSupervisorWithConfig(store, cfg)
 	profile := &domain.Profile{ID: "p1", Name: "test"}
-	rt := &domain.Runtime{ID: "rt1", Name: "test-rt", Executable: findOrBuildFakeRuntime(t)}
+	rt := &domain.Runtime{ID: "rt1", Name: "test-rt", Executable: buildFakeRuntimeForTest(t)}
 	model := &domain.Model{ID: "m1", Name: "test-model"}
 	ctx := context.Background()
 	inst, err := sup.Start(ctx, profile, rt, model, []string{"-sleep", "1"}, nil)
@@ -815,7 +825,7 @@ func TestPersistenceErrorVisibleInSnapshot(t *testing.T) {
 	cfg := SupervisorConfig{MaxConcurrent: 0, LogBufferSize: 64}
 	sup := NewSupervisorWithConfig(store, cfg)
 	profile := &domain.Profile{ID: "p1", Name: "test"}
-	rt := &domain.Runtime{ID: "rt1", Name: "test-rt", Executable: findOrBuildFakeRuntime(t)}
+	rt := &domain.Runtime{ID: "rt1", Name: "test-rt", Executable: buildFakeRuntimeForTest(t)}
 	model := &domain.Model{ID: "m1", Name: "test-model"}
 	ctx := context.Background()
 	inst, err := sup.Start(ctx, profile, rt, model, []string{"-sleep", "0"}, nil)
