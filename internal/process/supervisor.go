@@ -783,10 +783,6 @@ func (ic *InstanceController) wait() {
 	// external side effects (store.Update, reservation.Release).
 	ic.mu.Lock()
 
-	// Signal that InstanceController.wait is fully complete.
-	// Use sync.Once to allow multiple wait() calls (e.g. during Restart).
-	ic.doneOnce.Do(func() { close(ic.done) })
-
 	finalStatus := ic.manager.Status()
 
 	ic.instance.PID = finalStatus.PID
@@ -833,6 +829,12 @@ func (ic *InstanceController) wait() {
 	ic.instance.State = targetState
 	ic.instance.StoppedAt = time.Now()
 	ic.instance.UpdatedAt = ic.instance.StoppedAt
+
+	// Signal that InstanceController.wait is fully complete (all ic.instance
+	// fields written under the lock above). This unblocks Stop() which is
+	// reading these same fields via persistState().
+	// Use sync.Once to allow multiple wait() calls (e.g. during Restart).
+	ic.doneOnce.Do(func() { close(ic.done) })
 
 	// Take reservation under lock before releasing it outside.
 	var reservation *slotReservation
