@@ -40,11 +40,13 @@ func (s *InstanceService) StartProfile(ctx context.Context, profileID string) (*
 		mdlData, err := s.repo.GetModel(p.ModelID)
 		if err == nil {
 			mdl = &domain.Model{
-				ID:     mdlData.ID,
-				Name:   mdlData.Name,
-				Path:   mdlData.Path,
-				MMProj: mdlData.MMProj,
-				Format: mdlData.Format,
+				ID:        mdlData.ID,
+				Name:      mdlData.Name,
+				Path:      mdlData.Path,
+				MMProj:    mdlData.MMProj,
+				Format:    mdlData.Format,
+				Arguments: mdlData.Arguments,
+				RuntimeID: mdlData.RuntimeID,
 			}
 		}
 	}

@@ -18,6 +18,13 @@ func (c Config) ValidateFull() error {
 		return fmt.Errorf("config validation failed: %w", err)
 	}
 
+	// If authentication is disabled, the server must not be exposed to the network.
+	if !c.AuthEnabled {
+		if err := validateLocalhostOnly(c.ListenAddress); err != nil {
+			return fmt.Errorf("auth disabled but %w", err)
+		}
+	}
+
 	// Validate listen address.
 	if err := validateAddress(c.ListenAddress, c.WebPort); err != nil {
 		return fmt.Errorf("listen address: %w", err)
@@ -186,4 +193,18 @@ func validateEnvKey(key string) error {
 		return fmt.Errorf("invalid character in environment variable name %q", key)
 	}
 	return nil
+}
+
+// validateLocalhostOnly ensures the address is a loopback address when auth is disabled.
+func validateLocalhostOnly(host string) error {
+	if host == "localhost" {
+		return nil
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		if ip.IsLoopback() {
+			return nil
+		}
+		return fmt.Errorf("listen address %s is not a loopback address; refusing to start without authentication", host)
+	}
+	return fmt.Errorf("listen address %s is not a loopback address; refusing to start without authentication", host)
 }

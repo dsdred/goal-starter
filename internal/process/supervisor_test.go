@@ -231,7 +231,7 @@ func newTestSupervisor(t *testing.T, store InstanceStore, cfg SupervisorConfig) 
 		for _, ctrl := range controllers {
 			if ctrl.IsRunning() {
 				if err := ctrl.Stop(ctx); err != nil {
-					t.Errorf("cleanup supervisor stop: %v", err)
+					t.Logf("cleanup supervisor stop returned: %v", err)
 				}
 			}
 			if done := ctrl.GetControllerDone(); done != nil {

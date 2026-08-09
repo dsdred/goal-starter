@@ -42,7 +42,7 @@
       "modelId": "qwen36-35b",
       "host": "127.0.0.1",
       "port": 8085,
-      "arguments": [],
+      "args": [],
       "environment": {}
     }
   ]

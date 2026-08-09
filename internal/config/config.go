@@ -65,6 +65,23 @@ type Profile struct {
 	HealthCheck *ProfileHealthCheck `json:"healthCheck,omitempty"`
 }
 
+// UnmarshalJSON supports both `args` and `arguments` for Profile args
+// for backward compatibility with older configuration examples.
+func (p *Profile) UnmarshalJSON(data []byte) error {
+	type Alias Profile
+	aux := &struct {
+		*Alias
+		Arguments []string `json:"arguments,omitempty"`
+	}{Alias: (*Alias)(p)}
+	if err := json.Unmarshal(data, aux); err != nil {
+		return err
+	}
+	if len(p.Args) == 0 && len(aux.Arguments) > 0 {
+		p.Args = aux.Arguments
+	}
+	return nil
+}
+
 // ProfileHealthCheck holds profile-specific health check settings.
 type ProfileHealthCheck struct {
 	Enabled    bool   `json:"enabled"`

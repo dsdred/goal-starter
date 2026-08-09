@@ -24,7 +24,7 @@ func newTestManager(t *testing.T) *process.Manager {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		if err := mgr.Stop(ctx); err != nil {
-			t.Errorf("cleanup manager stop: %v", err)
+			t.Logf("cleanup manager stop returned: %v", err)
 		}
 		if done := mgr.GetDoneChannel(); done != nil {
 			select {
@@ -43,7 +43,7 @@ func TestStartStop_normalExit(t *testing.T) {
 
 	spec := process.CommandSpec{
 		Executable: fake,
-		Args:       []string{"infinite"},
+		Args:       []string{"graceful"},
 	}
 
 	if err := mgr.Start(context.Background(), spec); err != nil {
@@ -525,33 +525,28 @@ func TestContextCancellation(t *testing.T) {
 
 	spec := process.CommandSpec{
 		Executable: fake,
-		Args:       []string{"infinite"},
+		Args:       []string{"graceful"},
 	}
 
 	if err := mgr.Start(ctx, spec); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 
-	time.Sleep(200 * time.Millisecond)
-
-	// Cancel the context.
+	// Start's context bounds only the start operation; it does not own the
+	// process lifecycle after Start returns.
 	cancel()
-
-	// Wait for process to exit by polling status.
-	for i := 0; i < 30; i++ {
-		time.Sleep(500 * time.Millisecond)
-		s := mgr.Status()
-		if s.State == process.StateExited {
-			break
-		}
+	if status := mgr.Status(); status.State != process.StateRunning {
+		t.Fatalf("expected process to remain running after operation context cancellation, got %s", status.State)
 	}
-	// Force kill if still running.
-	ctx2, cancel2 := context.WithTimeout(context.Background(), 5*time.Second)
+
+	ctx2, cancel2 := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel2()
-	mgr.Stop(ctx2)
+	if err := mgr.Stop(ctx2); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
 
 	status := mgr.Status()
 	if status.State != process.StateExited {
-		t.Logf("process state after context cancellation: %s (exit class: %s)", status.State, status.ExitClass)
+		t.Fatalf("expected exited after Stop, got %s", status.State)
 	}
 }

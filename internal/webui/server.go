@@ -41,6 +41,7 @@ type App struct {
 	sessionStore  *security.SessionStore
 	hc            *health.HealthChecker
 	reg           *handlers.RouteRegistry
+	authEnabled   bool
 }
 
 // NewApp creates server dependencies.
@@ -61,6 +62,7 @@ func NewApp(cfg *config.Config, repo storage.Repository, supervisor *process.Sup
 		csrf:          security.NewCSRF(),
 		passwordStore: security.NewPasswordStore(),
 		sessionStore:  security.NewSessionStore(),
+		authEnabled:   cfg.AuthEnabled,
 	}
 
 	// Set admin password from config.
@@ -111,6 +113,7 @@ func (a *App) InitRegistry() {
 		a.csrf,
 		a.sessionStore,
 		a.passwordStore,
+		handlers.WithAuthEnabled(a.authEnabled),
 	)
 }
 

@@ -37,6 +37,8 @@ type ModelEntry struct {
 	Path      string    `json:"path"`
 	MMProj    string    `json:"mmproj,omitempty"`
 	Format    string    `json:"format,omitempty"`
+	Arguments []string  `json:"arguments,omitempty"`
+	RuntimeID string    `json:"runtime_id,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
@@ -352,7 +354,9 @@ func (r *JSONRepository) CreateRuntime(e *RuntimeEntry) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	e.ID = generateID()
+	if e.ID == "" {
+		e.ID = generateID()
+	}
 	e.CreatedAt = time.Now()
 	e.UpdatedAt = time.Now()
 
@@ -430,7 +434,9 @@ func (r *JSONRepository) CreateModel(e *ModelEntry) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	e.ID = generateID()
+	if e.ID == "" {
+		e.ID = generateID()
+	}
 	e.CreatedAt = time.Now()
 	e.UpdatedAt = time.Now()
 
@@ -496,7 +502,9 @@ func (r *JSONRepository) CreateProfile(e *ProfileEntry) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	e.ID = generateID()
+	if e.ID == "" {
+		e.ID = generateID()
+	}
 	e.CreatedAt = time.Now()
 	e.UpdatedAt = time.Now()
 

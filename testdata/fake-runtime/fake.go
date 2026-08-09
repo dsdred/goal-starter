@@ -18,6 +18,7 @@ import (
 //   - stdout          Print lines to stdout and exit 0
 //   - stderr          Print lines to stderr and exit 0
 //   - child           Spawn a child process and wait for it
+//   - graceful        Exit 0 on SIGTERM or SIGINT
 //   - ignored-signal  Ignore SIGTERM, exit 0 on SIGINT
 //   - delayed         Wait N seconds then exit with code
 //   - exit-code       Exit with specified code immediately
@@ -52,6 +53,8 @@ func main() {
 		doStderr()
 	case "child":
 		doChild()
+	case "graceful":
+		doGraceful()
 	case "ignored-signal":
 		doIgnoredSignal()
 	case "delayed":
@@ -95,6 +98,12 @@ func doChild() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+}
+
+func doGraceful() {
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
+	<-sigCh
 }
 
 func doIgnoredSignal() {

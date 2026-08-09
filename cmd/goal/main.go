@@ -67,6 +67,9 @@ func main() {
 		}
 	}
 
+	// Seed repository from config file (initial runtimes/models/profiles).
+	storage.SeedFromConfig(repo, &cfg)
+
 	// Create application-level context for Supervisor lifecycle.
 	// All instance processes inherit this context, so HTTP request timeouts
 	// do not kill running processes.

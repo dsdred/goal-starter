@@ -9,22 +9,38 @@ import (
 
 // AuthHandler handles authentication-related HTTP requests.
 type AuthHandler struct {
-	sess *security.SessionStore
-	pass *security.PasswordStore
-	csrf *security.CSRF
+	sess        *security.SessionStore
+	pass        *security.PasswordStore
+	csrf        *security.CSRF
+	authEnabled bool
 }
 
 // NewAuthHandler creates a new AuthHandler.
 func NewAuthHandler(sess *security.SessionStore, pass *security.PasswordStore, csrf *security.CSRF) *AuthHandler {
 	return &AuthHandler{
-		sess: sess,
-		pass: pass,
-		csrf: csrf,
+		sess:        sess,
+		pass:        pass,
+		csrf:        csrf,
+		authEnabled: true,
 	}
+}
+
+// WithAuthEnabled enables or disables authentication for the handler.
+func (h *AuthHandler) WithAuthEnabled(enabled bool) *AuthHandler {
+	h.authEnabled = enabled
+	return h
 }
 
 // Login handles POST /api/v1/auth/login.
 func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
+	if !h.authEnabled {
+		writeJSON(w, http.StatusOK, map[string]string{
+			"authenticated": "true",
+			"message":       "authentication is disabled",
+		})
+		return
+	}
+
 	var creds struct {
 		Username string `json:"username"`
 		Password string `json:"password"`
@@ -70,6 +86,15 @@ func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
 
 // CheckSession handles GET /api/v1/auth/session.
 func (h *AuthHandler) CheckSession(w http.ResponseWriter, r *http.Request) {
+	if !h.authEnabled {
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"authenticated": true,
+			"user":          "public",
+			"auth_disabled": true,
+		})
+		return
+	}
+
 	token, err := security.GetSessionToken(r)
 	if err != nil || token == "" {
 		writeJSON(w, http.StatusOK, map[string]bool{"authenticated": false})

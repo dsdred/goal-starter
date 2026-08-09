@@ -23,6 +23,18 @@ type RouteRegistry struct {
 	passwordStore     *security.PasswordStore
 	rateLimiter       any // *RateLimiter placeholder
 	loggingMiddleware func(http.Handler) http.Handler
+	authEnabled       bool
+}
+
+// RouteRegistryOption configures the route registry.
+type RouteRegistryOption func(*RouteRegistry)
+
+// WithAuthEnabled enables or disables authentication for all routes.
+// When disabled (public API mode), the application must only be bound to localhost.
+func WithAuthEnabled(enabled bool) RouteRegistryOption {
+	return func(r *RouteRegistry) {
+		r.authEnabled = enabled
+	}
 }
 
 // NewRouteRegistry creates a new route registry.
@@ -36,8 +48,9 @@ func NewRouteRegistry(
 	csrf *security.CSRF,
 	sessionStore *security.SessionStore,
 	passwordStore *security.PasswordStore,
+	opts ...RouteRegistryOption,
 ) *RouteRegistry {
-	return &RouteRegistry{
+	r := &RouteRegistry{
 		authHandler:     NewAuthHandler(sessionStore, passwordStore, csrf),
 		profileHandler:  NewProfilesHandler(profileSvc, instanceSvc, supervisor, csrf),
 		runtimeHandler:  NewRuntimesHandler(runtimeSvc, instanceSvc, supervisor, csrf),
@@ -47,7 +60,13 @@ func NewRouteRegistry(
 		csrf:            csrf,
 		sessionStore:    sessionStore,
 		passwordStore:   passwordStore,
+		authEnabled:     true,
 	}
+	for _, opt := range opts {
+		opt(r)
+	}
+	r.authHandler.WithAuthEnabled(r.authEnabled)
+	return r
 }
 
 // WithLoggingMiddleware sets the logging middleware.
@@ -86,10 +105,10 @@ func (r *RouteRegistry) Build() http.Handler {
 
 	// Profiles CRUD.
 	mux.HandleFunc("GET /api/v1/profiles", r.requireAuth(r.profileHandler.List))
-	mux.HandleFunc("GET /api/v1/profiles/", r.requireAuth(r.profileHandler.Get))
+	mux.HandleFunc("GET /api/v1/profiles/{id}", r.requireAuth(r.profileHandler.Get))
 	mux.HandleFunc("POST /api/v1/profiles", r.requireAuthCSRF(r.profileHandler.Create))
-	mux.HandleFunc("PUT /api/v1/profiles/", r.requireAuthCSRF(r.profileHandler.Update))
-	mux.HandleFunc("DELETE /api/v1/profiles/", r.requireAuthCSRF(r.profileHandler.Delete))
+	mux.HandleFunc("PUT /api/v1/profiles/{id}", r.requireAuthCSRF(r.profileHandler.Update))
+	mux.HandleFunc("DELETE /api/v1/profiles/{id}", r.requireAuthCSRF(r.profileHandler.Delete))
 	mux.HandleFunc("POST /api/v1/profiles/{id}/action/{action}", r.requireAuthCSRF(r.profileHandler.Action))
 	mux.HandleFunc("POST /api/v1/profiles/{id}/start", r.requireAuthCSRF(r.profileHandler.Start))
 	mux.HandleFunc("POST /api/v1/profiles/{id}/stop", r.requireAuthCSRF(r.profileHandler.Stop))
@@ -101,23 +120,27 @@ func (r *RouteRegistry) Build() http.Handler {
 
 	// Runtimes CRUD.
 	mux.HandleFunc("GET /api/v1/runtimes", r.requireAuth(r.runtimeHandler.List))
-	mux.HandleFunc("GET /api/v1/runtimes/", r.requireAuth(r.runtimeHandler.Get))
-	mux.HandleFunc("POST /api/v1/runtimes", r.requireAuthCSRF(r.runtimeHandler.Create))
-	mux.HandleFunc("PUT /api/v1/runtimes/", r.requireAuthCSRF(r.runtimeHandler.Update))
-	mux.HandleFunc("DELETE /api/v1/runtimes/", r.requireAuthCSRF(r.runtimeHandler.Delete))
-	mux.HandleFunc("POST /api/v1/runtimes/{id}/action/{action}", r.requireAuthCSRF(r.runtimeHandler.Action))
 	mux.HandleFunc("GET /api/v1/runtimes/health", r.requireAuth(r.runtimeHandler.HealthCheck))
 	mux.HandleFunc("GET /api/v1/runtimes/health/{id}", r.requireAuth(r.runtimeHandler.RuntimeHealth))
+	mux.HandleFunc("GET /api/v1/runtimes/{id}", r.requireAuth(r.runtimeHandler.Get))
+	mux.HandleFunc("POST /api/v1/runtimes", r.requireAuthCSRF(r.runtimeHandler.Create))
+	mux.HandleFunc("PUT /api/v1/runtimes/{id}", r.requireAuthCSRF(r.runtimeHandler.Update))
+	mux.HandleFunc("DELETE /api/v1/runtimes/{id}", r.requireAuthCSRF(r.runtimeHandler.Delete))
+	mux.HandleFunc("POST /api/v1/runtimes/{id}/action/{action}", r.requireAuthCSRF(r.runtimeHandler.Action))
 
 	// Models CRUD.
 	mux.HandleFunc("GET /api/v1/models", r.requireAuth(r.modelHandler.List))
-	mux.HandleFunc("GET /api/v1/models/", r.requireAuth(r.modelHandler.Get))
+	mux.HandleFunc("GET /api/v1/models/{id}", r.requireAuth(r.modelHandler.Get))
 	mux.HandleFunc("POST /api/v1/models", r.requireAuthCSRF(r.modelHandler.Create))
-	mux.HandleFunc("PUT /api/v1/models/", r.requireAuthCSRF(r.modelHandler.Update))
-	mux.HandleFunc("DELETE /api/v1/models/", r.requireAuthCSRF(r.modelHandler.Delete))
+	mux.HandleFunc("PUT /api/v1/models/{id}", r.requireAuthCSRF(r.modelHandler.Update))
+	mux.HandleFunc("DELETE /api/v1/models/{id}", r.requireAuthCSRF(r.modelHandler.Delete))
 
 	// Main UI.
-	mux.HandleFunc("/", r.requireAuth(r.systemHandler.ServeIndex))
+	if !r.authEnabled {
+		mux.HandleFunc("/", r.systemHandler.ServeIndex)
+	} else {
+		mux.HandleFunc("/", r.requireAuth(r.systemHandler.ServeIndex))
+	}
 
 	// Static files.
 	mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir("./web/static"))))
@@ -133,6 +156,9 @@ func (r *RouteRegistry) Build() http.Handler {
 
 // requireAuth wraps a handler with authentication check.
 func (r *RouteRegistry) requireAuth(next http.HandlerFunc) http.HandlerFunc {
+	if !r.authEnabled {
+		return next
+	}
 	return func(w http.ResponseWriter, req *http.Request) {
 		token, err := security.GetSessionToken(req)
 		if err != nil || token == "" {
@@ -150,6 +176,9 @@ func (r *RouteRegistry) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 
 // requireAuthCSRF wraps a handler with authentication and CSRF check.
 func (r *RouteRegistry) requireAuthCSRF(next http.HandlerFunc) http.HandlerFunc {
+	if !r.authEnabled {
+		return next
+	}
 	return func(w http.ResponseWriter, req *http.Request) {
 		token, err := security.GetSessionToken(req)
 		if err != nil || token == "" {
@@ -189,7 +218,7 @@ func (r *RouteRegistry) applyRateLimit(next http.Handler) http.Handler {
 
 // applyCSRF applies the global CSRF middleware.
 func (r *RouteRegistry) applyCSRF(next http.Handler) http.Handler {
-	if r.csrf == nil {
+	if r.csrf == nil || !r.authEnabled {
 		return next
 	}
 	return r.csrf.Middleware(next)

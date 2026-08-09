@@ -89,11 +89,13 @@ func (s *ProfileService) ResolveWithSupervisor(supervisor *process.Supervisor, p
 		mdlData, err := s.repo.GetModel(p.ModelID)
 		if err == nil {
 			mdl = &domain.Model{
-				ID:     mdlData.ID,
-				Name:   mdlData.Name,
-				Path:   mdlData.Path,
-				MMProj: mdlData.MMProj,
-				Format: mdlData.Format,
+				ID:        mdlData.ID,
+				Name:      mdlData.Name,
+				Path:      mdlData.Path,
+				MMProj:    mdlData.MMProj,
+				Format:    mdlData.Format,
+				Arguments: mdlData.Arguments,
+				RuntimeID: mdlData.RuntimeID,
 			}
 		}
 	}

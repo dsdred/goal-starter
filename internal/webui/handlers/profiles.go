@@ -104,7 +104,7 @@ func (h *ProfilesHandler) Delete(w http.ResponseWriter, r *http.Request) {
 
 // Activate handles POST /api/v1/profiles/{id}/activate
 func (h *ProfilesHandler) Activate(w http.ResponseWriter, r *http.Request) {
-	id := strings.TrimPrefix(r.URL.Path, "/api/v1/profiles/")
+	id := profileIDFromActionPath(r.URL.Path, "/activate")
 	if id == "" {
 		writeError(w, 400, "profile ID is required")
 		return
@@ -118,7 +118,7 @@ func (h *ProfilesHandler) Activate(w http.ResponseWriter, r *http.Request) {
 
 // Deactivate handles POST /api/v1/profiles/{id}/deactivate
 func (h *ProfilesHandler) Deactivate(w http.ResponseWriter, r *http.Request) {
-	id := strings.TrimPrefix(r.URL.Path, "/api/v1/profiles/")
+	id := profileIDFromActionPath(r.URL.Path, "/deactivate")
 	if id == "" {
 		writeError(w, 400, "profile ID is required")
 		return
@@ -132,7 +132,7 @@ func (h *ProfilesHandler) Deactivate(w http.ResponseWriter, r *http.Request) {
 
 // Resolve handles POST /api/v1/profiles/{id}/resolve
 func (h *ProfilesHandler) Resolve(w http.ResponseWriter, r *http.Request) {
-	id := strings.TrimPrefix(r.URL.Path, "/api/v1/profiles/")
+	id := profileIDFromActionPath(r.URL.Path, "/resolve")
 	if id == "" {
 		writeError(w, 400, "profile ID is required")
 		return
@@ -147,7 +147,7 @@ func (h *ProfilesHandler) Resolve(w http.ResponseWriter, r *http.Request) {
 
 // Start handles POST /api/v1/profiles/{id}/start
 func (h *ProfilesHandler) Start(w http.ResponseWriter, r *http.Request) {
-	id := strings.TrimPrefix(r.URL.Path, "/api/v1/profiles/")
+	id := profileIDFromActionPath(r.URL.Path, "/start")
 	if id == "" {
 		writeError(w, 400, "profile ID is required")
 		return
@@ -162,7 +162,7 @@ func (h *ProfilesHandler) Start(w http.ResponseWriter, r *http.Request) {
 
 // Stop handles POST /api/v1/profiles/{id}/stop
 func (h *ProfilesHandler) Stop(w http.ResponseWriter, r *http.Request) {
-	id := strings.TrimPrefix(r.URL.Path, "/api/v1/profiles/")
+	id := profileIDFromActionPath(r.URL.Path, "/stop")
 	if id == "" {
 		writeError(w, 400, "profile ID is required")
 		return
@@ -187,7 +187,7 @@ func (h *ProfilesHandler) Stop(w http.ResponseWriter, r *http.Request) {
 
 // Restart handles POST /api/v1/profiles/{id}/restart
 func (h *ProfilesHandler) Restart(w http.ResponseWriter, r *http.Request) {
-	id := strings.TrimPrefix(r.URL.Path, "/api/v1/profiles/")
+	id := profileIDFromActionPath(r.URL.Path, "/restart")
 	if id == "" {
 		writeError(w, 400, "profile ID is required")
 		return
@@ -212,7 +212,7 @@ func (h *ProfilesHandler) Restart(w http.ResponseWriter, r *http.Request) {
 
 // Status handles GET /api/v1/profiles/{id}/status
 func (h *ProfilesHandler) Status(w http.ResponseWriter, r *http.Request) {
-	id := strings.TrimPrefix(r.URL.Path, "/api/v1/profiles/")
+	id := profileIDFromActionPath(r.URL.Path, "/status")
 	if id == "" {
 		writeError(w, 400, "profile ID is required")
 		return

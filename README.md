@@ -129,8 +129,8 @@ Profile is a launch template, not a process.
 | GET | `/api/v1/profiles` | List profiles |
 | GET | `/api/v1/profiles/{id}` | Get profile |
 | POST | `/api/v1/profiles` | Create profile |
-| PUT | `/api/v1/profiles/` | Update profile |
-| DELETE | `/api/v1/profiles/` | Delete profile |
+| PUT | `/api/v1/profiles/{id}` | Update profile |
+| DELETE | `/api/v1/profiles/{id}` | Delete profile |
 | POST | `/api/v1/profiles/{id}/resolve` | Preview launch command |
 | POST | `/api/v1/profiles/{id}/start` | Start process by profile |
 | POST | `/api/v1/profiles/{id}/stop` | Stop all profile processes |
@@ -146,8 +146,8 @@ Profile is a launch template, not a process.
 | GET | `/api/v1/runtimes` | List runtimes |
 | GET | `/api/v1/runtimes/{id}` | Get runtime |
 | POST | `/api/v1/runtimes` | Create runtime |
-| PUT | `/api/v1/runtimes/` | Update runtime |
-| DELETE | `/api/v1/runtimes/` | Delete runtime |
+| PUT | `/api/v1/runtimes/{id}` | Update runtime |
+| DELETE | `/api/v1/runtimes/{id}` | Delete runtime |
 | POST | `/api/v1/runtimes/{id}/start` | Start runtime process |
 | POST | `/api/v1/runtimes/{id}/stop` | Stop runtime process |
 | POST | `/api/v1/runtimes/{id}/restart` | Restart runtime process |
@@ -162,8 +162,8 @@ Profile is a launch template, not a process.
 | GET | `/api/v1/models` | List models |
 | GET | `/api/v1/models/{id}` | Get model |
 | POST | `/api/v1/models` | Create model |
-| PUT | `/api/v1/models/` | Update model |
-| DELETE | `/api/v1/models/` | Delete model |
+| PUT | `/api/v1/models/{id}` | Update model |
+| DELETE | `/api/v1/models/{id}` | Delete model |
 
 ### Logs
 

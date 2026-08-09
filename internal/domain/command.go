@@ -144,6 +144,10 @@ func (r *LaunchResolver) resolveModelArgs(spec *CommandSpec, model *Model) {
 	if model.MMProj != "" {
 		spec.Args = append(spec.Args, "--mmproj", model.MMProj)
 	}
+	// Inline arguments (new-style models).
+	if len(model.Arguments) > 0 {
+		spec.Args = append(spec.Args, model.Arguments...)
+	}
 }
 
 // normalizeKey returns the environment key in a consistent case.
@@ -240,6 +244,9 @@ func (r *LaunchResolver) Preview(
 		}
 		if model.MMProj != "" {
 			args = append(args, "--mmproj", model.MMProj)
+		}
+		if len(model.Arguments) > 0 {
+			args = append(args, model.Arguments...)
 		}
 	}
 

@@ -129,8 +129,8 @@ GoAl автоматически мигрирует конфигурацию пр
 | GET | `/api/v1/profiles` | Список профилей |
 | GET | `/api/v1/profiles/{id}` | Получить профиль |
 | POST | `/api/v1/profiles` | Создать профиль |
-| PUT | `/api/v1/profiles/` | Обновить профиль |
-| DELETE | `/api/v1/profiles/` | Удалить профиль |
+| PUT | `/api/v1/profiles/{id}` | Обновить профиль |
+| DELETE | `/api/v1/profiles/{id}` | Удалить профиль |
 | POST | `/api/v1/profiles/{id}/resolve` | Preview команды запуска |
 | POST | `/api/v1/profiles/{id}/start` | Запустить процесс по профилю |
 | POST | `/api/v1/profiles/{id}/stop` | Остановить все процессы профиля |
@@ -146,8 +146,8 @@ GoAl автоматически мигрирует конфигурацию пр
 | GET | `/api/v1/runtimes` | Список рантаймов |
 | GET | `/api/v1/runtimes/{id}` | Получить рантайм |
 | POST | `/api/v1/runtimes` | Создать рантайм |
-| PUT | `/api/v1/runtimes/` | Обновить рантайм |
-| DELETE | `/api/v1/runtimes/` | Удалить рантайм |
+| PUT | `/api/v1/runtimes/{id}` | Обновить рантайм |
+| DELETE | `/api/v1/runtimes/{id}` | Удалить рантайм |
 | POST | `/api/v1/runtimes/{id}/start` | Запустить процесс рантайма |
 | POST | `/api/v1/runtimes/{id}/stop` | Остановить процесс рантайма |
 | POST | `/api/v1/runtimes/{id}/restart` | Перезапустить процесс рантайма |
@@ -162,8 +162,8 @@ GoAl автоматически мигрирует конфигурацию пр
 | GET | `/api/v1/models` | Список моделей |
 | GET | `/api/v1/models/{id}` | Получить модель |
 | POST | `/api/v1/models` | Создать модель |
-| PUT | `/api/v1/models/` | Обновить модель |
-| DELETE | `/api/v1/models/` | Удалить модель |
+| PUT | `/api/v1/models/{id}` | Обновить модель |
+| DELETE | `/api/v1/models/{id}` | Удалить модель |
 
 ### Логи
 
