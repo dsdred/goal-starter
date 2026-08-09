@@ -4,15 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os/exec"
-	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/dsdred/goal/internal/domain"
+	fakeruntime "github.com/dsdred/goal/testdata/fake-runtime/testutil"
 )
 
 // mockStore implements InstanceStore for testing.
@@ -212,31 +210,47 @@ func waitForState(sup *Supervisor, id domain.InstanceID, target domain.InstanceS
 	return fmt.Errorf("timeout waiting for instance %s to reach state %q", id, target)
 }
 
-// buildFakeRuntimeForTest builds fake-runtime from source into a temp directory
-// and returns the path. The caller must call t.Cleanup to remove the temp dir.
-// This ensures tests are reproducible on any platform without depending on
-// a pre-built Windows PE binary.
 func buildFakeRuntimeForTest(t *testing.T) string {
+	return fakeruntime.Path(t)
+}
+
+func newTestSupervisor(t *testing.T, store InstanceStore, cfg SupervisorConfig) *Supervisor {
 	t.Helper()
-	tmpDir := t.TempDir()
-	dst := filepath.Join(tmpDir, "fake-runtime")
-	if runtime.GOOS == "windows" {
-		dst += ".exe"
-	}
-	srcDir := filepath.Join("..", "..", "testdata", "fake-runtime")
-	cmd := exec.Command("go", "build", "-o", dst, ".")
-	cmd.Dir = srcDir
-	if output, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("build fake-runtime: %v\n%s", err, output)
-	}
-	return dst
+	sup := NewSupervisorWithConfig(store, cfg)
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+
+		sup.mu.RLock()
+		controllers := make([]*InstanceController, 0, len(sup.instances))
+		for _, ctrl := range sup.instances {
+			controllers = append(controllers, ctrl)
+		}
+		sup.mu.RUnlock()
+
+		for _, ctrl := range controllers {
+			if ctrl.IsRunning() {
+				if err := ctrl.Stop(ctx); err != nil {
+					t.Errorf("cleanup supervisor stop: %v", err)
+				}
+			}
+			if done := ctrl.GetControllerDone(); done != nil {
+				select {
+				case <-done:
+				case <-ctx.Done():
+					t.Errorf("cleanup supervisor wait: %v", ctx.Err())
+				}
+			}
+		}
+	})
+	return sup
 }
 
 // TestSupervisorStartFailureReleasesSlot verifies slot is released on start failure.
 func TestSupervisorStartFailureReleasesSlot(t *testing.T) {
 	store := newMockStore()
 	cfg := SupervisorConfig{MaxConcurrent: 1}
-	sup := NewSupervisorWithConfig(store, cfg)
+	sup := newTestSupervisor(t, store, cfg)
 	sem := make(chan struct{}, 1)
 	sem <- struct{}{}
 	sup.semaphore = sem
@@ -259,7 +273,7 @@ func TestSupervisorStartFailureReleasesSlot(t *testing.T) {
 func TestSupervisorNaturalExitReleasesSlot(t *testing.T) {
 	store := newMockStore()
 	cfg := SupervisorConfig{MaxConcurrent: 1, LogBufferSize: 64}
-	sup := NewSupervisorWithConfig(store, cfg)
+	sup := newTestSupervisor(t, store, cfg)
 	profile := &domain.Profile{ID: "p1", Name: "test"}
 	rt := &domain.Runtime{ID: "rt1", Name: "test-rt", Executable: buildFakeRuntimeForTest(t)}
 	model := &domain.Model{ID: "m1", Name: "test-model"}
@@ -294,7 +308,7 @@ func TestSupervisorNaturalExitReleasesSlot(t *testing.T) {
 func TestSupervisorStopReleasesSlot(t *testing.T) {
 	store := newMockStore()
 	cfg := SupervisorConfig{MaxConcurrent: 1, LogBufferSize: 64}
-	sup := NewSupervisorWithConfig(store, cfg)
+	sup := newTestSupervisor(t, store, cfg)
 	profile := &domain.Profile{ID: "p1", Name: "test"}
 	rt := &domain.Runtime{ID: "rt1", Name: "test-rt", Executable: buildFakeRuntimeForTest(t)}
 	model := &domain.Model{ID: "m1", Name: "test-model"}
@@ -322,7 +336,7 @@ func TestSupervisorStopReleasesSlot(t *testing.T) {
 func TestSupervisorForceKillReleasesSlot(t *testing.T) {
 	store := newMockStore()
 	cfg := SupervisorConfig{MaxConcurrent: 1, LogBufferSize: 64}
-	sup := NewSupervisorWithConfig(store, cfg)
+	sup := newTestSupervisor(t, store, cfg)
 	profile := &domain.Profile{ID: "p1", Name: "test"}
 	rt := &domain.Runtime{ID: "rt1", Name: "test-rt", Executable: buildFakeRuntimeForTest(t)}
 	model := &domain.Model{ID: "m1", Name: "test-model"}
@@ -363,7 +377,7 @@ func TestSupervisorForceKillReleasesSlot(t *testing.T) {
 func TestSupervisorRestartReusesSlot(t *testing.T) {
 	store := newMockStore()
 	cfg := SupervisorConfig{MaxConcurrent: 1, LogBufferSize: 64}
-	sup := NewSupervisorWithConfig(store, cfg)
+	sup := newTestSupervisor(t, store, cfg)
 	profile := &domain.Profile{ID: "p1", Name: "test"}
 	rt := &domain.Runtime{ID: "rt1", Name: "test-rt", Executable: buildFakeRuntimeForTest(t)}
 	model := &domain.Model{ID: "m1", Name: "test-model"}
@@ -399,7 +413,7 @@ func TestSupervisorRestartReusesSlot(t *testing.T) {
 func TestSupervisorRemoveTerminalDoesNotDoubleRelease(t *testing.T) {
 	store := newMockStore()
 	cfg := SupervisorConfig{MaxConcurrent: 1, LogBufferSize: 64}
-	sup := NewSupervisorWithConfig(store, cfg)
+	sup := newTestSupervisor(t, store, cfg)
 	profile := &domain.Profile{ID: "p1", Name: "test"}
 	rt := &domain.Runtime{ID: "rt1", Name: "test-rt", Executable: buildFakeRuntimeForTest(t)}
 	model := &domain.Model{ID: "m1", Name: "test-model"}
@@ -440,81 +454,64 @@ func TestSupervisorRemoveTerminalDoesNotDoubleRelease(t *testing.T) {
 	}
 }
 
-// TestSupervisorConcurrentStartLimit verifies maxConcurrent limits concurrent starts.
-//
-// Fixed architecture: with MaxConcurrent=2 and three parallel Starts using
-// "-sleep 1", the third goroutine blocks on semaphore. The test uses a
-// readyCh barrier to prove slots 1-2 are active, then releases one instance
-// to unblock the third.
+// TestSupervisorConcurrentStartLimit verifies that a third Start blocks until
+// one of two occupied slots is released.
 func TestSupervisorConcurrentStartLimit(t *testing.T) {
 	store := newMockStore()
 	cfg := SupervisorConfig{MaxConcurrent: 2, LogBufferSize: 64}
-	sup := NewSupervisorWithConfig(store, cfg)
+	sup := newTestSupervisor(t, store, cfg)
 	profile := &domain.Profile{ID: "p1", Name: "test"}
 	rt := &domain.Runtime{ID: "rt1", Name: "test-rt", Executable: buildFakeRuntimeForTest(t)}
 	model := &domain.Model{ID: "m1", Name: "test-model"}
 	ctx := context.Background()
 
-	readyCh := make(chan struct{}, 3) // signal when Start() returns for each goroutine
-
-	var wg sync.WaitGroup
-	var instancesMu sync.Mutex
-	var startedInstances []*domain.LaunchInstance
-
-	// Start 3 goroutines concurrently. With MaxConcurrent=2 the semaphore
-	// (capacity 2) limits how many can run the process-start path simultaneously.
-	for i := 0; i < 3; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			inst, err := sup.Start(ctx, profile, rt, model, []string{"-sleep", "1"}, nil)
-			readyCh <- struct{}{} // signal that Start() returned (blocked or not)
-			if err != nil {
-				return
-			}
-			instancesMu.Lock()
-			startedInstances = append(startedInstances, inst)
-			instancesMu.Unlock()
-		}()
+	first, err := sup.Start(ctx, profile, rt, model, []string{"-sleep", "1"}, nil)
+	if err != nil {
+		t.Fatalf("start first instance: %v", err)
+	}
+	second, err := sup.Start(ctx, profile, rt, model, []string{"-sleep", "1"}, nil)
+	if err != nil {
+		t.Fatalf("start second instance: %v", err)
 	}
 
-	// Wait for all 3 Starts to return (either acquired slot or blocked).
-	// 3 ready signals from 3 goroutines.
-	<-readyCh
-	<-readyCh
-	<-readyCh
-
-	// At least 2 instances should have started (first two goroutines).
-	instancesMu.Lock()
-	startedLen := len(startedInstances)
-	instancesMu.Unlock()
-	if startedLen < 2 {
-		t.Errorf("expected at least 2 started instances after all Starts returned, got %d", startedLen)
+	type startResult struct {
+		instance *domain.LaunchInstance
+		err      error
 	}
-
-	// Verify: at most 2 active instances.
-	active, _ := sup.ListActive()
-	if len(active) > 2 {
-		t.Errorf("expected at most 2 active instances, got %d", len(active))
-	}
-
-	// Clean up: stop all started instances.
-	instancesMu.Lock()
-	for _, inst := range startedInstances {
-		sup.RemoveTerminal(inst.ID)
-	}
-	instancesMu.Unlock()
-
-	// Wait for cleanup to complete.
-	done := make(chan struct{})
+	thirdAttempting := make(chan struct{})
+	thirdResult := make(chan startResult, 1)
 	go func() {
-		wg.Wait()
-		close(done)
+		close(thirdAttempting)
+		inst, startErr := sup.Start(ctx, profile, rt, model, []string{"-sleep", "1"}, nil)
+		thirdResult <- startResult{instance: inst, err: startErr}
 	}()
+	<-thirdAttempting
+
 	select {
-	case <-done:
-	case <-time.After(10 * time.Second):
-		t.Fatal("cleanup timeout — possible slot leak")
+	case result := <-thirdResult:
+		t.Fatalf("third Start returned before a slot was released: instance=%v err=%v", result.instance, result.err)
+	case <-time.After(200 * time.Millisecond):
+		// Expected: the third Start remains blocked on the semaphore.
+	}
+
+	if err := sup.Stop(ctx, first.ID); err != nil {
+		t.Fatalf("stop first instance: %v", err)
+	}
+
+	select {
+	case result := <-thirdResult:
+		if result.err != nil {
+			t.Fatalf("third Start after slot release: %v", result.err)
+		}
+		if result.instance == nil {
+			t.Fatal("third Start returned a nil instance")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("third Start remained blocked after a slot was released")
+	}
+
+	if err := sup.Stop(ctx, second.ID); err != nil {
+		t.Fatalf("stop second instance: %v", err)
 	}
 }
 
@@ -526,7 +523,7 @@ func TestSupervisorConcurrentStartLimit(t *testing.T) {
 func TestStartFailureJoinsPersistenceFailure(t *testing.T) {
 	store := newMockStore()
 	cfg := SupervisorConfig{MaxConcurrent: 1, LogBufferSize: 64}
-	sup := NewSupervisorWithConfig(store, cfg)
+	sup := newTestSupervisor(t, store, cfg)
 	profile := &domain.Profile{ID: "p1", Name: "test"}
 	rt := &domain.Runtime{ID: "rt1", Name: "test-rt", Executable: buildFakeRuntimeForTest(t)}
 	model := &domain.Model{ID: "m1", Name: "test-model"}
@@ -559,7 +556,7 @@ func TestRunningPersistenceFailureRollsBackOrDegrades(t *testing.T) {
 		return nil
 	}
 	cfg := SupervisorConfig{MaxConcurrent: 0, LogBufferSize: 64}
-	sup := NewSupervisorWithConfig(store, cfg)
+	sup := newTestSupervisor(t, store, cfg)
 	profile := &domain.Profile{ID: "p1", Name: "test"}
 	rt := &domain.Runtime{ID: "rt1", Name: "test-rt", Executable: buildFakeRuntimeForTest(t)}
 	model := &domain.Model{ID: "m1", Name: "test-model"}
@@ -613,7 +610,7 @@ func TestNaturalExitPersistenceFailureObservable(t *testing.T) {
 		return nil
 	}
 	cfg := SupervisorConfig{MaxConcurrent: 0, LogBufferSize: 64}
-	sup := NewSupervisorWithConfig(store, cfg)
+	sup := newTestSupervisor(t, store, cfg)
 	profile := &domain.Profile{ID: "p1", Name: "test"}
 	rt := &domain.Runtime{ID: "rt1", Name: "test-rt", Executable: buildFakeRuntimeForTest(t)}
 	model := &domain.Model{ID: "m1", Name: "test-model"}
@@ -663,7 +660,7 @@ func TestStopPersistenceFailureReturned(t *testing.T) {
 		return nil
 	}
 	cfg := SupervisorConfig{MaxConcurrent: 0, LogBufferSize: 64}
-	sup := NewSupervisorWithConfig(store, cfg)
+	sup := newTestSupervisor(t, store, cfg)
 	profile := &domain.Profile{ID: "p1", Name: "test"}
 	rt := &domain.Runtime{ID: "rt1", Name: "test-rt", Executable: buildFakeRuntimeForTest(t)}
 	model := &domain.Model{ID: "m1", Name: "test-model"}
@@ -709,7 +706,7 @@ func TestRestartPersistenceFailureReturned(t *testing.T) {
 		return nil
 	}
 	cfg := SupervisorConfig{MaxConcurrent: 0, LogBufferSize: 64}
-	sup := NewSupervisorWithConfig(store, cfg)
+	sup := newTestSupervisor(t, store, cfg)
 	profile := &domain.Profile{ID: "p1", Name: "test"}
 	rt := &domain.Runtime{ID: "rt1", Name: "test-rt", Executable: buildFakeRuntimeForTest(t)}
 	model := &domain.Model{ID: "m1", Name: "test-model"}
@@ -758,7 +755,7 @@ func TestShutdownAggregatesPersistenceFailures(t *testing.T) {
 		return nil
 	}
 	cfg := SupervisorConfig{MaxConcurrent: 0, LogBufferSize: 64}
-	sup := NewSupervisorWithConfig(store, cfg)
+	sup := newTestSupervisor(t, store, cfg)
 	profile := &domain.Profile{ID: "p1", Name: "test"}
 	rt := &domain.Runtime{ID: "rt1", Name: "test-rt", Executable: buildFakeRuntimeForTest(t)}
 	model := &domain.Model{ID: "m1", Name: "test-model"}
@@ -796,7 +793,7 @@ func TestRecoverAggregatesPersistenceFailures(t *testing.T) {
 	store := newMockStore()
 	store.updateErr = testUpdateErr
 	cfg := SupervisorConfig{MaxConcurrent: 0, LogBufferSize: 64}
-	sup := NewSupervisorWithConfig(store, cfg)
+	sup := newTestSupervisor(t, store, cfg)
 	entry := &domain.LaunchInstanceEntry{
 		ID:        "inst-recover-test",
 		ProfileID: "p1",

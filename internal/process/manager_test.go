@@ -2,62 +2,44 @@ package process_test
 
 import (
 	"context"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"runtime"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/dsdred/goal/internal/process"
+	fakeruntime "github.com/dsdred/goal/testdata/fake-runtime/testutil"
 )
 
 // doneCh is a channel returned by TestContextCancellation workaround.
 var doneCh chan struct{}
 
-// fakeRuntime returns the path to a freshly compiled fake-runtime binary
-// in a test-scoped temp directory. This ensures the binary matches the
-// current GOOS/GOARCH and avoids cross-platform execution issues.
 func fakeRuntime(t *testing.T) string {
+	return fakeruntime.Path(t)
+}
+
+func newTestManager(t *testing.T) *process.Manager {
 	t.Helper()
-	tmpDir := t.TempDir()
-	binName := "fake-runtime"
-	if runtime.GOOS == "windows" {
-		binName = "fake-runtime.exe"
-	}
-	dst := filepath.Join(tmpDir, binName)
-
-	// Walk up from current working directory to find module root (go.mod).
-	cwd, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("get cwd: %v", err)
-	}
-	root := cwd
-	for {
-		if _, err := os.Stat(filepath.Join(root, "go.mod")); err == nil {
-			break
+	mgr := process.NewManager()
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		if err := mgr.Stop(ctx); err != nil {
+			t.Errorf("cleanup manager stop: %v", err)
 		}
-		parent := filepath.Dir(root)
-		if parent == root {
-			t.Fatalf("go.mod not found")
+		if done := mgr.GetDoneChannel(); done != nil {
+			select {
+			case <-done:
+			case <-ctx.Done():
+				t.Errorf("cleanup manager wait: %v", ctx.Err())
+			}
 		}
-		root = parent
-	}
-	srcDir := filepath.Join(root, "testdata", "fake-runtime")
-
-	buildCmd := exec.Command("go", "build", "-o", dst, ".")
-	buildCmd.Dir = srcDir
-	out, err := buildCmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("build fake-runtime: %v\n%s", err, out)
-	}
-	return dst
+	})
+	return mgr
 }
 
 func TestStartStop_normalExit(t *testing.T) {
 	fake := fakeRuntime(t)
-	mgr := process.NewManager()
+	mgr := newTestManager(t)
 
 	spec := process.CommandSpec{
 		Executable: fake,
@@ -92,7 +74,7 @@ func TestStartStop_normalExit(t *testing.T) {
 
 func TestStartStop_failureExit(t *testing.T) {
 	fake := fakeRuntime(t)
-	mgr := process.NewManager()
+	mgr := newTestManager(t)
 
 	spec := process.CommandSpec{
 		Executable: fake,
@@ -140,7 +122,7 @@ check_exit:
 
 func TestStartStop_timeout(t *testing.T) {
 	fake := fakeRuntime(t)
-	mgr := process.NewManager()
+	mgr := newTestManager(t)
 
 	spec := process.CommandSpec{
 		Executable: fake,
@@ -178,7 +160,7 @@ func TestStartStop_timeout(t *testing.T) {
 
 func TestStartStop_twice(t *testing.T) {
 	fake := fakeRuntime(t)
-	mgr := process.NewManager()
+	mgr := newTestManager(t)
 
 	// First start/stop.
 	spec1 := process.CommandSpec{
@@ -207,7 +189,7 @@ func TestStartStop_twice(t *testing.T) {
 
 func TestStart_alreadyRunning(t *testing.T) {
 	fake := fakeRuntime(t)
-	mgr := process.NewManager()
+	mgr := newTestManager(t)
 
 	spec := process.CommandSpec{
 		Executable: fake,
@@ -231,7 +213,7 @@ func TestStart_alreadyRunning(t *testing.T) {
 }
 
 func TestStart_invalidExecutable(t *testing.T) {
-	mgr := process.NewManager()
+	mgr := newTestManager(t)
 
 	spec := process.CommandSpec{
 		Executable: "/nonexistent/path/to/executable",
@@ -243,7 +225,7 @@ func TestStart_invalidExecutable(t *testing.T) {
 }
 
 func TestStart_emptyExecutable(t *testing.T) {
-	mgr := process.NewManager()
+	mgr := newTestManager(t)
 
 	spec := process.CommandSpec{}
 
@@ -254,7 +236,7 @@ func TestStart_emptyExecutable(t *testing.T) {
 
 func TestEnvironment_merge(t *testing.T) {
 	fake := fakeRuntime(t)
-	mgr := process.NewManager()
+	mgr := newTestManager(t)
 
 	// Set a custom env var that the parent process doesn't have.
 	customEnv := []string{"GOAL_TEST_VAR=test_value_123"}
@@ -282,7 +264,7 @@ func TestEnvironment_merge(t *testing.T) {
 
 func TestSubscribe_logs(t *testing.T) {
 	fake := fakeRuntime(t)
-	mgr := process.NewManager()
+	mgr := newTestManager(t)
 
 	ch, cleanup := mgr.Subscribe()
 	defer cleanup()
@@ -355,7 +337,7 @@ check_logs:
 
 func TestConcurrent_statusAndStop(t *testing.T) {
 	fake := fakeRuntime(t)
-	mgr := process.NewManager()
+	mgr := newTestManager(t)
 
 	spec := process.CommandSpec{
 		Executable: fake,
@@ -391,7 +373,7 @@ func TestConcurrent_statusAndStop(t *testing.T) {
 
 func TestLogEvent_time(t *testing.T) {
 	fake := fakeRuntime(t)
-	mgr := process.NewManager()
+	mgr := newTestManager(t)
 
 	ch, cleanup := mgr.Subscribe()
 	defer cleanup()
@@ -426,7 +408,7 @@ func TestLogEvent_time(t *testing.T) {
 
 func TestWorkDir_validation(t *testing.T) {
 	fake := fakeRuntime(t)
-	mgr := process.NewManager()
+	mgr := newTestManager(t)
 
 	// Valid working directory.
 	tmpDir := t.TempDir()
@@ -453,7 +435,7 @@ func TestWorkDir_validation(t *testing.T) {
 
 func TestExitClass_signaled(t *testing.T) {
 	fake := fakeRuntime(t)
-	mgr := process.NewManager()
+	mgr := newTestManager(t)
 
 	spec := process.CommandSpec{
 		Executable: fake,
@@ -490,7 +472,7 @@ func TestExitClass_signaled(t *testing.T) {
 
 func TestDelayed_exitCode(t *testing.T) {
 	fake := fakeRuntime(t)
-	mgr := process.NewManager()
+	mgr := newTestManager(t)
 
 	spec := process.CommandSpec{
 		Executable: fake,
@@ -537,7 +519,7 @@ check_exit:
 
 func TestContextCancellation(t *testing.T) {
 	fake := fakeRuntime(t)
-	mgr := process.NewManager()
+	mgr := newTestManager(t)
 
 	ctx, cancel := context.WithCancel(context.Background())
 

@@ -17,7 +17,7 @@ import (
 func TestWindowsJobObject_cleanup(t *testing.T) {
 	t.Parallel()
 	fake := fakeRuntime(t)
-	mgr := process.NewManager()
+	mgr := newTestManager(t)
 
 	spec := process.CommandSpec{
 		Executable: fake,
@@ -82,7 +82,7 @@ verify_cleaned:
 func TestWindowsJobObject_nestedChildren(t *testing.T) {
 	t.Parallel()
 	fake := fakeRuntime(t)
-	mgr := process.NewManager()
+	mgr := newTestManager(t)
 
 	spec := process.CommandSpec{
 		Executable: fake,

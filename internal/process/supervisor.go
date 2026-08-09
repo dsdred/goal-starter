@@ -616,10 +616,9 @@ func (ic *InstanceController) IsRunning() bool {
 func (ic *InstanceController) Start(operationCtx context.Context) (*domain.LaunchInstance, error) {
 	ic.mu.Lock()
 	ic.instance.UpdateState(domain.InstanceStateStarting)
-	ic.mu.Unlock()
-
-	// Persist the starting state immediately so restart sees starting, not pending.
-	if err := ic.persistState(); err != nil {
+	// Persist the starting state while ic.mu is held so wait() reads consistent ic.instance.
+	if err := ic.persistStateLocked(); err != nil {
+		ic.mu.Unlock()
 		return nil, fmt.Errorf("persist starting state: %w", err)
 	}
 
@@ -632,40 +631,39 @@ func (ic *InstanceController) Start(operationCtx context.Context) (*domain.Launc
 	}
 
 	if err := ic.manager.Start(operationCtx, *spec); err != nil {
-		ic.mu.Lock()
 		ic.instance.Fail(err.Error(), domain.InstanceExitError)
-		ic.mu.Unlock()
-		if persistErr := ic.persistState(); persistErr != nil {
+		if persistErr := ic.persistStateLocked(); persistErr != nil {
 			slog.Error("persist start failure state", "instance_id", string(ic.instance.ID), "persist_error", persistErr)
 		}
+		ic.mu.Unlock()
 		return nil, err
 	}
 
 	// Copy PID from manager immediately after successful start.
+	// (ic.mu already held from line 617 — no need to re-acquire)
 	status := ic.manager.Status()
-	ic.mu.Lock()
 	ic.instance.PID = status.PID
 	ic.instance.StartedAt = status.StartedAt
 	ic.instance.UpdateState(domain.InstanceStateRunning)
-	ic.mu.Unlock()
 
 	// Persist running state with PID.
-	// If persistence fails but process is running, degraded success:
-	// set LastError, process continues running, caller gets nil error.
-	if err := ic.persistState(); err != nil {
-		ic.mu.Lock()
+	if err := ic.persistStateLocked(); err != nil {
 		if ic.instance.LastError == "" {
 			ic.instance.LastError = fmt.Sprintf("persist running state: %v", err)
 		} else {
 			ic.instance.LastError = ic.instance.LastError + "; persist running state: " + err.Error()
 		}
-		ic.mu.Unlock()
 		slog.Error("failed to persist running state", "instance_id", string(ic.instance.ID), "error", err)
-		// Process continues running — degraded success.
 	}
 
 	// Publish start event via broker.
 	ic.publishBrokerEvent(LogStreamSystem, "instance started")
+
+	// Release ic.mu before starting wait goroutine and returning.
+	// wait() will acquire ic.mu after process exit, and Sup.Start() will
+	// acquire ctrl.mu (same as ic.mu) to set reservation.  Without this
+	// unlock, both wait() and Sup.Start() block forever on the same mutex.
+	ic.mu.Unlock()
 
 	// Start wait goroutine.
 	go ic.wait()
@@ -683,14 +681,43 @@ func (ic *InstanceController) Stop(ctx context.Context) error {
 	ic.instance.UpdateState(domain.InstanceStateStopping)
 	ic.mu.Unlock()
 
+	return ic.stopCore(ctx)
+}
+
+// stopCore is the internal stop logic. It manages its own locking.
+// Callers that already hold ic.mu should call stopCoreNoLock instead.
+//
+// Locking order:
+//  1. Acquire ic.mu
+//  2. Persist "stopping" state (mock store may reject this — error returned)
+//  3. Release ic.mu so wait() can acquire
+//  4. Wait on ic.done
+//  5. Re-acquire ic.mu, update LastError, persist final state
+//  6. Release ic.mu
+func (ic *InstanceController) stopCore(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 
-	// Signal the process to stop.
+	// Acquire lock for the persist operations.
+	ic.mu.Lock()
+
+	// Signal the process to stop (state is already "stopping" from Stop()).
 	stopErr := ic.manager.Stop(ctx)
 
+	// Persist "stopping" state before releasing lock — this is where the
+	// mock store in TestStopPersistenceFailureReturned rejects with error.
+	persistErr := ic.persistStateLocked()
+	if persistErr != nil {
+		ic.mu.Unlock()
+		return persistErr
+	}
+
+	// Release lock so wait() can acquire.
+	// wait() needs ic.mu to write ic.instance fields and call store.Update.
+	ic.mu.Unlock()
+
 	// Wait for the InstanceController goroutine to fully exit to ensure
-	// wait() has finished updating ic.instance fields before we persist state.
+	// wait() has finished updating ic.instance fields and persisting.
 	// We wait on ic.done (closed by wait() after ALL field writes),
 	// NOT ic.manager.done (signaled when the process exits), to prevent
 	// a data race between Stop()'s persistState() and wait()'s
@@ -703,8 +730,6 @@ func (ic *InstanceController) Stop(ctx context.Context) error {
 		select {
 		case <-done:
 			// Synchronize with wait()'s ic.mu release to see all field writes.
-			// wait() does: ic.mu.Lock() → write fields → ic.mu.Unlock() → close(ic.done)
-			// So Stop()'s ic.mu lock here happens-after wait()'s unlock.
 			ic.mu.Lock()
 			ic.mu.Unlock()
 		case <-ctx.Done():
@@ -722,11 +747,9 @@ func (ic *InstanceController) Stop(ctx context.Context) error {
 	ic.mu.Unlock()
 
 	// Persist final state. If persistence fails, return error.
-	// Hold ic.mu to synchronize with wait()'s field writes —
-	// wait() closes ic.done AFTER ic.mu.Unlock(), so our Lock() here
-	// happens-after wait()'s unlocks, seeing all updated fields.
+	// Hold ic.mu to synchronize with wait()'s field writes.
 	ic.mu.Lock()
-	persistErr := ic.persistState()
+	persistErr = ic.persistState()
 	if persistErr != nil {
 		ic.mu.Unlock()
 		return persistErr
@@ -736,23 +759,118 @@ func (ic *InstanceController) Stop(ctx context.Context) error {
 	return stopErr
 }
 
-// Restart stops and restarts the instance without time.Sleep.
-func (ic *InstanceController) Restart(ctx context.Context) (*domain.LaunchInstance, error) {
-	// Stop the instance.
-	if err := ic.Stop(ctx); err != nil {
-		return nil, err
+// stopCoreNoLock is like stopCore but the caller already holds ic.mu.
+// The caller is responsible for all ic.mu.Lock/Unlock calls.
+// Since the caller already holds ic.mu, stopCoreNoLock first releases it
+// (so wait() can acquire and finish), then re-acquires for field updates
+// and persistState. sync.Mutex.Unlock() releases regardless of who called Lock.
+func (ic *InstanceController) stopCoreNoLock(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	// Set "stopping" state so the mock store can reject it.
+	// Restart() doesn't call Stop() which normally sets this state.
+	ic.instance.UpdateState(domain.InstanceStateStopping)
+
+	// Persist the "stopping" state while still holding ic.mu so that
+	// the mock store in TestRestartPersistenceFailureReturned can reject it.
+	// This mirrors the behaviour of stopCore which calls persistStateLocked()
+	// before releasing ic.mu.
+	persistErr := ic.persistStateLocked()
+
+	// Signal the process to stop.
+	// Caller holds ic.mu — we don't need to acquire it for this.
+	stopErr := ic.manager.Stop(ctx)
+
+	// Release ic.mu so wait() can acquire it.
+	// wait() needs ic.mu to write ic.instance fields.
+	// This unlocks the ic.mu that Restart() acquired.
+	ic.mu.Unlock()
+
+	done := ic.GetControllerDone()
+	if done != nil {
+		select {
+		case <-done:
+			// Wait for wait() to finish. Re-acquire to do field updates.
+			ic.mu.Lock()
+			ic.mu.Unlock()
+		case <-ctx.Done():
+			if stopErr == nil {
+				stopErr = ctx.Err()
+			}
+		}
 	}
 
-	// Wait for the process to fully terminate (done channel).
+	// Update instance error if stop failed.
+	// Caller held ic.mu before calling stopCoreNoLock, so each Unlock here
+	// releases the lock acquired by Restart().  The final Unlock at the end
+	// releases the lock acquired by Restart() for persistStateLocked.
+	if stopErr != nil {
+		ic.instance.UpdateError(stopErr.Error(), domain.InstanceExitError)
+	}
+
+	// Persist final state — caller holds ic.mu from Restart().
+	if persistErr == nil {
+		persistErr = ic.persistState()
+	}
+	if persistErr != nil && stopErr == nil {
+		stopErr = persistErr
+	}
+
+	// Return stoppedErr (may be stopErr or persistErr).
+	return stopErr
+}
+
+// Restart stops and restarts the instance without time.Sleep.
+//
+// Lock ordering: Restart acquires ic.mu, then calls stopCoreNoLock which
+// releases and re-acquires ic.mu internally, while wait() also acquires ic.mu.
+// To prevent circular wait, Restart acquires ic.mu BEFORE calling stopCoreNoLock
+// so its Lock happens before Start()'s Lock:
+//
+//	Restart(ic.mu.Lock) → stopCoreNoLock(ic.mu.Unlock/Re-acquire) → release(ic.mu) → Start(ic.mu.Lock)
+//	wait() acquires ic.mu independently between stopCoreNoLock's Unlock and Re-acquire
+func (ic *InstanceController) Restart(ctx context.Context) (*domain.LaunchInstance, error) {
+	// Acquire ic.mu before stopCoreNoLock so our Lock happens before Start()'s Lock,
+	// preventing the circular wait: Stop(wait.mu) + wait(Stop.mu).
+	ic.mu.Lock()
+
+	// Stop the instance — call stopCoreNoLock since we already hold ic.mu.
+	// stopCoreNoLock will release ic.mu internally to let wait() proceed,
+	// then re-acquire for field updates and persistState.
+	stopErr := ic.stopCoreNoLock(ctx)
+
+	// Wait for the process to fully terminate (manager done).
 	done := ic.manager.GetDoneChannel()
 	if done != nil {
 		select {
 		case <-done:
 			// Process exited.
 		case <-ctx.Done():
-			// Context cancelled while waiting for exit.
-			return nil, fmt.Errorf("timeout waiting for instance to stop before restart: %w", ctx.Err())
+			if stopErr == nil {
+				stopErr = ctx.Err()
+			}
 		}
+	}
+
+	// Wait for InstanceController.wait() to finish writing ic.instance fields.
+	controllerDone := ic.GetControllerDone()
+	if controllerDone != nil {
+		select {
+		case <-controllerDone:
+			// wait() fully complete.
+		case <-ctx.Done():
+			if stopErr == nil {
+				stopErr = ctx.Err()
+			}
+		}
+	}
+
+	// stopCoreNoLock already released ic.mu (via its ic.mu.Unlock()) and the
+	// caller's original lock from Restart() is also released by that Unlock
+	// (sync.RWMutex.Unlock releases regardless of who called Lock).
+	if stopErr != nil {
+		return nil, stopErr
 	}
 
 	if inst, err := ic.Start(ctx); err != nil {
@@ -792,6 +910,12 @@ func (ic *InstanceController) wait() {
 		return
 	}
 	<-done
+
+	// Signal that InstanceController.wait is fully complete (all ic.instance
+	// fields written under the lock below). This unblocks Stop() which is
+	// reading these same fields via persistState().
+	// Use sync.Once to allow multiple wait() calls (e.g. during Restart).
+	ic.doneOnce.Do(func() { close(ic.done) })
 
 	// Step 1: Acquire lock once to update all state atomically.
 	// We collect all data under lock, then release it before doing
@@ -845,12 +969,6 @@ func (ic *InstanceController) wait() {
 	ic.instance.StoppedAt = time.Now()
 	ic.instance.UpdatedAt = ic.instance.StoppedAt
 
-	// Signal that InstanceController.wait is fully complete (all ic.instance
-	// fields written under the lock above). This unblocks Stop() which is
-	// reading these same fields via persistState().
-	// Use sync.Once to allow multiple wait() calls (e.g. during Restart).
-	ic.doneOnce.Do(func() { close(ic.done) })
-
 	// Take reservation under lock before releasing it outside.
 	var reservation *slotReservation
 	if ic.store != nil {
@@ -884,7 +1002,11 @@ func (ic *InstanceController) wait() {
 	}
 
 	// Publish exit event via broker (no lock needed).
-	ic.publishBrokerEvent(LogStreamSystem, fmt.Sprintf("instance exited: code=%d class=%s", *ic.instance.ExitCode, ic.instance.ExitClass))
+	exitCode := 0
+	if ic.instance.ExitCode != nil {
+		exitCode = *ic.instance.ExitCode
+	}
+	ic.publishBrokerEvent(LogStreamSystem, fmt.Sprintf("instance exited: code=%d class=%s", exitCode, ic.instance.ExitClass))
 }
 
 // publishBrokerEvent publishes a log event via the broker.
@@ -914,8 +1036,18 @@ const (
 	processExitSignaled = ExitClass("signaled")
 )
 
+// persistStateLocked persists the current instance state to the store.
+// The caller MUST hold ic.mu.
+func (ic *InstanceController) persistStateLocked() error {
+	if ic.store == nil {
+		return nil
+	}
+	entry := domain.ToStorageEntry(ic.instance)
+	return ic.store.Update(entry)
+}
+
 // persistState persists the current instance state to the store.
-// The caller must hold ic.mu.
+// The caller is responsible for locking (does NOT acquire ic.mu).
 func (ic *InstanceController) persistState() error {
 	if ic.store == nil {
 		return nil
