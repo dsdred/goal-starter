@@ -88,6 +88,17 @@ Fields requiring restart:
 
 Status: **WIP** — reload coordinator and restart-required reporting planned.
 
+### Config vs Repository (ownership)
+
+GoAl has two sources for runtimes/models/profiles:
+
+1. **`goal.json`** — initial configuration file (seed).
+2. **`goal_repo.json`** — unified repository (runtime store).
+
+**Ownership rule:** After the first startup, `goal_repo.json` is the source of truth. `goal.json` is only used to seed the repository with initial entries. Editing `goal.json` after the first run does not update existing entities — only new entities (by ID) are added. To change existing entities, use the API or Web UI.
+
+This design avoids silent configuration drift and keeps runtime state consistent.
+
 ## API endpoints
 
 ### Authentication
@@ -169,11 +180,10 @@ Profile is a launch template, not a process.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/api/v1/logs/stream` | SSE log stream (stub) |
-| GET | `/api/v1/logs` | QueryLogs with instance_id filter (stub) |
-| GET | `/api/v1/instances/{id}/logs` | Logs for specific instance (stub) |
-| GET | `/api/v1/instances/{id}/logs/stream` | SSE instance logs (stub) |
-| GET | `/ws` | WebSocket log stream (WIP) |
+| GET | `/api/v1/logs/stream` | SSE log stream (multi-instance LogBroker) |
+| GET | `/api/v1/logs` | QueryLogs with filtering (stream, search, time range, instance_id) |
+| GET | `/api/v1/instances/{id}/logs` | Logs for specific instance |
+| GET | `/api/v1/instances/{id}/logs/stream` | SSE log stream for specific instance |
 
 ### Structured API errors
 
@@ -194,7 +204,7 @@ Codes: `bad_request`, `unauthorized`, `forbidden`, `not_found`, `conflict`, `inv
 - **Request body size limit** — http.MaxBytesReader
 - **Default bind** — 127.0.0.1 (all interfaces requires explicit config)
 - **Secret env vars** — `AdminPassword` cleared on save
-- **External bind** — requires `listenAddress` config change
+- **External bind** — requires `listenAddress` config change; `authEnabled=false` is rejected for non-loopback addresses
 - **Runtime path validation** — executable and working directory validated against allowed roots
 
 ## Architecture
@@ -353,12 +363,10 @@ See "Configuration hot-reload" section above for details.
 - Auto-update: GitHub-based only
 - Full reattach to arbitrary PID: not implemented (stale detection only)
 - Audit logging: WIP (metrics available only)
-- Login rate limit: placeholder (not fully implemented)
-- Logs API: `/api/v1/logs`, `/api/v1/logs/stream` — stubs (not implemented)
-- Race detector: not checked locally (no CGO/gcc on Windows), CI pending
+- Race detector: covered in CI (Linux race detector job)
 - Supervisor concurrency model: buffered semaphore (not mutex-based pool)
 - Persistence: degraded success (running + persist fail = LastError set, process continues)
-- Recovery: stale detection only, without reattach PID
+- WebSocket `/ws`: implemented but not wired to main routes yet
 
 ## Stabilization v0.9
 

@@ -88,6 +88,17 @@ GoAl автоматически мигрирует конфигурацию пр
 
 Статус: **WIP** — planned: reload coordinator и restart-required reporting.
 
+### Config vs Repository (ownership)
+
+GoAl имеет два источника для runtimes/models/profiles:
+
+1. **`goal.json`** — начальная конфигурация (seed).
+2. **`goal_repo.json`** — единое хранилище (runtime store).
+
+**Правило ownership:** После первого запуска **источником истины является `goal_repo.json`**. `goal.json` используется только для первоначального заполнения репозитория. Изменения в `goal.json` после первого запуска не обновляют существующие сущности — только добавляют новые (с новым ID). Для изменения существующих используйте API или Web UI.
+
+Это избегает silent configuration drift и сохраняет консистентность runtime состояния.
+
 ## API endpoints
 
 ### Аутентификация
@@ -169,10 +180,10 @@ GoAl автоматически мигрирует конфигурацию пр
 
 | Method | Path | Описание |
 |--------|------|----------|
-| GET | `/api/v1/logs/stream` | SSE поток логов (заглушка) |
-| GET | `/api/v1/logs` | QueryLogs с instance_id filter (заглушка) |
-| GET | `/api/v1/instances/{id}/logs` | Логи конкретного instance (заглушка) |
-| GET | `/api/v1/instances/{id}/logs/stream` | SSE логов instance (заглушка) |
+| GET | `/api/v1/logs/stream` | SSE поток логов (multi-instance LogBroker) |
+| GET | `/api/v1/logs` | QueryLogs с фильтрацией (stream, search, time range, instance_id) |
+| GET | `/api/v1/instances/{id}/logs` | Логи конкретного instance |
+| GET | `/api/v1/instances/{id}/logs/stream` | SSE логов instance |
 | GET | `/ws` | WebSocket поток логов (WIP) |
 
 ### Structured API errors
@@ -212,7 +223,7 @@ GoAl автоматически мигрирует конфигурацию пр
 - **Request body size limit** — http.MaxBytesReader
 - **Default bind** — 127.0.0.1 (все интерфейсы требуют явного config)
 - **Secret env vars** — `AdminPassword` очищается при сохранении
-- **External bind** — требует изменения `listenAddress` в конфиге
+- **External bind** — требует изменения `listenAddress` в конфиге; `authEnabled=false` отклоняется для non-loopback адресов
 - **Runtime path validation** — executable и working directory проверяются against allowed roots
 
 ## Архитектура
@@ -362,12 +373,11 @@ Legacy `/api/v1/status` удалён. Переход на `GET /api/v1/instances
 - Auto-update: только через GitHub Releases
 - Full reattach к произвольному PID: не реализован (только stale detection)
 - Audit logging: WIP (доступны только metrics)
-- Login rate limit: placeholder (не полностью реализован)
-- Logs API: `/api/v1/logs`, `/api/v1/logs/stream` — заглушки (не реализованы)
-- Race detector: локально не проверялся (нет CGO/gcc на Windows), CI pending
+- Race detector: проверен в CI (Linux race detector job)
 - Supervisor concurrency model: buffered semaphore (не mutex-based pool)
 - Persistence: degraded success (running + persist fail = LastError set, process continues)
 - Recovery: stale detection только, без reattach PID
+- WebSocket `/ws`: реализован, но пока не подключён к основным роутам
 
 ## Стабилизация v0.9
 
