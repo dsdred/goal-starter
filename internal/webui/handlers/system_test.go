@@ -146,7 +146,7 @@ func TestLogsStream_HappyPath(t *testing.T) {
 		t.Fatalf("handler did not write initial frame: %v", err)
 	}
 
-	if contentType := recorder.Header().Get("Content-Type"); !strings.HasPrefix(contentType, "text/event-stream") {
+	if contentType := recorder.HeaderSnapshot().Get("Content-Type"); !strings.HasPrefix(contentType, "text/event-stream") {
 		cancel()
 		wg.Wait()
 		t.Fatalf("expected text/event-stream, got %q", contentType)
@@ -421,13 +421,15 @@ func TestLogsStream_InstanceFilter(t *testing.T) {
 // ---------- helpers ----------
 
 // flushRecorder captures the partial body written by an SSE handler.
+// All mutable state is guarded by a single mutex to remain race-safe under -race.
 type flushRecorder struct {
 	mu      sync.Mutex
-	buf     bytes.Buffer
 	header  http.Header
+	buf     bytes.Buffer
+	status  int
 	flushed bool
 	closed  bool
-	notify  chan struct{} // closed on each write
+	notify  chan struct{} // signaled on each write
 }
 
 func newFlushRecorder() *flushRecorder {
@@ -437,6 +439,9 @@ func newFlushRecorder() *flushRecorder {
 	}
 }
 
+// Header returns the internal header map. Required for http.ResponseWriter.
+// It is not synchronized because http.ResponseWriter is used exclusively
+// by the handler goroutine; test code reads headers only after handler completion.
 func (r *flushRecorder) Header() http.Header {
 	if r.header == nil {
 		r.header = http.Header{}
@@ -444,7 +449,27 @@ func (r *flushRecorder) Header() http.Header {
 	return r.header
 }
 
+// HeaderSnapshot returns a copy of the current header map.
+// Safe for concurrent use; the returned map is the caller's ownership.
+func (r *flushRecorder) HeaderSnapshot() http.Header {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.header == nil {
+		return http.Header{}
+	}
+	out := make(http.Header, len(r.header))
+	for k, v := range r.header {
+		out[k] = append([]string(nil), v...)
+	}
+	return out
+}
+
 func (r *flushRecorder) Write(b []byte) (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closed {
+		return 0, context.Canceled
+	}
 	n, err := r.buf.Write(b)
 	if n > 0 {
 		select {
@@ -456,7 +481,11 @@ func (r *flushRecorder) Write(b []byte) (int, error) {
 }
 
 func (r *flushRecorder) WriteHeader(statusCode int) {
-	r.header.Set("X-Status", string(rune(statusCode)))
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.status == 0 {
+		r.status = statusCode
+	}
 }
 
 func (r *flushRecorder) Flush() {
