@@ -1,10 +1,13 @@
 package handlers
 
 import (
+	"encoding/json"
+	"fmt"
 	"html/template"
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -75,44 +78,121 @@ func (h *SystemHandler) Metrics(w http.ResponseWriter, r *http.Request) {
 
 // LogsStream handles GET /api/v1/logs/stream
 func (h *SystemHandler) LogsStream(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{
-		"status":  "ok",
-		"message": "SSE logs not yet implemented",
-	})
+	h.serveLogStream(w, r, "")
 }
 
 // QueryLogs handles GET /api/v1/logs
 func (h *SystemHandler) QueryLogs(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{
-		"logs":    []any{},
-		"message": "Historical logs not yet implemented",
-	})
+	q, err := parseLogQuery(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	instanceID := r.URL.Query().Get("instance_id")
+	result := h.supervisor.QueryLogs(q, instanceID)
+	writeJSON(w, http.StatusOK, result)
 }
 
 // InstanceLogs handles GET /api/v1/instances/{id}/logs
 func (h *SystemHandler) InstanceLogs(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimPrefix(r.URL.Path, "/api/v1/instances/")
+	id = strings.TrimSuffix(id, "/logs")
 	if id == "" {
 		writeError(w, 400, "instance ID is required")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"instance_id": id,
-		"logs":        []any{},
-	})
+	q, err := parseLogQuery(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	result := h.supervisor.QueryLogs(q, id)
+	writeJSON(w, http.StatusOK, result)
 }
 
 // InstanceLogStream handles GET /api/v1/instances/{id}/logs/stream
 func (h *SystemHandler) InstanceLogStream(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimPrefix(r.URL.Path, "/api/v1/instances/")
+	id = strings.TrimSuffix(id, "/logs/stream")
 	if id == "" {
 		writeError(w, 400, "instance ID is required")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"instance_id": id,
-		"stream":      true,
-	})
+	h.serveLogStream(w, r, id)
+}
+
+// serveLogStream implements SSE log streaming via the Supervisor's LogBroker.
+func (h *SystemHandler) serveLogStream(w http.ResponseWriter, r *http.Request, instanceID string) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "streaming unsupported")
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.WriteHeader(http.StatusOK)
+	flusher.Flush()
+
+	sub := h.supervisor.SubscribeLogs(instanceID)
+	if sub == nil {
+		return
+	}
+	defer sub.Cancel()
+
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-sub.Done():
+			return
+		case ev := <-sub.Channel():
+			if ev.Message == "" && ev.Timestamp.IsZero() {
+				continue // channel closed sentinel
+			}
+			data, err := json.Marshal(ev)
+			if err != nil {
+				continue
+			}
+			fmt.Fprintf(w, "id: %d\ndata: %s\n\n", ev.Sequence, data)
+			flusher.Flush()
+		case <-ticker.C:
+			fmt.Fprintf(w, ": ping\n\n")
+			flusher.Flush()
+		}
+	}
+}
+
+// parseLogQuery parses HTTP query parameters into a process.LogQuery.
+func parseLogQuery(r *http.Request) (process.LogQuery, error) {
+	q := process.LogQuery{
+		LogFilter: process.LogFilter{
+			Stream:   r.URL.Query().Get("stream"),
+			Search:   r.URL.Query().Get("search"),
+			MinLevel: r.URL.Query().Get("min_level"),
+			From:     r.URL.Query().Get("from"),
+			To:       r.URL.Query().Get("to"),
+		},
+	}
+	if v := r.URL.Query().Get("page"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 {
+			return q, fmt.Errorf("invalid page: %v", err)
+		}
+		q.Page = n
+	}
+	if v := r.URL.Query().Get("page_size"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 {
+			return q, fmt.Errorf("invalid page_size: %v", err)
+		}
+		q.PageSize = n
+	}
+	return q, nil
 }
 
 // ServeIndex serves the main UI page.
