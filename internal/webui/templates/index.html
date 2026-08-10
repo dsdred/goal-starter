@@ -26,6 +26,39 @@
         </div>
     </div>
 
+    <!-- Create Runtime Modal -->
+    <div id="create-runtime-modal" class="modal" style="display:none;">
+        <div class="modal-content modal-lg">
+            <div class="modal-header">
+                <h2>Create New Runtime</h2>
+                <button class="modal-close" onclick="closeCreateRuntimeModal()">×</button>
+            </div>
+            <form id="create-runtime-form" onsubmit="return handleCreateRuntime(event)">
+                <div class="form-group">
+                    <label for="runtime-name">Runtime Name *</label>
+                    <input type="text" id="runtime-name" name="name" required placeholder="e.g., llama.cpp">
+                </div>
+                <div class="form-group">
+                    <label for="runtime-executable">Executable Path *</label>
+                    <input type="text" id="runtime-executable" name="executable" required placeholder="C:\path\to\llama-server.exe or /usr/bin/llama-server">
+                </div>
+                <div class="form-group">
+                    <label for="runtime-workdir">Working Directory</label>
+                    <input type="text" id="runtime-workdir" name="working_directory" placeholder="Directory where the runtime will be started">
+                </div>
+                <div class="form-group">
+                    <label for="runtime-args">Default Arguments (space-separated)</label>
+                    <textarea id="runtime-args" name="default_args" rows="2" placeholder="--host 127.0.0.1 --port 8080"></textarea>
+                </div>
+                <div id="create-runtime-error" class="error-message" style="display:none;"></div>
+                <div class="form-actions">
+                    <button type="submit" class="btn btn-primary">Create Runtime</button>
+                    <button type="button" class="btn btn-secondary" onclick="closeCreateRuntimeModal()">Cancel</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
     <!-- Create Profile Modal -->
     <div id="create-profile-modal" class="modal" style="display:none;">
         <div class="modal-content modal-lg">

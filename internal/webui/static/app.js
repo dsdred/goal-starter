@@ -182,7 +182,77 @@
     }
 
     window.showCreateRuntimeModal = function() {
-        alert('Create Runtime dialog - use API: POST /api/v1/runtimes');
+        const modal = document.getElementById('create-runtime-modal');
+        if (modal) modal.style.display = 'flex';
+        const err = document.getElementById('create-runtime-error');
+        if (err) { err.style.display = 'none'; }
+        const form = document.getElementById('create-runtime-form');
+        if (form) form.reset();
+    };
+
+    window.closeCreateRuntimeModal = function() {
+        const modal = document.getElementById('create-runtime-modal');
+        if (modal) modal.style.display = 'none';
+    };
+
+    // Create Runtime submission
+    window.handleCreateRuntime = async function(event) {
+        event.preventDefault();
+        const errEl = document.getElementById('create-runtime-error');
+        if (errEl) { errEl.style.display = 'none'; errEl.textContent = ''; }
+
+        const name = document.getElementById('runtime-name').value.trim();
+        const executable = document.getElementById('runtime-executable').value.trim();
+        const workdir = document.getElementById('runtime-workdir').value.trim();
+        const argsText = document.getElementById('runtime-args').value.trim();
+
+        if (!name) {
+            if (errEl) { errEl.textContent = 'Name is required'; errEl.style.display = 'block'; }
+            return false;
+        }
+        if (!executable) {
+            if (errEl) { errEl.textContent = 'Executable path is required'; errEl.style.display = 'block'; }
+            return false;
+        }
+
+        const defaultArgs = argsText ? argsText.split(/\s+/).filter(a => a.length > 0) : [];
+
+        const body = {
+            name: name,
+            executable: executable,
+            working_directory: workdir,
+            default_args: defaultArgs
+        };
+
+        try {
+            const response = await fetch('/api/v1/runtimes', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRF-Token': csrfToken
+                },
+                credentials: 'same-origin',
+                body: JSON.stringify(body)
+            });
+
+            if (response.ok) {
+                closeCreateRuntimeModal();
+                await loadRuntimes();
+                await refreshStatus();
+                return false;
+            }
+
+            let msg = 'Failed to create runtime';
+            try {
+                const data = await response.json();
+                msg = data.error || msg;
+            } catch (e2) {}
+
+            if (errEl) { errEl.textContent = msg; errEl.style.display = 'block'; }
+        } catch (err) {
+            if (errEl) { errEl.textContent = 'Request failed: ' + err.message; errEl.style.display = 'block'; }
+        }
+        return false;
     };
 
     window.deleteRuntime = async function(id) {
