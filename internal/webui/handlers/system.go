@@ -19,6 +19,17 @@ import (
 	"github.com/dsdred/goal/internal/webui/security"
 )
 
+// SystemHandlerOption configures the SystemHandler.
+type SystemHandlerOption func(*SystemHandler)
+
+// WithHeartbeat sets the SSE heartbeat interval.
+// A zero value uses the default 30-second interval.
+func WithHeartbeat(d time.Duration) SystemHandlerOption {
+	return func(h *SystemHandler) {
+		h.heartbeat = d
+	}
+}
+
 // SystemHandler handles system-level HTTP requests.
 type SystemHandler struct {
 	supervisor *process.Supervisor
@@ -27,20 +38,25 @@ type SystemHandler struct {
 	csrf       *security.CSRF
 	insSvc     *application.InstanceService
 
-	tmplFS   fs.FS
-	tmplOnce sync.Once
-	tmpl     *template.Template
-	tmplErr  error
+	tmplFS    fs.FS
+	tmplOnce  sync.Once
+	tmpl      *template.Template
+	tmplErr   error
+	heartbeat time.Duration
 }
 
 // NewSystemHandler creates a new SystemHandler.
-func NewSystemHandler(supervisor *process.Supervisor, sess *security.SessionStore, csrf *security.CSRF, insSvc *application.InstanceService) *SystemHandler {
-	return &SystemHandler{
+func NewSystemHandler(supervisor *process.Supervisor, sess *security.SessionStore, csrf *security.CSRF, insSvc *application.InstanceService, opts ...SystemHandlerOption) *SystemHandler {
+	h := &SystemHandler{
 		supervisor: supervisor,
 		sess:       sess,
 		csrf:       csrf,
 		insSvc:     insSvc,
 	}
+	for _, opt := range opts {
+		opt(h)
+	}
+	return h
 }
 
 // WithTemplateFS injects the embedded filesystem for templates.
@@ -124,6 +140,8 @@ func (h *SystemHandler) InstanceLogStream(w http.ResponseWriter, r *http.Request
 }
 
 // serveLogStream implements SSE log streaming via the Supervisor's LogBroker.
+// The handler exits when the request context is cancelled or when the broker
+// subscription is closed (via Cancel or broker Shutdown).
 func (h *SystemHandler) serveLogStream(w http.ResponseWriter, r *http.Request, instanceID string) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -143,14 +161,33 @@ func (h *SystemHandler) serveLogStream(w http.ResponseWriter, r *http.Request, i
 	}
 	defer sub.Cancel()
 
-	ticker := time.NewTicker(30 * time.Second)
+	interval := h.heartbeat
+	if interval == 0 {
+		interval = 30 * time.Second
+	}
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
+	ctxDone := r.Context().Done()
+	subDone := sub.Done()
+
+	// Check sub done first so that a closed subscription terminates the loop
+	// even if the request context is not yet cancelled (or is already done).
+	// If either fires, we must not write further SSE frames.
 	for {
 		select {
-		case <-r.Context().Done():
+		case <-ctxDone:
 			return
-		case <-sub.Done():
+		case <-subDone:
+			return
+		default:
+			// Both active; proceed to event wait.
+		}
+
+		select {
+		case <-ctxDone:
+			return
+		case <-subDone:
 			return
 		case ev := <-sub.Channel():
 			if ev.Message == "" && ev.Timestamp.IsZero() {
