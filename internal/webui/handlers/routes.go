@@ -91,6 +91,7 @@ func (r *RouteRegistry) Build() http.Handler {
 
 	// Health and version (no auth).
 	mux.HandleFunc("GET /api/v1/health", r.systemHandler.Health)
+	mux.HandleFunc("GET /api/v1/version", r.systemHandler.Version)
 
 	// Auth endpoints.
 	mux.HandleFunc("POST /api/v1/auth/login", r.authHandler.Login)

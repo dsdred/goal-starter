@@ -19,7 +19,11 @@ import (
 )
 
 func main() {
-	configPath := flag.String("config", "goal.json", "path to configuration file")
+	defaultConfig := os.Getenv("GOAL_CONFIG")
+	if defaultConfig == "" {
+		defaultConfig = "goal.json"
+	}
+	configPath := flag.String("config", defaultConfig, "path to configuration file (env: GOAL_CONFIG)")
 	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
 

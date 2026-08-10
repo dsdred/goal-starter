@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/dsdred/goal/internal/application"
 	"github.com/dsdred/goal/internal/process"
+	"github.com/dsdred/goal/internal/version"
 	"github.com/dsdred/goal/internal/webui/security"
 )
 
@@ -264,6 +266,22 @@ func (h *SystemHandler) ServeAPI(w http.ResponseWriter, r *http.Request) {
 		"version": "0.8",
 		"api":     "/api/v1/docs",
 	})
+}
+
+// Version handles GET /api/v1/version
+func (h *SystemHandler) Version(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, versionMap())
+}
+
+func versionMap() map[string]any {
+	return map[string]any{
+		"version":   version.Version,
+		"gitCommit": version.GitCommit,
+		"buildTime": version.BuildTime,
+		"goVersion": runtime.Version(),
+		"os":        runtime.GOOS,
+		"arch":      runtime.GOARCH,
+	}
 }
 
 // AdminUsers handles GET /api/v1/admin/users
