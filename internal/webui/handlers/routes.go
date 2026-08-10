@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"io/fs"
 	"net/http"
 
 	"github.com/dsdred/goal/internal/application"
@@ -24,6 +25,7 @@ type RouteRegistry struct {
 	rateLimiter       any // *RateLimiter placeholder
 	loggingMiddleware func(http.Handler) http.Handler
 	authEnabled       bool
+	staticFS          fs.FS
 }
 
 // RouteRegistryOption configures the route registry.
@@ -34,6 +36,14 @@ type RouteRegistryOption func(*RouteRegistry)
 func WithAuthEnabled(enabled bool) RouteRegistryOption {
 	return func(r *RouteRegistry) {
 		r.authEnabled = enabled
+	}
+}
+
+// WithWebAssets injects the embedded filesystems for templates and static assets.
+func WithWebAssets(templateFS, staticFS fs.FS) RouteRegistryOption {
+	return func(r *RouteRegistry) {
+		r.systemHandler.WithTemplateFS(templateFS)
+		r.staticFS = staticFS
 	}
 }
 
@@ -143,7 +153,14 @@ func (r *RouteRegistry) Build() http.Handler {
 	}
 
 	// Static files.
-	mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir("./web/static"))))
+	if r.staticFS != nil {
+		sub, err := fs.Sub(r.staticFS, "static")
+		if err == nil {
+			mux.Handle("/static/", http.StripPrefix("/static/", http.FileServerFS(sub)))
+		} else {
+			mux.Handle("/static/", http.StripPrefix("/static/", http.FileServerFS(r.staticFS)))
+		}
+	}
 
 	// Apply middleware chain.
 	var handler http.Handler = mux

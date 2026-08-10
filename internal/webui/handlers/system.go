@@ -1,8 +1,12 @@
 package handlers
 
 import (
+	"html/template"
+	"io/fs"
+	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/dsdred/goal/internal/application"
@@ -17,6 +21,11 @@ type SystemHandler struct {
 	sess       *security.SessionStore
 	csrf       *security.CSRF
 	insSvc     *application.InstanceService
+
+	tmplFS   fs.FS
+	tmplOnce sync.Once
+	tmpl     *template.Template
+	tmplErr  error
 }
 
 // NewSystemHandler creates a new SystemHandler.
@@ -27,6 +36,12 @@ func NewSystemHandler(supervisor *process.Supervisor, sess *security.SessionStor
 		csrf:       csrf,
 		insSvc:     insSvc,
 	}
+}
+
+// WithTemplateFS injects the embedded filesystem for templates.
+func (h *SystemHandler) WithTemplateFS(fsys fs.FS) *SystemHandler {
+	h.tmplFS = fsys
+	return h
 }
 
 // Health handles GET /api/v1/health
@@ -102,8 +117,54 @@ func (h *SystemHandler) InstanceLogStream(w http.ResponseWriter, r *http.Request
 
 // ServeIndex serves the main UI page.
 func (h *SystemHandler) ServeIndex(w http.ResponseWriter, r *http.Request) {
+	tmpl, err := h.indexTemplate()
+	if err != nil {
+		slog.Error("render index template", "error", err)
+		writeError(w, http.StatusInternalServerError, "template error")
+		return
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
+	if err := tmpl.Execute(w, nil); err != nil {
+		slog.Error("execute index template", "error", err)
+	}
+}
+
+// indexTemplate lazily parses the embedded index.html template.
+func (h *SystemHandler) indexTemplate() (*template.Template, error) {
+	h.tmplOnce.Do(func() {
+		if h.tmplFS == nil {
+			h.tmplErr = fs.ErrNotExist
+			return
+		}
+		content, err := fs.ReadFile(h.tmplFS, "templates/index.html")
+		if err != nil {
+			h.tmplErr = err
+			return
+		}
+		h.tmpl, h.tmplErr = template.New("index.html").Funcs(template.FuncMap{
+			"default": func(def, val any) any {
+				if val == nil || val == "" {
+					return def
+				}
+				return val
+			},
+			"formatTime": func(v any) string {
+				switch t := v.(type) {
+				case time.Time:
+					if t.IsZero() {
+						return "-"
+					}
+					return t.Format(time.RFC3339)
+				case string:
+					return t
+				default:
+					return "-"
+				}
+			},
+		}).Parse(string(content))
+	})
+	return h.tmpl, h.tmplErr
 }
 
 // ServeWebStatic serves static web assets.

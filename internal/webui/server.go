@@ -114,6 +114,7 @@ func (a *App) InitRegistry() {
 		a.sessionStore,
 		a.passwordStore,
 		handlers.WithAuthEnabled(a.authEnabled),
+		handlers.WithWebAssets(templateFS, staticFS),
 	)
 }
 
