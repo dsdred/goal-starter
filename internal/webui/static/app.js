@@ -303,7 +303,135 @@
     }
 
     window.showCreateModelModal = function() {
-        alert('Create Model dialog - use API: POST /api/v1/models');
+        const modal = document.getElementById('create-model-modal');
+        if (modal) modal.style.display = 'flex';
+        const err = document.getElementById('create-model-error');
+        if (err) { err.style.display = 'none'; }
+        const form = document.getElementById('create-model-form');
+        if (form) form.reset();
+        loadRuntimeSelectIntoModel();
+        updateModelKindVisibility();
+    };
+
+    window.closeCreateModelModal = function() {
+        const modal = document.getElementById('create-model-modal');
+        if (modal) modal.style.display = 'none';
+    };
+
+    async function loadRuntimeSelectIntoModel() {
+        const select = document.getElementById('model-runtime');
+        if (!select) return;
+        try {
+            const resp = await fetch('/api/v1/runtimes', {
+                headers: { 'X-CSRF-Token': csrfToken },
+                credentials: 'same-origin'
+            });
+            if (resp.ok) {
+                const runtimes = await resp.json();
+                select.innerHTML = '<option value="">Select a runtime...</option>' +
+                    runtimes.map(r => '<option value="' + r.id + '">' + escapeHtml(r.name) + '</option>').join('');
+            }
+        } catch { /* ignore */ }
+    }
+
+    function updateModelKindVisibility() {
+        const kind = document.getElementById('model-kind').value;
+        const pathGroup = document.getElementById('model-path-group');
+        const argsGroup = document.getElementById('model-args-group');
+        if (kind === 'arguments') {
+            if (argsGroup) argsGroup.style.display = 'block';
+            if (pathGroup) pathGroup.style.display = 'none';
+        } else {
+            if (argsGroup) argsGroup.style.display = 'none';
+            if (pathGroup) pathGroup.style.display = 'block';
+        }
+        const errPath = document.getElementById('model-path-error');
+        const errArgs = document.getElementById('model-args-error');
+        if (errPath) { errPath.style.display = 'none'; }
+        if (errArgs) { errArgs.style.display = 'none'; }
+    }
+
+    window.handleCreateModel = async function(event) {
+        event.preventDefault();
+        const errEl = document.getElementById('create-model-error');
+        if (errEl) { errEl.style.display = 'none'; errEl.textContent = ''; }
+
+        // Clear field-specific errors
+        const errPath = document.getElementById('model-path-error');
+        const errArgs = document.getElementById('model-args-error');
+        if (errPath) { errPath.style.display = 'none'; }
+        if (errArgs) { errArgs.style.display = 'none'; }
+
+        const name = document.getElementById('model-name').value.trim();
+        const runtimeId = document.getElementById('model-runtime').value.trim();
+        const kindEl = document.getElementById('model-kind');
+        const kind = kindEl ? kindEl.value.trim() : '';
+
+        if (!name) {
+            if (errEl) { errEl.textContent = 'Name is required'; errEl.style.display = 'block'; }
+            return false;
+        }
+        if (!runtimeId) {
+            if (errEl) { errEl.textContent = 'Runtime is required'; errEl.style.display = 'block'; }
+            return false;
+        }
+
+        let path = '';
+        let arguments = [];
+        if (kind === 'arguments') {
+            const argsText = document.getElementById('model-arguments').value.trim();
+            arguments = argsText ? argsText.split(/\s+/).filter(a => a.length > 0) : [];
+            if (arguments.length === 0) {
+                if (errArgs) { errArgs.textContent = 'Arguments are required for kind=arguments'; errArgs.style.display = 'block'; }
+                return false;
+            }
+        } else if (kind === 'path') {
+            path = document.getElementById('model-path').value.trim();
+            if (!path) {
+                if (errPath) { errPath.textContent = 'Path is required for kind=path'; errPath.style.display = 'block'; }
+                return false;
+            }
+        } else {
+            if (errEl) { errEl.textContent = 'Select a model type (path or arguments)'; errEl.style.display = 'block'; }
+            return false;
+        }
+
+        const body = {
+            name: name,
+            runtime_id: runtimeId,
+            path: path,
+            arguments: arguments
+        };
+
+        try {
+            const response = await fetch('/api/v1/models', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRF-Token': csrfToken
+                },
+                credentials: 'same-origin',
+                body: JSON.stringify(body)
+            });
+
+            if (response.ok) {
+                closeCreateModelModal();
+                await loadModels();
+                await loadRuntimes(); // runtime select updated with latest models list
+                return false;
+            }
+
+            let msg = 'Failed to create model';
+            try {
+                const data = await response.json();
+                msg = data.error || msg;
+            } catch (e2) {}
+
+            if (errEl) { errEl.textContent = msg; errEl.style.display = 'block'; }
+        } catch (err) {
+            if (errEl) { errEl.textContent = 'Request failed: ' + err.message; errEl.style.display = 'block'; }
+        }
+        return false;
     };
 
     window.deleteModel = async function(id) {

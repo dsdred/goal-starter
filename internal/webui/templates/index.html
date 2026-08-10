@@ -117,6 +117,51 @@
         </div>
     </div>
 
+    <!-- Create Model Modal -->
+    <div id="create-model-modal" class="modal" style="display:none;">
+        <div class="modal-content modal-lg">
+            <div class="modal-header">
+                <h2>Create New Model</h2>
+                <button class="modal-close" onclick="closeCreateModelModal()">×</button>
+            </div>
+            <form id="create-model-form" onsubmit="return handleCreateModel(event)">
+                <div class="form-group">
+                    <label for="model-name">Model Name *</label>
+                    <input type="text" id="model-name" name="name" required placeholder="e.g., Qwen 3.6 35B">
+                </div>
+                <div class="form-group">
+                    <label for="model-runtime">Runtime *</label>
+                    <select id="model-runtime" name="runtime_id" required>
+                        <option value="">Select a runtime...</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="model-kind">Model Type *</label>
+                    <select id="model-kind" name="kind" required>
+                        <option value="">Select...</option>
+                        <option value="path">Path (GGUF file)</option>
+                        <option value="arguments">Arguments (inline args)</option>
+                    </select>
+                </div>
+                <div class="form-group" id="model-path-group">
+                    <label for="model-path">Path *</label>
+                    <input type="text" id="model-path" name="path" placeholder="Path to .gguf file">
+                    <div id="model-path-error" class="error-message" style="display:none;"></div>
+                </div>
+                <div class="form-group" id="model-args-group" style="display:none;">
+                    <label for="model-arguments">Arguments (space-separated)</label>
+                    <textarea id="model-arguments" name="arguments" rows="2" placeholder="-m model.gguf --mmproj mmproj.gguf --port 8085"></textarea>
+                    <div id="model-args-error" class="error-message" style="display:none;"></div>
+                </div>
+                <div id="create-model-error" class="error-message" style="display:none;"></div>
+                <div class="form-actions">
+                    <button type="submit" class="btn btn-primary">Create Model</button>
+                    <button type="button" class="btn btn-secondary" onclick="closeCreateModelModal()">Cancel</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
     <header>
         <div class="header-content">
             <h1>GoAl Process Manager</h1>
