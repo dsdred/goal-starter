@@ -634,6 +634,10 @@
     };
 
     window.startProfile = async function(id) {
+        const btn = event.target;
+        const orig = btn.textContent;
+        btn.disabled = true;
+        btn.textContent = 'Starting...';
         try {
             const response = await fetch('/api/v1/profiles/' + encodeURIComponent(id) + '/start', {
                 method: 'POST',
@@ -643,16 +647,24 @@
             if (response.ok) {
                 await refreshStatus();
                 await loadProfiles();
+                showToast('Profile started', 'success');
             } else {
                 const data = await response.json().catch(() => ({}));
-                alert('Start failed: ' + (data.error || 'Unknown error'));
+                showToast('Start failed: ' + (data.error || 'Unknown error'), 'error');
             }
         } catch (err) {
-            alert('Start failed: ' + err.message);
+            showToast('Start failed: ' + err.message, 'error');
+        } finally {
+            btn.disabled = false;
+            btn.textContent = orig;
         }
     };
 
     window.stopProfile = async function(id) {
+        const btn = event.target;
+        const orig = btn.textContent;
+        btn.disabled = true;
+        btn.textContent = 'Stopping...';
         try {
             const response = await fetch('/api/v1/profiles/' + encodeURIComponent(id) + '/stop', {
                 method: 'POST',
@@ -662,12 +674,43 @@
             if (response.ok) {
                 await refreshStatus();
                 await loadProfiles();
+                showToast('Profile stopped', 'success');
             } else {
                 const data = await response.json().catch(() => ({}));
-                alert('Stop failed: ' + (data.error || 'Unknown error'));
+                showToast('Stop failed: ' + (data.error || 'Unknown error'), 'error');
             }
         } catch (err) {
-            alert('Stop failed: ' + err.message);
+            showToast('Stop failed: ' + err.message, 'error');
+        } finally {
+            btn.disabled = false;
+            btn.textContent = orig;
+        }
+    };
+
+    window.restartProfile = async function(id) {
+        const btn = event.target;
+        const orig = btn.textContent;
+        btn.disabled = true;
+        btn.textContent = 'Restarting...';
+        try {
+            const response = await fetch('/api/v1/profiles/' + encodeURIComponent(id) + '/restart', {
+                method: 'POST',
+                headers: { 'X-CSRF-Token': csrfToken },
+                credentials: 'same-origin'
+            });
+            if (response.ok) {
+                await refreshStatus();
+                await loadProfiles();
+                showToast('Profile restarted', 'success');
+            } else {
+                const data = await response.json().catch(() => ({}));
+                showToast('Restart failed: ' + (data.error || 'Unknown error'), 'error');
+            }
+        } catch (err) {
+            showToast('Restart failed: ' + err.message, 'error');
+        } finally {
+            btn.disabled = false;
+            btn.textContent = orig;
         }
     };
 

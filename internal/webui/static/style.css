@@ -308,6 +308,15 @@ section {
     border: 1px solid var(--border);
 }
 
+.btn-warning {
+    background: var(--warning);
+    color: white;
+}
+
+.btn-warning:hover {
+    background: #d68910;
+}
+
 .btn-sm {
     padding: 0.25rem 0.625rem;
     font-size: 0.8rem;
