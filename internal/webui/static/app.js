@@ -730,17 +730,76 @@
 
     window.updateLogFilter = function() {
         currentLogFilter = document.getElementById('log-filter-stream').value;
-        // Reconnect SSE to get all logs (client-side filtering)
+        const mode = document.getElementById('log-mode').value;
+        if (mode === 'history') { loadHistoryLogs(); return; }
         connectLogs();
     };
 
     window.filterLogs = function() {
         logSearchTerm = document.getElementById('log-search').value;
+        const mode = document.getElementById('log-mode').value;
+        if (mode === 'history') { loadHistoryLogs(); return; }
         // Clear and reconnect to apply filter
         const container = document.getElementById('log-container');
         if (container) container.innerHTML = '';
         connectLogs();
     };
+
+    window.updateLogMode = function() {
+        const mode = document.getElementById('log-mode').value;
+        const live = document.getElementById('log-container');
+        const hist = document.getElementById('history-panel');
+        if (mode === 'history') {
+            if (live) live.style.display = 'none';
+            if (hist) hist.style.display = 'block';
+            loadHistoryLogs();
+        } else {
+            if (live) live.style.display = 'block';
+            if (hist) hist.style.display = 'none';
+            connectLogs();
+        }
+    };
+
+    async function loadHistoryLogs() {
+        const search = document.getElementById('log-search').value;
+        const stream = document.getElementById('log-filter-stream').value;
+        const url = new URL('/api/v1/logs', window.location.origin);
+        if (search) url.searchParams.set('search', search);
+        if (stream) url.searchParams.set('stream', stream);
+        url.searchParams.set('page_size', '200');
+
+        const resp = await fetch(url.toString(), {
+            headers: { 'X-CSRF-Token': csrfToken },
+            credentials: 'same-origin'
+        });
+        if (!resp.ok) {
+            const txt = await resp.text().catch(() => 'load failed');
+            alert('History load failed: ' + txt);
+            return;
+        }
+
+        const data = await resp.json();
+        const items = data.items || [];
+        renderHistoryLogs(items);
+    }
+
+    function renderHistoryLogs(items) {
+        const panel = document.getElementById('history-panel');
+        if (!panel) return;
+        const empty = document.getElementById('history-empty');
+        if (empty) empty.style.display = items.length ? 'none' : 'block';
+
+        panel.innerHTML = '';
+        items.forEach(ev => {
+            const p = document.createElement('p');
+            const time = new Date(ev.timestamp).toLocaleTimeString();
+            const cls = ev.stream === 'stderr' ? 'log-stderr' :
+                        ev.stream === 'system' ? 'log-system' : 'log-stdout';
+            p.className = cls;
+            p.textContent = `[${time}] [${ev.stream}] ${ev.message}`;
+            panel.appendChild(p);
+        });
+    }
 
     // ========== Escape HTML ==========
     function escapeHtml(str) {

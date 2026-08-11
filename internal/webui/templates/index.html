@@ -349,10 +349,21 @@
                         <option value="system">system</option>
                     </select>
                     <input type="text" id="log-search" placeholder="Search..." oninput="filterLogs()">
+                    <select id="log-mode" onchange="updateLogMode()">
+                        <option value="live">Live</option>
+                        <option value="history">History</option>
+                    </select>
                     <button onclick="clearLogs()" class="btn btn-sm">Clear</button>
                 </div>
             </div>
+
+            <!-- Live logs container -->
             <div id="log-container" class="log-container"></div>
+
+            <!-- Historical logs panel (hidden until toggled) -->
+            <div id="history-panel" class="log-container" style="display:none;">
+                <div id="history-empty" class="empty" style="display:none;">— No logs match the filters —</div>
+            </div>
         </section>
     <!-- Profile Preview Modal -->
     <div id="profile-preview-modal" class="modal" style="display:none;">
