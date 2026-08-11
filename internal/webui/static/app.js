@@ -255,22 +255,57 @@
         return false;
     };
 
-    window.deleteRuntime = async function(id) {
-        if (!confirm('Delete runtime ' + id + '?')) return;
-        try {
-            const response = await fetch('/api/v1/runtimes/' + id, {
-                method: 'DELETE',
-                headers: { 'X-CSRF-Token': csrfToken },
-                credentials: 'same-origin'
-            });
-            if (response.ok) {
-                await loadRuntimes();
-            } else {
-                alert('Failed to delete runtime');
+    // ---------- Toast & Confirm infrastructure ----------
+    function showToast(message, kind) {
+        const container = document.getElementById('toast-container');
+        if (!container) return;
+
+        const toast = document.createElement('div');
+        const bg = kind === 'success' ? '#2ecc71' :
+                   kind === 'error' ? '#e74c3c' :
+                   '#9a9ab0';
+        toast.style.cssText = `background:${bg};color:white;padding:0.75rem 1rem;border-radius:8px;font-size:0.9rem;box-shadow:0 4px 12px rgba(0,0,0,0.3);opacity:1;transition:opacity 0.3s;pointer-events:auto;`;
+        toast.textContent = message;
+        container.appendChild(toast);
+        setTimeout(() => { toast.style.opacity = '0'; setTimeout(() => toast.remove(), 300); }, 2500);
+    }
+    window.showToast = showToast;
+
+    function showConfirmModal(message, onConfirm) {
+        const modal = document.getElementById('confirm-modal');
+        const msg = document.getElementById('confirm-message');
+        if (!modal || !msg) { return onConfirm && onConfirm(); }
+        msg.textContent = message;
+        const yesBtn = document.getElementById('confirm-modal-yes');
+        yesBtn.onclick = () => { closeConfirmModal(); onConfirm && onConfirm(); };
+        modal.style.display = 'flex';
+    }
+
+    window.closeConfirmModal = function() {
+        const modal = document.getElementById('confirm-modal');
+        if (modal) modal.style.display = 'none';
+    };
+
+    // ========== Runtime CRUD ==========
+    window.deleteRuntime = function(id) {
+        showConfirmModal('Delete runtime "' + id + '"?', async function() {
+            try {
+                const response = await fetch('/api/v1/runtimes/' + encodeURIComponent(id), {
+                    method: 'DELETE',
+                    headers: { 'X-CSRF-Token': csrfToken },
+                    credentials: 'same-origin'
+                });
+                if (response.ok) {
+                    showToast('Runtime deleted', 'success');
+                    await loadRuntimes();
+                } else {
+                    const text = await response.text();
+                    showToast('Failed to delete runtime: ' + text, 'error');
+                }
+            } catch (err) {
+                showToast('Delete failed: ' + err.message, 'error');
             }
-        } catch (err) {
-            alert('Delete failed: ' + err.message);
-        }
+        });
     };
 
     // ========== Models ==========
