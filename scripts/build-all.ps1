@@ -265,14 +265,9 @@ $WIN_README = @'
 Set-Content -Path "$WIN_STAGING\goal\RELEASE.txt" -Value $WIN_README -Encoding UTF8
 
 # Create zip archive
-Add-Type -Assembly System.IO.Compression.FileSystem
-$zip = [System.IO.Compression.ZipFile]::Open($WIN_ARCHIVE_PATH, 'Create')
-$baseDir = [System.IO.DirectoryInfo](Get-Item $WIN_STAGING)
-foreach ($file in Get-ChildItem -Path $WIN_STAGING -Recurse -File) {
-    $relativePath = $file.FullName.Substring($baseDir.Parent.FullName.Length + 1)
-    [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, $file.FullName, $relativePath) | Out-Null
-}
-$zip.Close()
+if (Test-Path $WIN_ARCHIVE_PATH) { Remove-Item $WIN_ARCHIVE_PATH }
+Add-Type -AssemblyName "System.IO.Compression.FileSystem"
+[System.IO.Compression.ZipFile]::CreateFromDirectory($WIN_STAGING, $WIN_ARCHIVE_PATH)
 Write-Host "[+] Windows archive: $WIN_ARCHIVE_PATH" -ForegroundColor Green
 
 # --- Linux archive ---
@@ -288,6 +283,7 @@ Copy-Item "goal.example.json" "$LINUX_STAGING\goal\goal.example.json"
 Copy-Item "README.md" "$LINUX_STAGING\goal\README.md"
 Copy-Item "README_RU.md" "$LINUX_STAGING\goal\README_RU.md"
 New-Item -ItemType Directory -Path "$LINUX_STAGING\goal\etc\goal" | Out-Null
+New-Item -ItemType Directory -Path "$LINUX_STAGING\goal\deploy" | Out-Null
 Copy-Item "goal.example.json" "$LINUX_STAGING\goal\etc\goal\goal.example.json"
 Copy-Item "deploy\systemd\goal.service" "$LINUX_STAGING\goal\deploy\goal.service"
 
