@@ -321,6 +321,7 @@
                         <td>{{range .Args}}<span class="arg">{{.}}</span>{{end}}</td>
                         <td><span class="profile-status" data-profile-id="{{.ID}}">not started</span></td>
                         <td class="actions">
+                            <button onclick="showProfilePreview('{{.ID}}')" class="btn btn-secondary btn-sm" title="Show resolved command">Preview</button>
                             <button onclick="startProfile('{{.ID}}')" class="btn btn-success btn-sm">Start</button>
                             <button onclick="stopProfile('{{.ID}}')" class="btn btn-danger btn-sm">Stop</button>
                         </td>
@@ -350,6 +351,27 @@
             </div>
             <div id="log-container" class="log-container"></div>
         </section>
+    <!-- Profile Preview Modal -->
+    <div id="profile-preview-modal" class="modal" style="display:none;">
+        <div class="modal-content modal-lg">
+            <div class="modal-header">
+                <h2>Profile Launch Preview</h2>
+                <button class="modal-close" onclick="closeProfilePreviewModal()">×</button>
+            </div>
+            <div class="modal-body">
+                <table class="data-table preview-table">
+                    <tr><td><strong>Executable</strong></td><td><code id="preview-executable"></code></td></tr>
+                    <tr><td><strong>Args</strong></td><td><code id="preview-args"></code></td></tr>
+                    <tr><td><strong>Working Directory</strong></td><td><code id="preview-workdir"></code></td></tr>
+                    <tr><td><strong>Environment Keys</strong></td><td><span id="preview-env" class="env-list"></span></td></tr>
+                </table>
+            </div>
+            <div class="form-actions">
+                <button class="btn btn-secondary" onclick="closeProfilePreviewModal()">Close</button>
+            </div>
+        </div>
+    </div>
+
     </main>
 
     <script src="/static/app.js"></script>

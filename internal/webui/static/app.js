@@ -474,6 +474,7 @@
                 <td>${(p.args || []).map(a => '<span class="arg">' + escapeHtml(a) + '</span>').join('')}</td>
                 <td><span class="profile-status stopped">not started</span></td>
                 <td class="actions">
+                    <button onclick="showProfilePreview('${p.id}')" class="btn btn-secondary btn-sm" title="Show resolved command">Preview</button>
                     <button onclick="startProfile('${p.id}')" class="btn btn-success btn-sm">Start</button>
                     <button onclick="stopProfile('${p.id}')" class="btn btn-danger btn-sm">Stop</button>
                 </td>
@@ -599,7 +600,7 @@
 
     window.startProfile = async function(id) {
         try {
-            const response = await fetch('/api/v1/profiles/' + id + '/start', {
+            const response = await fetch('/api/v1/profiles/' + encodeURIComponent(id) + '/start', {
                 method: 'POST',
                 headers: { 'X-CSRF-Token': csrfToken },
                 credentials: 'same-origin'
@@ -618,7 +619,7 @@
 
     window.stopProfile = async function(id) {
         try {
-            const response = await fetch('/api/v1/profiles/' + id + '/stop', {
+            const response = await fetch('/api/v1/profiles/' + encodeURIComponent(id) + '/stop', {
                 method: 'POST',
                 headers: { 'X-CSRF-Token': csrfToken },
                 credentials: 'same-origin'
@@ -633,6 +634,43 @@
         } catch (err) {
             alert('Stop failed: ' + err.message);
         }
+    };
+
+    window.showProfilePreview = async function(id) {
+        try {
+            const response = await fetch('/api/v1/profiles/' + encodeURIComponent(id) + '/resolve', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRF-Token': csrfToken
+                },
+                credentials: 'same-origin'
+            });
+            if (!response.ok) {
+                const text = await response.text();
+                alert('Resolve failed: ' + text);
+                return;
+            }
+            const spec = await response.json();
+            document.getElementById('preview-executable').textContent = spec.executable || '';
+            document.getElementById('preview-args').textContent = (spec.args || []).join(' ');
+            document.getElementById('preview-workdir').textContent = spec.workingDirectory || '';
+            const envList = document.getElementById('preview-env');
+            envList.innerHTML = '';
+            (spec.environmentKeys || []).forEach(k => {
+                const span = document.createElement('span');
+                span.className = 'env-tag';
+                span.textContent = k;
+                envList.appendChild(span);
+            });
+            document.getElementById('profile-preview-modal').style.display = 'flex';
+        } catch (err) {
+            alert('Resolve request failed: ' + err.message);
+        }
+    };
+
+    window.closeProfilePreviewModal = function() {
+        document.getElementById('profile-preview-modal').style.display = 'none';
     };
 
     // ========== Logs ==========
