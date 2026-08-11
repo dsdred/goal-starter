@@ -258,6 +258,7 @@
                         <td>{{range .DefaultArgs}}<span class="arg">{{.}}</span>{{end}}</td>
                         <td><code>{{.ID}}</code></td>
                         <td class="actions">
+                            <button onclick="showEditRuntimeModal('{{.ID}}')" class="btn btn-secondary btn-sm">Edit</button>
                             <button onclick="deleteRuntime('{{.ID}}')" class="btn btn-danger btn-sm">Delete</button>
                         </td>
                     </tr>
@@ -289,6 +290,7 @@
                         <td>{{.Format}}</td>
                         <td><code>{{.ID}}</code></td>
                         <td class="actions">
+                            <button onclick="showEditModelModal('{{.ID}}')" class="btn btn-secondary btn-sm">Edit</button>
                             <button onclick="deleteModel('{{.ID}}')" class="btn btn-danger btn-sm">Delete</button>
                         </td>
                     </tr>
@@ -322,6 +324,7 @@
                         <td><span class="profile-status" data-profile-id="{{.ID}}">not started</span></td>
                         <td class="actions">
                             <button onclick="showProfilePreview('{{.ID}}')" class="btn btn-secondary btn-sm" title="Show resolved command">Preview</button>
+                            <button onclick="showEditProfileModal('{{.ID}}')" class="btn btn-secondary btn-sm" title="Edit profile">Edit</button>
                             <button onclick="startProfile('{{.ID}}')" class="btn btn-success btn-sm">Start</button>
                             <button onclick="stopProfile('{{.ID}}')" class="btn btn-danger btn-sm">Stop</button>
                         </td>
@@ -369,6 +372,126 @@
             <div class="form-actions">
                 <button class="btn btn-secondary" onclick="closeProfilePreviewModal()">Close</button>
             </div>
+        </div>
+    </div>
+
+    <!-- Edit Runtime Modal -->
+    <div id="edit-runtime-modal" class="modal" style="display:none;">
+        <div class="modal-content modal-lg">
+            <div class="modal-header">
+                <h2>Edit Runtime</h2>
+                <button class="modal-close" onclick="closeEditRuntimeModal()">×</button>
+            </div>
+            <form id="edit-runtime-form" onsubmit="return handleEditRuntime(event)">
+                <input type="hidden" id="edit-runtime-id">
+                <div class="form-group">
+                    <label for="edit-runtime-name">Name *</label>
+                    <input type="text" id="edit-runtime-name" name="name" required>
+                </div>
+                <div class="form-group">
+                    <label for="edit-runtime-executable">Executable *</label>
+                    <input type="text" id="edit-runtime-executable" name="executable" required>
+                </div>
+                <div class="form-group">
+                    <label for="edit-runtime-workdir">Working Directory</label>
+                    <input type="text" id="edit-runtime-workdir" name="working_directory">
+                </div>
+                <div class="form-group">
+                    <label for="edit-runtime-args">Default Args (space-separated)</label>
+                    <textarea id="edit-runtime-args" name="default_args" rows="2"></textarea>
+                </div>
+                <div id="edit-runtime-error" class="error-message" style="display:none;"></div>
+                <div class="form-actions">
+                    <button type="submit" class="btn btn-primary">Save</button>
+                    <button type="button" class="btn btn-secondary" onclick="closeEditRuntimeModal()">Cancel</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Edit Model Modal -->
+    <div id="edit-model-modal" class="modal" style="display:none;">
+        <div class="modal-content modal-lg">
+            <div class="modal-header">
+                <h2>Edit Model</h2>
+                <button class="modal-close" onclick="closeEditModelModal()">×</button>
+            </div>
+            <form id="edit-model-form" onsubmit="return handleEditModel(event)">
+                <input type="hidden" id="edit-model-id">
+                <div class="form-group">
+                    <label for="edit-model-name">Name *</label>
+                    <input type="text" id="edit-model-name" name="name" required>
+                </div>
+                <div class="form-group">
+                    <label for="edit-model-runtime">Runtime *</label>
+                    <select id="edit-model-runtime" name="runtime_id" required></select>
+                </div>
+                <div class="form-group">
+                    <label for="edit-model-kind">Model Type *</label>
+                    <select id="edit-model-kind" name="kind" required>
+                        <option value="">Select...</option>
+                        <option value="path">Path (GGUF file)</option>
+                        <option value="arguments">Arguments (inline args)</option>
+                    </select>
+                </div>
+                <div class="form-group" id="edit-model-path-group">
+                    <label for="edit-model-path">Path *</label>
+                    <input type="text" id="edit-model-path" name="path">
+                </div>
+                <div class="form-group" id="edit-model-args-group" style="display:none;">
+                    <label for="edit-model-arguments">Arguments</label>
+                    <textarea id="edit-model-arguments" name="arguments" rows="2"></textarea>
+                </div>
+                <div id="edit-model-error" class="error-message" style="display:none;"></div>
+                <div class="form-actions">
+                    <button type="submit" class="btn btn-primary">Save</button>
+                    <button type="button" class="btn btn-secondary" onclick="closeEditModelModal()">Cancel</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Edit Profile Modal -->
+    <div id="edit-profile-modal" class="modal" style="display:none;">
+        <div class="modal-content modal-lg">
+            <div class="modal-header">
+                <h2>Edit Profile</h2>
+                <button class="modal-close" onclick="closeEditProfileModal()">×</button>
+            </div>
+            <form id="edit-profile-form" onsubmit="return handleEditProfile(event)">
+                <input type="hidden" id="edit-profile-id">
+                <div class="form-group">
+                    <label for="edit-profile-name">Name *</label>
+                    <input type="text" id="edit-profile-name" name="name" required>
+                </div>
+                <div class="form-group">
+                    <label for="edit-profile-runtime">Runtime *</label>
+                    <select id="edit-profile-runtime" name="runtime_id" required></select>
+                </div>
+                <div class="form-group">
+                    <label for="edit-profile-model">Model</label>
+                    <select id="edit-profile-model" name="model_id"></select>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="edit-profile-host">Host</label>
+                        <input type="text" id="edit-profile-host" name="host" value="127.0.0.1">
+                    </div>
+                    <div class="form-group">
+                        <label for="edit-profile-port">Port</label>
+                        <input type="number" id="edit-profile-port" name="port" min="1" max="65535">
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label for="edit-profile-args">Arguments (space-separated)</label>
+                    <textarea id="edit-profile-args" name="args" rows="2"></textarea>
+                </div>
+                <div id="edit-profile-error" class="error-message" style="display:none;"></div>
+                <div class="form-actions">
+                    <button type="submit" class="btn btn-primary">Save</button>
+                    <button type="button" class="btn btn-secondary" onclick="closeEditProfileModal()">Cancel</button>
+                </div>
+            </form>
         </div>
     </div>
 
