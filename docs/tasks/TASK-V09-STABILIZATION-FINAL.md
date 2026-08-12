@@ -2,7 +2,7 @@
 
 ## Статус
 
-**READY FOR REVIEW — local checks passed, race detector CI pending**
+**COMPLETED — released as v1.0.0**
 
 ---
 

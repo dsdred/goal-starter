@@ -334,13 +334,15 @@ All API calls start with: `http://127.0.0.1:9090`
 | PUT | `/api/v1/models/{id}` | Update model |
 | DELETE | `/api/v1/models/{id}` | Delete model |
 
-### Health Check and Status
+### Health Check and Version
 
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/api/v1/health` | Health check |
+| GET | `/api/v1/version` | Application version |
 | GET | `/api/v1/metrics` | Application metrics |
-| GET | `/api/v1/migration/status` | Migration status |
+
+> Migration runs automatically at startup — no status endpoint.
 
 ---
 

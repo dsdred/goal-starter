@@ -1,5 +1,7 @@
 # Стабилизационная итерация GoAl — План и Прогресс
 
+> **Historical record of the v0.9 stabilization iteration.** All stages are completed. For current product state, see [ROADMAP.md](../ROADMAP.md).
+
 ## Цель
 Завершить переход от старой single-process архитектуры к multi-instance архитектуре на базе Supervisor, устранить выявленные ошибки конкурентности и lifecycle, привести API, хранилище, тесты и документацию в соответствие с фактической реализацией.
 

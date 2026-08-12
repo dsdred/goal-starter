@@ -334,13 +334,15 @@ sudo ./goal          # Linux
 | PUT | `/api/v1/models/{id}` | Обновить модель |
 | DELETE | `/api/v1/models/{id}` | Удалить модель |
 
-### Health Check и статус
+### Health Check и версия
 
 | Метод | Путь | Описание |
 |-------|------|----------|
 | GET | `/api/v1/health` | Health check |
+| GET | `/api/v1/version` | Версия приложения |
 | GET | `/api/v1/metrics` | Метрики приложения |
-| GET | `/api/v1/migration/status` | Статус миграции |
+
+> Миграция запускается автоматически при старте — отдельного эндпоинта статуса нет.
 
 ---
 

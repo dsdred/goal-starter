@@ -85,10 +85,9 @@ This ensures:
 
 On startup, the Supervisor:
 1. Loads all `LaunchInstanceEntry` from repository
-2. Checks if each instance was running
-3. Verifies if the PID is still alive
-4. If alive: updates state to `running`, subscribes to logs
-5. If dead: marks as `exited` with `recovered` exit class
+2. Checks if each instance was in a transitional state (running/starting/stopping/pending)
+3. Marks them as `stale` and persists the updated state
+4. Stale instances are NOT added to the active instance list (no PID reattachment, no liveness verification)
 
 ## Consequences
 
@@ -102,7 +101,7 @@ On startup, the Supervisor:
 ### Negative
 - More complex state management (need to track multiple instances)
 - Repository must handle concurrent reads/writes
-- Legacy `/api/v1/status` still exists as single-process endpoint (to be removed)
+- Legacy `/api/v1/status` removed in v1.0.0 (was already deprecated)
 
 ### Trade-offs
 
@@ -113,9 +112,9 @@ The multi-instance model adds complexity to the repository (multiple entries per
 
 ## Notes
 
-- Legacy `process.Manager` (`app.mgr`) is kept temporarily but will be removed
-- All new endpoints use Supervisor via `InstanceService`
-- `/api/v1/status` and `/api/v1/logs/stream` (legacy) should be deprecated after consolidation
+- Legacy `process.Manager` removed in v1.0.0
+- All endpoints use Supervisor via `InstanceService`
+- `/api/v1/status` removed in v1.0.0
 
 ## Related
 

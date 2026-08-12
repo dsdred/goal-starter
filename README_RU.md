@@ -1,20 +1,23 @@
 # GoAl
 
-GoAl — лёгкий кроссплатформенный менеджер для локальных AI-рантаймов, моделей и профилей запуска. Один бинарник для Windows и Linux.
+GoAl — лёгкий однофайловый менеджер для локальных AI-рантаймов, моделей и профилей запуска. Один бинарник для Windows amd64 и Linux amd64.
 
-## Статус
+**Последняя стабильная версия: v1.0.0** — [GitHub Releases](https://github.com/dsdred/goal-starter/releases/tag/v1.0.0)
 
-**v0.9 — Architecture Consolidation (supervisor, instance model, application services).**
+## Ключевые возможности
 
-> Этот репозиторий — архитектурный стартер. Безопасность и надёжность в процессе доработки.
+- **CRUD рантаймов** — настройка Ollama, llama.cpp, vLLM или собственных inference-серверов
+- **Управление моделями** — GGUF-файлы, аргументы командной строки, переменные окружения
+- **Профили запуска** — комбинация Runtime + Model + аргументы в переиспользуемые шаблоны
+- **Мультиинстансный суперайзер** — параллельный запуск нескольких процессов с ограничением конкурентности
+- **Live-логи** — SSE-стриминг с фильтрацией по инстансам и пагинацией
+- **Исторические логи** — поиск, фильтрация по времени и стримам
+- **Preview / Resolve** — посмотреть собранную команду перед запуском
+- **Встроенный Web UI** — дашборд с авторизацией и CSRF-защитой
+- **Атомарное JSON-хранилище** — tmp + rename + backup recovery, без внешней БД
+- **Консервативное восстановление** — обнаружение stale-инстансов при перезапуске
 
-## Поддерживаемые платформы
-
-- Windows amd64
-- Linux amd64
-- Планируется: arm64
-
-## Быстрый старт на Windows
+## Быстрый старт
 
 ```powershell
 .\scripts\bootstrap-windows.ps1
@@ -23,380 +26,62 @@ $env:GOAL_CONFIG = (Resolve-Path .\goal.json)
 go run .\cmd\goal
 ```
 
-## Сборка
+Затем откройте **http://127.0.0.1:9090** в браузере.
 
-### Полная кросс-компиляция (Windows + Linux)
-
-```powershell
-.\scripts\build-all.ps1
-```
-
-Результат:
-- `bin/goal-windows-amd64.exe` — бинарник для Windows
-- `bin/goal-linux-amd64` — бинарник для Linux
-- `bin/checksums.txt` — SHA256 контрольные суммы
-
-### Ручная кросс-компиляция
-
-```powershell
-# Windows
-$env:GOOS='windows'; $env:GOARCH='amd64'; $env:CGO_ENABLED='0'; go build -o bin/goal-windows-amd64.exe ./cmd/goal
-
-# Linux
-$env:GOOS='linux'; $env:GOARCH='amd64'; go build -o bin/goal-linux-amd64 ./cmd/goal
-
-Remove-Item Env:GOOS, Env:GOARCH, Env:CGO_ENABLED
-```
-
-## Обязательные проверки
-
-```powershell
-gofmt -w .
-go test ./...
-go test -race ./...  # требует CGO_ENABLED=1 и gcc
-go vet ./...
-go build ./cmd/goal
-```
-
-## Конфигурация
-
-Скопируйте и отредактируйте пример:
-
-```powershell
-Copy-Item goal.example.json goal.json
-```
-
-Файл `goal.json` исключён из git (содержит секреты и пути пользователя).
-
-### Миграция конфигурации
-
-GoAl автоматически мигрирует конфигурацию при запуске. Поддерживаются шаги:
-- `1 -> 2`: Применение значений по умолчанию для отсутствующих полей (healthCheck для профилей и рантаймов)
-
-Миграция происходит автоматически через `config.MigrateConfig()` при вызове `config.Load()`. Отдельная точка статуса миграции не нужна.
-
-### Горячая перезагрузка конфигурации
-
-Горячая перезагрузка определена в `internal/config` (`ReloadConfig`, `Watch`) но **пока не подключена** в main. Конфигурация читается один раз при запуске через `config.Load()`.
-
-Поддерживаются безопасные live-обновления для:
-- `logLevel` — изменение уровня логирования без перезапуска
-- `healthCheck.interval` — изменение частоты health check
-
-Поля, требующие перезапуск:
-- `listenAddress`, `webPort`, `dataDir`
-
-Статус: **WIP** — planned: reload coordinator и restart-required reporting.
-
-### Config vs Repository (ownership)
-
-GoAl имеет два источника для runtimes/models/profiles:
-
-1. **`goal.json`** — начальная конфигурация (seed).
-2. **`goal_repo.json`** — единое хранилище (runtime store).
-
-**Правило ownership:** После первого запуска **источником истины является `goal_repo.json`**. `goal.json` используется только для первоначального заполнения репозитория. Изменения в `goal.json` после первого запуска не обновляют существующие сущности — только добавляют новые (с новым ID). Для изменения существующих используйте API или Web UI.
-
-Это избегает silent configuration drift и сохраняет консистентность runtime состояния.
-
-## API endpoints
-
-### Аутентификация
-
-| Method | Path | Описание |
-|--------|------|----------|
-| POST | `/api/v1/auth/login` | Войти (HTTP-only cookies) |
-| POST | `/api/v1/auth/logout` | Выйти |
-| GET | `/api/v1/auth/session` | Проверить сессию |
-
-### Управление процессом
-
-| Method | Path | Описание |
-|--------|------|----------|
-| GET | `/` | Веб-панель управления |
-| GET | `/api/v1/health` | Health check |
-| GET | `/api/v1/metrics` | Метрики приложения |
-
-> `/api/v1/status` удалён. Используйте `GET /api/v1/instances` и `GET /api/v1/instances/{id}`.
-
-### Управление экземплярами (Instances)
-
-Профиль — это шаблон запуска. Экземпляр (Instance) — запущенный процесс.
-
-| Method | Path | Описание |
-|--------|------|----------|
-| GET | `/api/v1/instances` | Список всех экземпляров (из Supervisor) |
-| GET | `/api/v1/instances/{id}` | Статус экземпляра |
-| POST | `/api/v1/instances/{id}/stop` | Остановить экземпляр (auth + CSRF) |
-| POST | `/api/v1/instances/{id}/restart` | Перезапустить экземпляр (auth + CSRF) |
-
-### Профили (CRUD)
-
-Профиль — шаблон запуска, не процесс.
-
-| Method | Path | Описание |
-|--------|------|----------|
-| GET | `/api/v1/profiles` | Список профилей |
-| GET | `/api/v1/profiles/{id}` | Получить профиль |
-| POST | `/api/v1/profiles` | Создать профиль |
-| PUT | `/api/v1/profiles/{id}` | Обновить профиль |
-| DELETE | `/api/v1/profiles/{id}` | Удалить профиль |
-| POST | `/api/v1/profiles/{id}/resolve` | Preview команды запуска |
-| POST | `/api/v1/profiles/{id}/start` | Запустить процесс по профилю |
-| POST | `/api/v1/profiles/{id}/stop` | Остановить все процессы профиля |
-| POST | `/api/v1/profiles/{id}/restart` | Перезапустить процессы профиля |
-| GET | `/api/v1/profiles/{id}/status` | Статус процессов по профилю |
-| POST | `/api/v1/profiles/{id}/activate` | Активировать профиль |
-| POST | `/api/v1/profiles/{id}/deactivate` | Деактивировать профиль |
-
-### Рантаймы
-
-| Method | Path | Описание |
-|--------|------|----------|
-| GET | `/api/v1/runtimes` | Список рантаймов |
-| GET | `/api/v1/runtimes/{id}` | Получить рантайм |
-| POST | `/api/v1/runtimes` | Создать рантайм |
-| PUT | `/api/v1/runtimes/{id}` | Обновить рантайм |
-| DELETE | `/api/v1/runtimes/{id}` | Удалить рантайм |
-| POST | `/api/v1/runtimes/{id}/start` | Запустить процесс рантайма |
-| POST | `/api/v1/runtimes/{id}/stop` | Остановить процесс рантайма |
-| POST | `/api/v1/runtimes/{id}/restart` | Перезапустить процесс рантайма |
-| POST | `/api/v1/runtimes/{id}/action/{action}` | action: start, stop, restart (legacy) |
-| GET | `/api/v1/runtimes/health` | Проверка здоровья всех рантаймов |
-| GET | `/api/v1/runtimes/health/{id}` | Проверка здоровья конкретного рантайма |
-
-### Модели
-
-| Method | Path | Описание |
-|--------|------|----------|
-| GET | `/api/v1/models` | Список моделей |
-| GET | `/api/v1/models/{id}` | Получить модель |
-| POST | `/api/v1/models` | Создать модель |
-| PUT | `/api/v1/models/{id}` | Обновить модель |
-| DELETE | `/api/v1/models/{id}` | Удалить модель |
-
-### Логи
-
-| Method | Path | Описание |
-|--------|------|----------|
-| GET | `/api/v1/logs/stream` | SSE поток логов (multi-instance LogBroker) |
-| GET | `/api/v1/logs` | QueryLogs с фильтрацией (stream, search, time range, instance_id) |
-| GET | `/api/v1/instances/{id}/logs` | Логи конкретного instance |
-| GET | `/api/v1/instances/{id}/logs/stream` | SSE логов instance |
-
-Live логи используют SSE (Server-Sent Events). WebSocket (`/ws`) реализован в `internal/webui/websocket/` но не подключён к основным роутам — см. ограничения.
-
-### Structured API errors
-
-Все ошибки возвращаются в структурированном JSON формате:
+## Минимальная конфигурация
 
 ```json
 {
-  "error": {
-    "error_code": "invalid_port",
-    "error": "invalid port: out of range",
-    "details": []
-  }
+  "version": 2,
+  "listenAddress": "127.0.0.1",
+  "webPort": 9090,
+  "dataDir": "./data"
 }
 ```
 
-Доступные коды ошибок:
-- `bad_request` — невалидный запрос
-- `unauthorized` — неавторизован
-- `forbidden` — запрещено (CSRF failure)
-- `not_found` — ресурс не найден
-- `conflict` — конфликт (процесс уже запущен)
-- `invalid_port` — невалидный порт
-- `invalid_host` — невалидный хост
-- `invalid_address` — невалидный адрес
-- `invalid_profile` — невалидный профиль
-- `invalid_runtime` — невалидный рантайм
-- `invalid_model` — невалидная модель
-- `internal_server_error` — внутренняя ошибка
+Рантаймы, модели или профили не обязательны. Всё настраивается через Web UI.
+
+## Платформы
+
+| Платформа | Архитектура | Статус |
+|-----------|-------------|--------|
+| Windows   | amd64       | Production |
+| Linux     | amd64       | Production |
+| Linux     | arm64       | Planned |
 
 ## Безопасность
 
-- **Аутентификация** — HTTP-only cookies, session-based
-- **CSRF защита** — CSRF token для всех unsafe методов (GET, HEAD, OPTIONS, DELETE защищены)
-- **Rate limiting** — 100 запросов в минуту на IP
-- **Login rate limit** — 5 попыток / 5 минут
-- **Request body size limit** — http.MaxBytesReader
-- **Default bind** — 127.0.0.1 (все интерфейсы требуют явного config)
-- **Secret env vars** — `AdminPassword` очищается при сохранении
-- **External bind** — требует изменения `listenAddress` в конфиге; `authEnabled=false` отклоняется для non-loopback адресов
-- **Runtime path validation** — executable и working directory проверяются against allowed roots
+- HTTP-only session cookies, bcrypt-хеширование паролей
+- CSRF-защита для всех unsafe методов
+- Bind по умолчанию: `127.0.0.1`
+- `authEnabled=false` отклоняется для non-loopback адресов
+- **Предупреждение публичного режима:** если авторизация отключена и GoAl привязан к `0.0.0.0`, все API-эндпоинты доступны без credentials.
+> Подробнее: [SECURITY.md](docs/SECURITY.md)
 
-## Архитектура
+## Известные ограничения
 
-### Модель Profile → Instance
+- Нет PID-reattach после перезапуска GoAl (инстансы помечаются как `stale`)
+- SSE — авторитарный транспорт live-логов; WebSocket реализован, но не подключён
+- Результаты TCP HealthChecker хранятся внутри, не вынесены в отдельный API
+> Полный список: [LIMITATIONS.md](docs/LIMITATIONS.md)
 
-**Profile** — шаблон запуска (конфигурация).
-**Instance** — запущенный процесс (runtime entity).
+## Сборка из исходников
 
-```
-Profile (static)
-  ├─ runtime_id → Runtime
-  ├─ model_id → Model (optional)
-  ├─ args, environment, active
-  └─ ...
-
-Instance (dynamic, создан при start)
-  ├─ profile_id → Profile
-  ├─ pid, state, exit_code
-  ├─ started_at, stopped_at
-  └─ ...
+```powershell
+.\scripts\build-all.ps1
+# Результат: bin/goal-windows-amd64.exe, bin/goal-linux-amd64, bin/checksums.txt
 ```
 
-Разделение означает:
-- Профили независимы от жизненного цикла процессов
-- Несколько экземпляров могут делить один профиль
-- Остановка экземпляра не удаляет профиль
-- Restart создаёт новый экземпляр с новым ID
-
-### Управление процессами
-
-GoAl использует multi-instance `Supervisor` который управляет несколькими `process.Manager` — по одному на каждый экземпляр запуска. Каждый `exec.Cmd` имеет ровно одного владельца, вызывающего `Wait()`. Process lifecycle управляется через `platform.Prepare`:
-
-- **Windows**: Job Object с kill-on-close
-- **Linux**: Process group (SIGTERM/SIGKILL)
-
-Среды процессов сливаются с окружением родительского процесса (переменные профиля переопределяют системные).
-
-SysProcAttr убран из `CommandSpec` — платформенная настройка выполняется через `platform.Prepare`.
-
-### Recovery Policy
-
-- **Restorable**: PID существует, identity совпадает, pipes owned → restore state `running`
-- **Stale**: PID существует, но identity mismatch или pipes lost → state `stale`
-- **Orphaned**: PID reused another process → state `orphaned`
-- **Terminal states**: persist reliably via `RemoveTerminal()`
-
-При запуске Supervisor:
-1. Загружает все `LaunchInstanceEntry` из repository
-2. Проверяет, какие экземпляры были running
-3. Помечает их как `stale` и обновляет в repository
-4. Stale экземпляры НЕ добавляются в активный список (нет reattachment к PID)
-
-Консервативное восстановление — без проверки PID liveness:
-- `os.FindProcess` не используется для восстановления
-- stdout/stderr предыдущего процесса не восстанавливаются
-- После перезапуска остановленные экземпляры полностью восстанавливаемы (state + exit details сохранены)
-
-### Хранение данных
-
-**Единое JSON-хранилище** (`goal_repo.json`) — single-file storage для runtimes, моделей, профилей и экземпляров.
-
-Schema version: `4`. Atomic writes через `tmp + rename` + backup recovery.
-
-```
-goal_repo.json           — active repository
-goal_repo.json.tmp       — temporary write file
-goal_repo.json.bak       — backup of last known good state
+```powershell
+go test ./...
+go test -race ./...   # требует CGO_ENABLED=1 и gcc
+go vet ./...
 ```
 
-**Atomic write sequence:**
-1. Сериализация во временный файл в том же каталоге
-2. `fsync` временного файла (через `File.Sync()`)
-3. Сохранение предыдущего корректного файла как `.bak`
-4. `os.Rename` временного файла (atomic на Windows и Linux)
-5. Sync родительского каталога
+## Документация
 
-**Ограничения (текущие):**
-- fsync не гарантируется на всех платформах (OS handles flushing)
-- Corrupted файл восстанавливается из `.bak` автоматически
-- Concurrent write protection — mutex на уровне repository
-- Schema version validation + migration tests
-
-**Планируемые улучшения:**
-- fsync после rename на всех платформах
-- Рассмотреть SQLite для v1.0 (всё ещё single-binary)
-
-### Логирование
-
-Логи процессов хранятся per-instance через ring buffer `process.LogStore` (до 10000 записей на экземпляр). Доступ через:
-- SSE стриминг в реальном времени (`GET /api/v1/logs/stream`) — multi-instance LogBroker
-- Фильтрация по stream, search, time range, instance_id
-- Пагинация (page/page_size) — агрегируется после объединения логов всех instances
-- `GET /api/v1/logs` — QueryLogs с instance_id filter
-- `GET /api/v1/instances/{id}/logs` — Логи конкретного instance
-
-LogBroker (`process.LogBroker`) обеспечивает:
-- Подписку на логи всех запущенных экземпляров
-- Фильтрацию по instance_id
-- Безопасную идемпотентную отмену подписки
-- Drop oldest политику для медленных подписчиков
-- Корректное завершение при shutdown
-
-Legacy `/api/v1/status` удалён. Переход на `GET /api/v1/instances` и `GET /api/v1/instances/{id}`.
-
-### Health Checks
-
-`GET /api/v1/runtimes/health` — возвращает количество активных экземпляров и список (instance-based health).
-`GET /api/v1/runtimes/health/{id}` — возвращает детали запущенного instance для рантайма (PID, state, uptime).
-
-Периодическая TCP проверка здоровья рантаймов (каждые 30 секунд) работает в фоне через `HealthChecker` — результаты хранятся internally но не вынесены в отдельный API endpoint.
-
-## Структура репозитория
-
-| Путь | Назначение |
-|------|------------|
-| `cmd/goal/` | Точка входа приложения |
-| `cmd/goal-msi/` | MSI installer builder |
-| `internal/config/` | Парсинг конфигурации, валидация, hot-reload, миграции |
-| `internal/process/` | Управление жизненным циклом процессов, log store |
-| `internal/platform/` | OS-специфичная обработка процессов |
-| `internal/version/` | Версия и metadata |
-| `internal/webui/` | HTTP-сервер и шаблоны |
-| `internal/webui/errors/` | Structured API errors |
-| `internal/webui/security/` | Аутентификация, CSRF, sessions |
-| `internal/webui/validation/` | Валидация портов, хостов, адресов |
-| `internal/webui/middleware/` | Logging middleware |
-| `internal/webui/store/` | Файловый store (profiles, runtimes, models) |
-| `internal/webui/health/` | Health check рантаймов |
-| `internal/webui/metrics/` | Прикладные метрики |
-| `internal/webui/websocket/` | WebSocket поток логов |
-| `internal/webui/logger/` | HTTP логгер |
-| `testdata/fake-runtime/` | Фейковый рантайм для интеграционных тестов |
-| `deploy/` | Systemd-сервисы, поддержка Windows-сервиса |
-| `scripts/` | Скрипты сборки и настройки |
-| `web/`, `webui/` | Статические файлы и шаблоны (дубли для совместимости) |
-
-## .gitignore
-
-Из репозитория исключены:
-
-- `bin/` — артефакты сборки
-- `data/` — данные рантайма
-- `goal.json` — конфигурация пользователя
-- `*.log`, `*.tmp`, `*.bak` — временные файлы
-- `*.exe` — скомпилированные бинарники (кроме корневого `goal.exe`)
-- `.env*` — секреты окружения
-
-## Известные ограничения v0.9
-
-- Hot-reload: не подключён в main startup, WIP
-- SQLite storage: не реализован (только JSON)
-- ARM64: не протестирован
-- Auto-update: только через GitHub Releases
-- Full reattach к произвольному PID: не реализован (только stale detection)
-- Audit logging: WIP (доступны только metrics)
-- Race detector: проверен в CI (Linux race detector job)
-- Supervisor concurrency model: buffered semaphore (не mutex-based pool)
-- Persistence: degraded success (running + persist fail = LastError set, process continues)
-- Recovery: stale detection только, без reattach PID
-- WebSocket `/ws`: реализован, но пока не подключён к основным роутам
-
-## Стабилизация v0.9
-
-Полный отчёт стабилизации: [`docs/tasks/TASK-V09-STABILIZATION-FINAL.md`](docs/tasks/TASK-V09-STABILIZATION-FINAL.md)
-
-В рамках стабилизации завершены:
-- SlotReservation: guaranteed release без `recover()` и `default`
-- LogBroker: race-free Publish/Cancel/Shutdown, GC-managed data channels
-- Persistence error semantics: full matrix coverage
-- QueryLogs: deterministic ordering с strict tie-breaker
-- Atomic backup: validated + fsync + atomic rename
-
-## Перед началом разработки
-
-Ознакомьтесь с `AGENTS.md`, `BACKLOG.md`, `ROADMAP.md` и `SUBAGENT_MASTER_PROMPT.md`.
+- [Руководство пользователя](docs/USER_GUIDE_RU.md) — скачивание, конфигурация, запуск, обзор Web UI
+- [Справочник конфигурации](docs/CONFIGURATION.md) — все опции goal.json
+- [API Reference](docs/API.md) — все production эндпоинты
+- [Архитектура](docs/ARCHITECTURE_RU.md) — жизненный цикл процессов, хранилище, решения
+- [Разработка](docs/DEVELOPMENT.md) — сборка, тестирование, релиз

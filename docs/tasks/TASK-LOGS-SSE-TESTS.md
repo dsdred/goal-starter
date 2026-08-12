@@ -43,3 +43,7 @@ The Logs SSE implementation (`serveLogStream`) currently has no direct handler-l
 - Each test passes with `go test -race ./internal/webui/handlers/`.
 - No goroutine leaks after tests (verified by test timeout + runtime checks).
 - Coverage includes the full SSE loop: subscribe → stream → cancel/disconnect.
+
+## Status
+
+**COMPLETED — tests exist in `internal/webui/handlers/` and passed in v1.0.0 release.**

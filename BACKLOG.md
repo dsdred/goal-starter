@@ -1,5 +1,7 @@
 # GoAl Backlog
 
+> **Historical engineering record.** This file tracks completed features and the v0.10 backlog. For the current product state, see [ROADMAP.md](../ROADMAP.md).
+
 ## ✅ P0 — Process reliability (ЗАВЕРШЕНО)
 
 - [x] Process Manager с state machine (running, exited, starting, stopping)

@@ -60,6 +60,10 @@ Make the GoAl web dashboard actually usable from the compiled binary, without re
 6. `gofmt -l .`, `go vet ./...` clean.
 7. Existing tests continue to pass (including process supervisor, config seed, storage).
 
+## Status
+
+**COMPLETED — embedded FS serving is the production mode in v1.0.0.**
+
 ## Verification matrix
 
 | Verification | Method |
