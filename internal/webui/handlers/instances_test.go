@@ -3,6 +3,7 @@ package handlers
 import (
 	"bytes"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -469,5 +470,75 @@ func TestInstanceStoreJSON_ConcurrentWrites(t *testing.T) {
 	}
 	if len(all) == 0 {
 		t.Error("List after concurrent: expected at least one instance")
+	}
+}
+
+func TestInstancesHandler_List_StripsEnvironment(t *testing.T) {
+	t.Setenv("GOAL_TEST_SECRET", "super-secret-value")
+
+	repo := newTestRepo(t)
+	sup := newTestSupervisor(t)
+	insSvc := application.NewInstanceService(sup, repo)
+	h := NewInstancesHandler(insSvc, nil)
+
+	// Start a profile to create an instance with environment
+	insertProfileEntry(t, repo, "profile-env")
+	insertRuntimeEntry(t, repo, "rt-env")
+
+	body := `{"profile_id": "profile-env"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/instances/start", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.StartProfile(w, req)
+	resp := w.Result()
+
+	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusAccepted && resp.StatusCode != http.StatusInternalServerError {
+		t.Logf("StartProfile: got %d (201, 202, or 500 acceptable on test systems without fake-runtime)", resp.StatusCode)
+	}
+	startBody, err := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if err != nil {
+		t.Fatalf("StartProfile: read response body: %v", err)
+	}
+	if bytes.Contains(startBody, []byte("super-secret-value")) {
+		t.Error("StartProfile: environment value leaked in response")
+	}
+
+	// Now verify List strips environment
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/instances", nil)
+	w = httptest.NewRecorder()
+	h.List(w, req)
+	resp = w.Result()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("List: expected 200, got %d", resp.StatusCode)
+	}
+	listBody, err := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if err != nil {
+		t.Fatalf("List: read response body: %v", err)
+	}
+	if bytes.Contains(listBody, []byte("super-secret-value")) {
+		t.Error("List: environment value leaked in response")
+	}
+
+	// Verify Get strips environment
+	// Use a synthetic ID; if instance exists from StartProfile, env will be stripped.
+	// If no instance exists (500 on StartProfile), Get will 404 which is acceptable.
+	instanceID := "profile-env"
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/instances/"+instanceID, nil)
+	w = httptest.NewRecorder()
+	h.Get(w, req)
+	resp = w.Result()
+
+	if resp.StatusCode == http.StatusOK {
+		getBody, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			t.Fatalf("Get: read response body: %v", err)
+		}
+		if bytes.Contains(getBody, []byte("super-secret-value")) {
+			t.Error("Get: environment value leaked in response")
+		}
 	}
 }

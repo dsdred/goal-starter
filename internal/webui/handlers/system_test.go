@@ -53,6 +53,38 @@ func TestSystemHandler_ServeIndex_RendersTemplate(t *testing.T) {
 	}
 }
 
+func TestSystemHandler_ServeIndex_EmptyDataNoPanic(t *testing.T) {
+	templateContent := `{{define "index.html"}}<html><body>
+<div id="runtimes-count">{{len .Runtimes}}</div>
+<div id="models-count">{{len .Models}}</div>
+<div id="profiles-count">{{len .Profiles}}</div>
+</body></html>{{end}}`
+
+	fsys := fstest.MapFS{
+		"templates/index.html": &fstest.MapFile{Data: []byte(templateContent)},
+	}
+
+	sup := process.NewSupervisor(nil)
+	sess := security.NewSessionStore()
+	csrf := security.NewCSRF()
+	insSvc := application.NewInstanceService(sup, nil)
+
+	h := NewSystemHandler(sup, sess, csrf, insSvc)
+	h.WithTemplateFS(fsys)
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	w := httptest.NewRecorder()
+	h.ServeIndex(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "runtimes-count") {
+		t.Fatalf("expected runtimes-count in body; got: %s", body)
+	}
+}
+
 func TestSystemHandler_ServeIndex_ErrorOnMissingTemplate(t *testing.T) {
 	sup := process.NewSupervisor(nil)
 	sess := security.NewSessionStore()

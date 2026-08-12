@@ -244,7 +244,13 @@ func (h *SystemHandler) ServeIndex(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
-	if err := tmpl.Execute(w, nil); err != nil {
+	if err := tmpl.Execute(w, map[string]any{
+		"Runtimes": []string{},
+		"Models":   []string{},
+		"Profiles": []string{},
+		"Config":   map[string]any{},
+		"Status":   map[string]any{},
+	}); err != nil {
 		slog.Error("execute index template", "error", err)
 	}
 }

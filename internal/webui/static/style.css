@@ -546,3 +546,33 @@ section {
     background: rgba(106, 106, 128, 0.15);
     color: var(--text-muted);
 }
+
+.profile-status.starting {
+    background: rgba(243, 156, 18, 0.15);
+    color: var(--warning);
+}
+
+.profile-status.stopping {
+    background: rgba(243, 156, 18, 0.15);
+    color: var(--warning);
+}
+
+.profile-status.failed {
+    background: rgba(231, 76, 60, 0.15);
+    color: var(--danger);
+}
+
+.profile-status.stale {
+    background: rgba(241, 196, 15, 0.15);
+    color: #f39c12;
+}
+
+.profile-status.exited {
+    background: rgba(106, 106, 128, 0.15);
+    color: var(--text-muted);
+}
+
+.profile-status.pending {
+    background: rgba(108, 99, 255, 0.15);
+    color: var(--accent);
+}

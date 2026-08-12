@@ -31,6 +31,9 @@ func (h *InstancesHandler) List(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, err.Error())
 		return
 	}
+	for i := range instances {
+		instances[i].Environment = nil
+	}
 	writeJSON(w, http.StatusOK, instances)
 }
 
@@ -46,6 +49,7 @@ func (h *InstancesHandler) Get(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 404, "instance not found")
 		return
 	}
+	inst.Environment = nil
 	writeJSON(w, http.StatusOK, inst)
 }
 
@@ -68,6 +72,7 @@ func (h *InstancesHandler) StartProfile(w http.ResponseWriter, r *http.Request) 
 		writeError(w, 500, err.Error())
 		return
 	}
+	inst.Environment = nil
 	writeJSON(w, http.StatusCreated, inst)
 }
 
@@ -99,6 +104,7 @@ func (h *InstancesHandler) RestartInstance(w http.ResponseWriter, r *http.Reques
 		writeError(w, 500, err.Error())
 		return
 	}
+	inst.Environment = nil
 	writeJSON(w, http.StatusOK, inst)
 }
 
@@ -115,6 +121,9 @@ func (h *InstancesHandler) Status(w http.ResponseWriter, r *http.Request) {
 		if inst.IsActive() {
 			activeCount++
 		}
+	}
+	for i := range instances {
+		instances[i].Environment = nil
 	}
 	status := map[string]any{
 		"total_instances": len(instances),
