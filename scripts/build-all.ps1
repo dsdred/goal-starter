@@ -1,29 +1,123 @@
-# Build script for GoAl - cross-compile for Windows and Linux
+﻿# Build script for GoAl - cross-compile for Windows and Linux
 # Usage: .\scripts\build-all.ps1
+#
+# Optional environment variables:
+#   SIGN_CERT       - Path to PFX signing certificate (e.g., C:\certs\goal.pfx)
+#   SIGN_PASSWORD   - PFX certificate password
+#   SIGN_TIMESTAMP  - Timestamp server URL (default: http://timestamp.digicert.com)
+#
+# If SIGN_CERT is set, Windows binary will be Authenticode-signed with trusted timestamp.
 
 $ErrorActionPreference = "Stop"
 
 $OUTPUT_DIR = "bin"
 $SOURCE = "./cmd/goal"
-$LDFLAGS = @("-ldflags", "-s -w")
-
-# Create output directory
-if (-not (Test-Path $OUTPUT_DIR)) {
-    New-Item -ItemType Directory -Path $OUTPUT_DIR | Out-Null
-    Write-Host "[+] Created '$OUTPUT_DIR' directory"
-}
 
 # Get version info and build time
 $VERSION = "dev"
 $GIT_HASH = "none"
 $BUILD_TIME = "unknown"
+$LDFLAGS = "-ldflags=-s -w"
+
 try {
     $VERSION = git describe --tags --abbrev=0 2>$null
     $GIT_HASH = git rev-parse --short HEAD 2>$null
     $BUILD_TIME = (Get-Date -UFormat "%Y-%m-%dT%H:%M:%SZ")
-    $LDFLAGS = @("-ldflags", "-s", "-w", "-X", "github.com/example/goal/internal/version.Version=$VERSION", "-X", "github.com/example/goal/internal/version.GitCommit=$GIT_HASH", "-X", "github.com/example/goal/internal/version.BuildTime=$BUILD_TIME")
+    $LDFLAGS = "-ldflags=-s -w -X github.com/dsdred/goal/internal/version.Version=$VERSION -X github.com/dsdred/goal/internal/version.GitCommit=$GIT_HASH -X github.com/dsdred/goal/internal/version.BuildTime=$BUILD_TIME"
 } catch {
-    Write-Host "[!] Git info not available, using defaults"
+    Write-Host "! Git info not available, using defaults"
+}
+
+# --- Windows resource generation ---
+function Invoke-GenResources {
+    Write-Host "+ Generating Windows resource metadata..." -ForegroundColor Yellow
+    if (-not (Get-Command go-winres -ErrorAction SilentlyContinue)) {
+        Write-Host "    go-winres not found, installing..." -ForegroundColor Gray
+        go install github.com/tc-hib/go-winres@latest 2>&1 | Out-Null
+    }
+    # Check if winres.json exists
+    if (Test-Path "winres\winres.json") {
+        go-winres make --arch amd64 2>&1 | Out-Null
+        $sysoFile = Get-ChildItem rsrc_windows_amd64.syso -ErrorAction SilentlyContinue
+        if ($sysoFile) {
+            Copy-Item $sysoFile "$SOURCE\rsrc.syso"
+            Write-Host "    OK Windows resource metadata embedded" -ForegroundColor Green
+        } else {
+            Write-Host "    ! No syso file generated, continuing without resources" -ForegroundColor Yellow
+        }
+    } else {
+        Write-Host "    ! winres/winres.json not found, continuing without resource metadata" -ForegroundColor Yellow
+    }
+}
+
+# --- Authenticode signing ---
+function Invoke-SignBinary {
+    param(
+        [string]$FilePath,
+        [string]$CertPath,
+        [string]$CertPassword,
+        [string]$TimestampServer
+    )
+    if (-not (Test-Path $CertPath)) {
+        Write-Host "    ! Signing certificate not found at $CertPath, skipping" -ForegroundColor Yellow
+        return
+    }
+    Write-Host "+ Signing $FilePath with Authenticode..." -ForegroundColor Yellow
+    $signtoolPaths = @(
+        "${env:ProgramFiles(x86)}\Windows Kits\10\bin\10.0.22621.0\x64\signtool.exe",
+        "${env:ProgramFiles(x86)}\Windows Kits\10\bin\x64\signtool.exe",
+        "${env:ProgramFiles(x86)}\Windows Kits\8.1\bin\x64\signtool.exe"
+    )
+    $signtool = $null
+    foreach ($p in $signtoolPaths) {
+        if ($p -and (Test-Path $p)) {
+            $signtool = $p
+            break
+        }
+    }
+    if (-not $signtool) {
+        Write-Host "    [!] signtool.exe not found, skipping signing" -ForegroundColor Yellow
+        return
+    }
+    $timestampUrl = $TimestampServer
+    if (-not $timestampUrl) {
+        $timestampUrl = "http://timestamp.digicert.com"
+    }
+    $signArgs = @(
+        "sign",
+        "/f", $CertPath,
+        "/p", $CertPassword,
+        "/tr", $timestampUrl,
+        "/td", "sha256",
+        "/fd", "sha256",
+        "/as",
+        $FilePath
+    )
+    & $signtool $signArgs 2>&1 | Out-String
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "    OK Signed with Authenticode + trusted timestamp" -ForegroundColor Green
+    } else {
+        Write-Host "    ! Signing failed with exit code $LASTEXITCODE" -ForegroundColor Red
+    }
+}
+
+# --- Signature verification ---
+function Test-BinarySignature {
+    param([string]$FilePath)
+    Write-Host "+ Verifying signature of $FilePath..." -ForegroundColor Yellow
+    $sig = Get-AuthenticodeSignature -FilePath $FilePath -ErrorAction SilentlyContinue
+    if ($sig.Status -ne 'Valid') {
+        Write-Host "    ! Signature status: $($sig.Status) ($($sig.StatusMessage))" -ForegroundColor Red
+        return $false
+    }
+    Write-Host "    OK Signature valid - Publisher: $($sig.SignerCertificate.Subject)" -ForegroundColor Green
+    return $true
+}
+
+# Create output directory
+if (-not (Test-Path $OUTPUT_DIR)) {
+    New-Item -ItemType Directory -Path $OUTPUT_DIR | Out-Null
+    Write-Host "+ Created '$OUTPUT_DIR' directory"
 }
 
 function Invoke-GoBuild {
@@ -32,24 +126,16 @@ function Invoke-GoBuild {
         [string]$GOARCH,
         [string]$OutputPath
     )
-    
     $env:GOOS = $GOOS
     $env:GOARCH = $GOARCH
     if ($GOOS -eq "windows") {
         $env:CGO_ENABLED = '0'
     }
-    
-    # Build argument array: go build -ldflags -s -w -o output path
-    $buildArgs = @("build")
-    foreach ($flag in $LDFLAGS) {
-        $buildArgs += $flag
-    }
+    $buildArgs = @("build", $LDFLAGS)
     $buildArgs += @("-o", $OutputPath, $SOURCE)
-    
     $exitCode = 0
     & go $buildArgs 2>&1 | Out-String
     $exitCode = $LASTEXITCODE
-    
     if ($exitCode -eq 0) {
         return $true
     } else {
@@ -65,28 +151,45 @@ Write-Host "Output directory: $OUTPUT_DIR\"
 Write-Host ""
 
 # Build for Windows amd64
-Write-Host "[+] Building for Windows amd64..." -ForegroundColor Yellow
+Write-Host "+ Building for Windows amd64..." -ForegroundColor Yellow
 $WIN_OUTPUT = "$OUTPUT_DIR\goal-windows-amd64.exe"
+
+# Generate Windows resource metadata before build
+Invoke-GenResources
+
 if (Invoke-GoBuild "windows" "amd64" $WIN_OUTPUT) {
     $size = [math]::Round((Get-Item $WIN_OUTPUT).Length / 1MB, 2)
-    Write-Host "[+] Windows amd64: $WIN_OUTPUT ($size MB)" -ForegroundColor Green
+    Write-Host "+ Windows amd64: $WIN_OUTPUT ($size MB)" -ForegroundColor Green
 } else {
-    Write-Host "[-] Windows amd64 build failed" -ForegroundColor Red
+    Write-Host "- Windows amd64 build failed" -ForegroundColor Red
     exit 1
 }
 
+# Authenticode signing (conditional)
+if ($env:SIGN_CERT) {
+    Write-Host ""
+    Invoke-SignBinary -FilePath $WIN_OUTPUT -CertPath $env:SIGN_CERT -CertPassword $env:SIGN_PASSWORD -TimestampServer $env:SIGN_TIMESTAMP
+} else {
+    Write-Host ""
+    Write-Host "i No SIGN_CERT set Р В Р’В Р вЂ™Р’В Р В Р’В Р Р†Р вЂљР’В Р В Р’В Р вЂ™Р’В Р В Р вЂ Р В РІР‚С™Р РЋРІвЂћСћР В Р’В Р В РІР‚В Р В Р’В Р Р†Р вЂљРЎв„ўР В Р Р‹Р РЋРЎв„ў Windows binary will be unsigned (normal for dev builds)" -ForegroundColor Gray
+}
+
+# Sign Windows archive if binary was signed
+$WIN_ARCHIVE_PATH = $null
+
 # Build for Linux amd64
-Write-Host "[+] Building for Linux amd64..." -ForegroundColor Yellow
+Write-Host ""
+Write-Host "+ Building for Linux amd64..." -ForegroundColor Yellow
 $LINUX_OUTPUT = "$OUTPUT_DIR\goal-linux-amd64"
 if (Invoke-GoBuild "linux" "amd64" $LINUX_OUTPUT) {
     $size = [math]::Round((Get-Item $LINUX_OUTPUT).Length / 1MB, 2)
-    Write-Host "[+] Linux amd64: $LINUX_OUTPUT ($size MB)" -ForegroundColor Green
+    Write-Host "+ Linux amd64: $LINUX_OUTPUT ($size MB)" -ForegroundColor Green
 } else {
-    Write-Host "[-] Linux amd64 build failed" -ForegroundColor Red
+    Write-Host "- Linux amd64 build failed" -ForegroundColor Red
     exit 1
 }
 
-# Version for archive naming (needed for MSI build)
+# Version for archive naming
 $ARCHIVE_VERSION = $VERSION -replace "[^0-9a-zA-Z\.\-]", "_"
 if ($ARCHIVE_VERSION -eq "" -or $ARCHIVE_VERSION -eq "dev") {
     $ARCHIVE_VERSION = "dev-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
@@ -95,19 +198,18 @@ if ($ARCHIVE_VERSION -eq "" -or $ARCHIVE_VERSION -eq "dev") {
 # Build MSI installer (Windows only)
 if ($env:GOOS -eq "windows" -or $IsWindows) {
     Write-Host ""
-    Write-Host "[+] Building MSI installer..." -ForegroundColor Yellow
+    Write-Host "+ Building MSI installer..." -ForegroundColor Yellow
     $RELEASE_DIR = "releases"
     $MSI_OUTPUT = "$RELEASE_DIR\goal-${ARCHIVE_VERSION}-windows-amd64.msi"
 
-    # Build the MSI builder tool first
-    Write-Host "    Building MSI builder..." -ForegroundColor Gray
-    $msiBuildArgs = @("build", "-o", "bin/goal-msi.exe", "./cmd/goal-msi")
-    & go $msiBuildArgs
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "[-] MSI builder build failed (continuing...)" -ForegroundColor Yellow
+    if (Test-Path "./cmd/goal-msi") {
+        $msiBuildArgs = @("build", "-o", "bin/goal-msi.exe", "./cmd/goal-msi")
+        & go $msiBuildArgs
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "- MSI builder build failed (continuing...)" -ForegroundColor Yellow
+        }
     }
 
-    # Check if WiX tools are available
     $wixFound = $false
     $wixCandidates = @(
         "C:\Program Files (x86)\WiX Toolset v3.14",
@@ -122,7 +224,6 @@ if ($env:GOOS -eq "windows" -or $IsWindows) {
         }
     }
 
-    # Also check PATH
     if (-not $wixFound) {
         try {
             $null = Get-Command candle.exe -ErrorAction Stop
@@ -135,80 +236,69 @@ if ($env:GOOS -eq "windows" -or $IsWindows) {
 
     if ($wixFound) {
         Write-Host "    Building MSI with WiX..." -ForegroundColor Gray
-
-        $msiArgs = @(
-            ".\bin\goal-msi.exe",
-            "-binary", $WIN_OUTPUT,
-            "-o", $MSI_OUTPUT,
-            "-version", $ARCHIVE_VERSION
-        )
-
+        $msiArgs = @(".\bin\goal-msi.exe", "-binary", $WIN_OUTPUT, "-o", $MSI_OUTPUT, "-version", $ARCHIVE_VERSION)
         & $msiArgs[0] $($msiArgs[1..($msiArgs.Count - 1)]) 2>&1 | Out-String
         if ($LASTEXITCODE -eq 0 -or (Test-Path $MSI_OUTPUT)) {
             if (Test-Path $MSI_OUTPUT) {
                 $msiSize = [math]::Round((Get-Item $MSI_OUTPUT).Length / 1MB, 2)
-                Write-Host "[+] MSI installer: $MSI_OUTPUT ($msiSize MB)" -ForegroundColor Green
+                Write-Host "+ MSI installer: $MSI_OUTPUT ($msiSize MB)" -ForegroundColor Green
             } else {
-                Write-Host "[+] MSI installer: $MSI_OUTPUT" -ForegroundColor Green
+                Write-Host "+ MSI installer: $MSI_OUTPUT" -ForegroundColor Green
             }
         } else {
-            Write-Host "[-] MSI build failed (exit code: $LASTEXITCODE)" -ForegroundColor Yellow
+            Write-Host "- MSI build failed (exit code: $LASTEXITCODE)" -ForegroundColor Yellow
             Write-Host "    Falling back to SFX installer..." -ForegroundColor Yellow
-
-            # Fallback: SFX installer (zip archive with install script)
             $SFX_OUTPUT = "$RELEASE_DIR\goal-${ARCHIVE_VERSION}-windows-amd64.zip"
-            $sfxArgs = @(
-                ".\bin\goal-msi.exe",
-                "-binary", $WIN_OUTPUT,
-                "-o", $SFX_OUTPUT,
-                "-version", $ARCHIVE_VERSION,
-                "-sfx"
-            )
+            $sfxArgs = @(".\bin\goal-msi.exe", "-binary", $WIN_OUTPUT, "-o", $SFX_OUTPUT, "-version", $ARCHIVE_VERSION, "-sfx")
             & $sfxArgs[0] $($sfxArgs[1..($sfxArgs.Count - 1)]) 2>&1 | Out-String
             if (Test-Path $SFX_OUTPUT) {
                 $sfxSize = [math]::Round((Get-Item $SFX_OUTPUT).Length / 1MB, 2)
-                Write-Host "[+] SFX installer: $SFX_OUTPUT ($sfxSize MB)" -ForegroundColor Green
+                Write-Host "+ SFX installer: $SFX_OUTPUT ($sfxSize MB)" -ForegroundColor Green
                 Write-Host "    (Self-extracting archive with install.bat)" -ForegroundColor Gray
             }
         }
     } else {
         Write-Host "    WiX tools not found, building SFX installer..." -ForegroundColor Yellow
-
-        # SFX installer (zip archive with install script) - no external dependencies
         $SFX_OUTPUT = "$RELEASE_DIR\goal-${ARCHIVE_VERSION}-windows-amd64.zip"
-        $sfxArgs = @(
-            ".\bin\goal-msi.exe",
-            "-binary", $WIN_OUTPUT,
-            "-o", $SFX_OUTPUT,
-            "-version", $ARCHIVE_VERSION,
-            "-sfx"
-        )
+        $sfxArgs = @(".\bin\goal-msi.exe", "-binary", $WIN_OUTPUT, "-o", $SFX_OUTPUT, "-version", $ARCHIVE_VERSION, "-sfx")
         & $sfxArgs[0] $($sfxArgs[1..($sfxArgs.Count - 1)]) 2>&1 | Out-String
         if (Test-Path $SFX_OUTPUT) {
             $sfxSize = [math]::Round((Get-Item $SFX_OUTPUT).Length / 1MB, 2)
-            Write-Host "[+] SFX installer: $SFX_OUTPUT ($sfxSize MB)" -ForegroundColor Green
+            Write-Host "+ SFX installer: $SFX_OUTPUT ($sfxSize MB)" -ForegroundColor Green
             Write-Host "    (Self-extracting archive with install.bat)" -ForegroundColor Gray
         } else {
-            Write-Host "[!] SFX build failed" -ForegroundColor Yellow
+            Write-Host "! SFX build failed" -ForegroundColor Yellow
         }
     }
-
-    # Cleanup MSI builder
     Remove-Item "bin\goal-msi.exe" -ErrorAction SilentlyContinue
 }
 
-# Generate checksums
-Write-Host "[+] Generating SHA256 checksums..." -ForegroundColor Yellow
+# Generate checksums FOR BINARIES (after signing)
+Write-Host ""
+Write-Host "+ Generating SHA256 checksums..." -ForegroundColor Yellow
 
 $CHECKSUM_FILE = "$OUTPUT_DIR\checksums.txt"
 $windowsHash = (Get-FileHash "$OUTPUT_DIR\goal-windows-amd64.exe" -Algorithm SHA256).Hash.ToLower()
 $linuxHash = (Get-FileHash "$OUTPUT_DIR\goal-linux-amd64" -Algorithm SHA256).Hash.ToLower()
 "$windowsHash  goal-windows-amd64.exe`n$linuxHash  goal-linux-amd64" | Out-File -FilePath $CHECKSUM_FILE -Encoding utf8
-Write-Host "[+] Checksums: $CHECKSUM_FILE" -ForegroundColor Green
+Write-Host "    Windows (post-sign): $windowsHash" -ForegroundColor Gray
+Write-Host "    Linux: $linuxHash" -ForegroundColor Gray
+Write-Host "+ Checksums: $CHECKSUM_FILE" -ForegroundColor Green
+
+# Verify Windows signature if signed
+if ($env:SIGN_CERT) {
+    Write-Host ""
+    $sigValid = Test-BinarySignature -FilePath $WIN_OUTPUT
+    if (-not $sigValid) {
+        Write-Host "- Binary signature verification FAILED" -ForegroundColor Red
+    } else {
+        Write-Host "OK Binary signature verified successfully" -ForegroundColor Green
+    }
+}
 
 # Create release archives
 Write-Host ""
-Write-Host "[+] Creating release archives..." -ForegroundColor Yellow
+Write-Host "+ Creating release archives..." -ForegroundColor Yellow
 
 $RELEASE_DIR = "releases"
 if (Test-Path $RELEASE_DIR) {
@@ -223,7 +313,7 @@ $WIN_STAGING = "$RELEASE_DIR\staging-windows"
 if (Test-Path $WIN_STAGING) { Remove-Item $WIN_STAGING -Recurse -Force }
 New-Item -ItemType Directory -Path "$WIN_STAGING\goal" | Out-Null
 
-# Copy binary
+# Copy binary (signed if available)
 Copy-Item $WIN_OUTPUT "$WIN_STAGING\goal\goal.exe"
 Copy-Item "goal.example.json" "$WIN_STAGING\goal\goal.example.json"
 Copy-Item "README.md" "$WIN_STAGING\goal\README.md"
@@ -253,14 +343,22 @@ $WIN_README = @'
 .\install-service.ps1
 ```
 
+## Verify Signature (PowerShell)
+
+```powershell
+Get-AuthenticodeSignature .\goal.exe
+```
+
+Expected: `Status : Valid`
+
 ## Files
 
-- `goal.exe` — GoAl binary
-- `goal.json` — Configuration file (rename from example)
-- `goal.example.json` — Example configuration
-- `install-service.ps1` — Install as Windows Service
-- `uninstall-service.ps1` — Uninstall Windows Service
-- `README.md` — Full documentation
+- `goal.exe` Р В Р’В Р вЂ™Р’В Р В Р’В Р Р†Р вЂљР’В Р В Р’В Р вЂ™Р’В Р В Р вЂ Р В РІР‚С™Р РЋРІвЂћСћР В Р’В Р В РІР‚В Р В Р’В Р Р†Р вЂљРЎв„ўР В Р Р‹Р РЋРЎв„ў GoAl binary (Authenticode signed on release builds)
+- `goal.json` Р В Р’В Р вЂ™Р’В Р В Р’В Р Р†Р вЂљР’В Р В Р’В Р вЂ™Р’В Р В Р вЂ Р В РІР‚С™Р РЋРІвЂћСћР В Р’В Р В РІР‚В Р В Р’В Р Р†Р вЂљРЎв„ўР В Р Р‹Р РЋРЎв„ў Configuration file (rename from example)
+- `goal.example.json` Р В Р’В Р вЂ™Р’В Р В Р’В Р Р†Р вЂљР’В Р В Р’В Р вЂ™Р’В Р В Р вЂ Р В РІР‚С™Р РЋРІвЂћСћР В Р’В Р В РІР‚В Р В Р’В Р Р†Р вЂљРЎв„ўР В Р Р‹Р РЋРЎв„ў Example configuration
+- `install-service.ps1` Р В Р’В Р вЂ™Р’В Р В Р’В Р Р†Р вЂљР’В Р В Р’В Р вЂ™Р’В Р В Р вЂ Р В РІР‚С™Р РЋРІвЂћСћР В Р’В Р В РІР‚В Р В Р’В Р Р†Р вЂљРЎв„ўР В Р Р‹Р РЋРЎв„ў Install as Windows Service
+- `uninstall-service.ps1` Р В Р’В Р вЂ™Р’В Р В Р’В Р Р†Р вЂљР’В Р В Р’В Р вЂ™Р’В Р В Р вЂ Р В РІР‚С™Р РЋРІвЂћСћР В Р’В Р В РІР‚В Р В Р’В Р Р†Р вЂљРЎв„ўР В Р Р‹Р РЋРЎв„ў Uninstall Windows Service
+- `README.md` Р В Р’В Р вЂ™Р’В Р В Р’В Р Р†Р вЂљР’В Р В Р’В Р вЂ™Р’В Р В Р вЂ Р В РІР‚С™Р РЋРІвЂћСћР В Р’В Р В РІР‚В Р В Р’В Р Р†Р вЂљРЎв„ўР В Р Р‹Р РЋРЎв„ў Full documentation
 '@
 Set-Content -Path "$WIN_STAGING\goal\RELEASE.txt" -Value $WIN_README -Encoding UTF8
 
@@ -268,7 +366,7 @@ Set-Content -Path "$WIN_STAGING\goal\RELEASE.txt" -Value $WIN_README -Encoding U
 if (Test-Path $WIN_ARCHIVE_PATH) { Remove-Item $WIN_ARCHIVE_PATH }
 Add-Type -AssemblyName "System.IO.Compression.FileSystem"
 [System.IO.Compression.ZipFile]::CreateFromDirectory($WIN_STAGING, $WIN_ARCHIVE_PATH)
-Write-Host "[+] Windows archive: $WIN_ARCHIVE_PATH" -ForegroundColor Green
+Write-Host "+ Windows archive: $WIN_ARCHIVE_PATH" -ForegroundColor Green
 
 # --- Linux archive ---
 $LINUX_ARCHIVE_NAME = "goal-${ARCHIVE_VERSION}-linux-amd64.tar.gz"
@@ -314,46 +412,51 @@ sudo systemctl start goal
 
 ## Files
 
-- `goal` — GoAl binary
-- `etc/goal/goal.example.json` — Example configuration
-- `deploy/goal.service` — systemd service file
-- `README.md` — Full documentation
+- `goal` Р В Р’В Р вЂ™Р’В Р В Р’В Р Р†Р вЂљР’В Р В Р’В Р вЂ™Р’В Р В Р вЂ Р В РІР‚С™Р РЋРІвЂћСћР В Р’В Р В РІР‚В Р В Р’В Р Р†Р вЂљРЎв„ўР В Р Р‹Р РЋРЎв„ў GoAl binary
+- `etc/goal/goal.example.json` Р В Р’В Р вЂ™Р’В Р В Р’В Р Р†Р вЂљР’В Р В Р’В Р вЂ™Р’В Р В Р вЂ Р В РІР‚С™Р РЋРІвЂћСћР В Р’В Р В РІР‚В Р В Р’В Р Р†Р вЂљРЎв„ўР В Р Р‹Р РЋРЎв„ў Example configuration
+- `deploy/goal.service` Р В Р’В Р вЂ™Р’В Р В Р’В Р Р†Р вЂљР’В Р В Р’В Р вЂ™Р’В Р В Р вЂ Р В РІР‚С™Р РЋРІвЂћСћР В Р’В Р В РІР‚В Р В Р’В Р Р†Р вЂљРЎв„ўР В Р Р‹Р РЋРЎв„ў systemd service file
+- `README.md` Р В Р’В Р вЂ™Р’В Р В Р’В Р Р†Р вЂљР’В Р В Р’В Р вЂ™Р’В Р В Р вЂ Р В РІР‚С™Р РЋРІвЂћСћР В Р’В Р В РІР‚В Р В Р’В Р Р†Р вЂљРЎв„ўР В Р Р‹Р РЋРЎв„ў Full documentation
 '@
 Set-Content -Path "$LINUX_STAGING\goal\RELEASE.txt" -Value $LINUX_README -Encoding UTF8
 
 # Create tar.gz archive
 $tarArgs = @('czf', $LINUX_ARCHIVE_PATH, '-C', $LINUX_STAGING, 'goal')
 & tar $tarArgs
-Write-Host "[+] Linux archive: $LINUX_ARCHIVE_PATH" -ForegroundColor Green
+Write-Host "+ Linux archive: $LINUX_ARCHIVE_PATH" -ForegroundColor Green
 
 # Cleanup staging
 Remove-Item $WIN_STAGING -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item $LINUX_STAGING -Recurse -Force -ErrorAction SilentlyContinue
 
-# Generate checksums for releases
-Write-Host "[+] Generating release checksums..." -ForegroundColor Yellow
+# Generate checksums for release archives
+Write-Host ""
+Write-Host "+ Generating release archive checksums..." -ForegroundColor Yellow
 $RELEASE_CHECKSUM_FILE = "$RELEASE_DIR\checksums.txt"
 $winReleaseHash = (Get-FileHash $WIN_ARCHIVE_PATH -Algorithm SHA256).Hash.ToLower()
 $LINUXReleaseHash = (Get-FileHash $LINUX_ARCHIVE_PATH -Algorithm SHA256).Hash.ToLower()
 "$winReleaseHash  $WIN_ARCHIVE_NAME`n$LINUXReleaseHash  $LINUX_ARCHIVE_NAME" | Out-File -FilePath $RELEASE_CHECKSUM_FILE -Encoding utf8
-Write-Host "[+] Release checksums: $RELEASE_CHECKSUM_FILE" -ForegroundColor Green
+Write-Host "+ Release checksums: $RELEASE_CHECKSUM_FILE" -ForegroundColor Green
 
 # Also create GPG signature placeholder (requires gpg to be installed)
 $GPG_SIG_PATH = "$RELEASE_DIR\checksums.txt.sig"
 if (Get-Command gpg -ErrorAction SilentlyContinue) {
     gpg --detach-sign --armor "$RELEASE_CHECKSUM_FILE" -o "$GPG_SIG_PATH" 2>$null
     if ($LASTEXITCODE -eq 0) {
-        Write-Host "[+] GPG signature: $GPG_SIG_PATH" -ForegroundColor Green
+        Write-Host "+ GPG signature: $GPG_SIG_PATH" -ForegroundColor Green
     } else {
-        Write-Host "[!] GPG signing failed (no key?)" -ForegroundColor Yellow
+        Write-Host "! GPG signing failed (no key?)" -ForegroundColor Yellow
     }
 } else {
-    Write-Host "[!] GPG not found, skipping signature (install gnupg for signatures)" -ForegroundColor Yellow
+    Write-Host "! GPG not found, skipping signature (install gnupg for signatures)" -ForegroundColor Yellow
 }
 
 # Cleanup temp files
 Remove-Item "$OUTPUT_DIR\build.log" -ErrorAction SilentlyContinue
 Remove-Item "$OUTPUT_DIR\build-error.log" -ErrorAction SilentlyContinue
+
+# Clean up generated syso files (not needed in repo)
+Remove-Item "$SOURCE\rsrc.syso" -ErrorAction SilentlyContinue
+Remove-Item "rsrc_*.syso" -ErrorAction SilentlyContinue
 
 # Restore environment
 Remove-Item Env:GOOS -ErrorAction SilentlyContinue

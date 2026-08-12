@@ -96,6 +96,47 @@ For maximum security:
 4. Run behind a reverse proxy with TLS
 5. Use `deploy/systemd/goal.service` (Linux) or `deploy/windows/install-service.ps1` (Windows) for managed process lifecycle
 
+## Code signing (Windows)
+
+Release Windows binaries are Authenticode-signed with trusted timestamp.
+
+### Threat model
+
+| Threat | Mitigation |
+|--------|------------|
+| Key theft | Certificate stored in GitHub Secrets, not in repository |
+| Malicious PR signing | Signing runs only on tag push (`push: tags: v*`), not on PRs |
+| Compromised workflow | Signing job requires `GOAL_SIGN_CERT` secret |
+| Secret exposure | PFX password never printed in logs; certificate used with `/as` flag |
+| Unauthorized release signing | Only `main` branch tag pushes trigger release workflow |
+
+### Key security
+
+- Private signing key stored in GitHub Secrets (`GOAL_SIGN_CERT`, `GOAL_SIGN_CERT_PASSWORD`)
+- Never committed to repository
+- Never embedded in release artifacts
+- Never printed in CI logs
+- PFX file optionally exported from Windows Certificate Store
+
+### Signature verification
+
+Users can verify the Windows binary signature:
+
+```powershell
+Get-AuthenticodeSignature .\goal-windows-amd64.exe
+```
+
+Expected: `Status: Valid`
+
+### SmartScreen reputation
+
+SmartScreen reputation is independent of Authenticode signing:
+
+- **Unknown Publisher** → Fixed by valid Authenticode signature (shows publisher name)
+- **SmartScreen warning** → May still appear for new certificates or low-download-count binaries
+- **Reputation build** → Requires downloads, opens, and network signals over time
+- **EV certificate** → Faster reputation but not guaranteed instant SmartScreen clearance
+
 ## Security notes
 
 - **Public mode warning:** If `authEnabled=false` and GoAl is accessible from the network, all API endpoints (except `/health` and `/version`) are accessible without authentication.

@@ -13,7 +13,43 @@ This document describes the release process for GoAl.
 **Tag:** `v1.0.0`
 **Release:** [GitHub Releases](https://github.com/dsdred/goal-starter/releases/tag/v1.0.0)
 
-## Build script
+## Windows Authenticode signing
+
+Release Windows binaries are signed with Authenticode + trusted timestamp.
+
+- **Signing certificate** stored in GitHub Secrets (`GOAL_SIGN_CERT`, `GOAL_SIGN_CERT_PASSWORD`)
+- **Timestamp server** configured via `GOAL_SIGN_TIMESTAMP_SERVER` (default: DigiCert)
+- **Checksums** generated AFTER signing (signing modifies the PE binary)
+- **Signature verification** gate runs after signing, release fails if invalid
+
+### How signing works in the pipeline
+
+1. Windows binary is built with embedded PE metadata (ProductName, FileDescription, etc.)
+2. Binary is signed with `signtool.exe` using the production certificate
+3. Trusted timestamp is added (signature remains valid after certificate expiry)
+4. Signature is verified (`Get-AuthenticodeSignature` → `Status = Valid`)
+5. SHA256 checksums are generated (post-signing)
+6. Checksums are included in the release
+
+### SmartScreen note
+
+Valid Authenticode signature ≠ guaranteed immediate SmartScreen reputation.
+
+After a new certificate is issued:
+- Windows will show the publisher name (no longer "Unknown Publisher")
+- SmartScreen may still show "Unknown app" or "Downloaded from Internet" for the first few thousand downloads
+- Reputation builds over time (downloads, opens, network signals)
+- An EV certificate accelerates reputation but does not guarantee instant SmartScreen clearance
+
+## Windows resource metadata
+
+GoAl embeds Windows PE version resources at build time using `go-winres`.
+
+Resource configuration: `winres/winres.json`
+
+Generated `.syso` files are embedded into the Windows binary during `go build`.
+
+## Local build script
 
 `scripts/build-all.ps1` produces all artifacts:
 
@@ -21,14 +57,36 @@ This document describes the release process for GoAl.
 .\scripts\build-all.ps1
 ```
 
+For a signed build:
+
+```powershell
+$env:SIGN_CERT = "C:\certs\goal.pfx"
+$env:SIGN_PASSWORD = "your_password"
+$env:SIGN_TIMESTAMP = "http://timestamp.digicert.com"
+.\scripts\build-all.ps1
+```
+
 Output:
-- `bin/goal-windows-amd64.exe`
+- `bin/goal-windows-amd64.exe` (signed if SIGN_CERT provided)
 - `bin/goal-linux-amd64`
 - `bin/checksums.txt`
 
 The script also creates release archives:
 - `releases/goal-<version>-windows-amd64.zip`
 - `releases/goal-<version>-linux-amd64.tar.gz`
+
+## Developer build
+
+Normal `go build` does not require a signing certificate or `go-winres`:
+
+```powershell
+go build ./cmd/goal
+```
+
+Developer builds:
+- Unsigned
+- Version = `dev`
+- No PE metadata (unless winres is configured)
 
 ## Build verification
 
@@ -42,6 +100,8 @@ go build ./cmd/goal
 
 **CI:** GitHub Actions runs lint, build (Windows+Linux), test with race detector, and govulncheck. See `.github/workflows/ci.yml`.
 
+**Release CI:** `.github/workflows/release.yml` triggers on tag push. Runs tests, builds, signs Windows binary (if certificate available), verifies signature, generates checksums, and publishes release.
+
 ## Tag convention
 
 Semantic versioning: `vMAJOR.MINOR.PATCH`
@@ -53,24 +113,48 @@ Semantic versioning: `vMAJOR.MINOR.PATCH`
 
 1. Ensure all tests pass: `go test ./... && go test -race ./...`
 2. Ensure all required checks pass: `gofmt -w . && go vet ./...`
-3. Build for all targets: `.\scripts\build-all.ps1`
-4. Verify checksums: `Get-FileHash` (Windows) or `sha256sum` (Linux)
-5. Create tag: `git tag vX.Y.Z`
-6. Push tag: `git push origin vX.Y.Z`
-7. Create GitHub Release with:
-   - Title: `GoAl vX.Y.Z`
-   - Notes: release changelog
-   - Attachments: `goal-windows-amd64.exe`, `goal-linux-amd64`, `checksums.txt`
-8. Upload release archives (ZIP/TAR.GZ)
+3. Create tag: `git tag vX.Y.Z`
+4. Push tag: `git push origin vX.Y.Z`
+5. GitHub Actions release workflow runs automatically:
+   - Tests, build, sign Windows, verify signature
+   - Generate checksums (post-signing)
+   - Publish release with all assets
+6. Verify the published release:
+   - Check signature: `Get-AuthenticodeSignature .\goal-windows-amd64.exe`
+   - Verify checksums: `Get-FileHash` vs `checksums.txt`
 
 ## Release verification
 
 ```powershell
-# Download and verify
+# Download from GitHub Release
+
+# Verify SHA256
 Get-FileHash bin/goal-windows-amd64.exe -Algorithm SHA256
 # Compare with checksums.txt from release
+
+# Verify Authenticode signature (Windows release only)
+Get-AuthenticodeSignature .\goal-windows-amd64.exe
+```
+
+Expected signature output:
+
+```
+SignerCertificate : ...
+Status            : Valid
+StatusMessage     : Signature verified successfully.
+Path              : goal-windows-amd64.exe
 ```
 
 ```bash
 sha256sum -c checksums.txt
 ```
+
+## GitHub Secrets
+
+Required secrets for release (configured in repository Settings → Secrets):
+
+| Secret | Description |
+|--------|-------------|
+| `GOAL_SIGN_CERT` | Base64-encoded PFX certificate or path to cert in CI |
+| `GOAL_SIGN_CERT_PASSWORD` | PFX password |
+| `GOAL_SIGN_TIMESTAMP_SERVER` | Timestamp server URL (optional, defaults to DigiCert) |
