@@ -124,12 +124,13 @@ type Repository interface {
 
 // JSONRepository implements Repository using a single atomic JSON file.
 type JSONRepository struct {
-	mu        sync.RWMutex
-	filePath  string
-	runtimes  []*RuntimeEntry
-	models    []*ModelEntry
-	profiles  []*ProfileEntry
-	instances []*LaunchInstanceEntry
+	mu          sync.RWMutex
+	filePath    string
+	runtimes    []*RuntimeEntry
+	models      []*ModelEntry
+	profiles    []*ProfileEntry
+	instances   []*LaunchInstanceEntry
+	idGenerator func() string
 }
 
 // NewJSONRepository creates a new JSONRepository.
@@ -140,7 +141,8 @@ func NewJSONRepository(filePath string) (Repository, error) {
 	}
 
 	r := &JSONRepository{
-		filePath: filePath,
+		filePath:    filePath,
+		idGenerator: generateID,
 	}
 
 	if err := r.load(); err != nil {
@@ -355,8 +357,15 @@ func (r *JSONRepository) CreateRuntime(e *RuntimeEntry) error {
 	defer r.mu.Unlock()
 
 	if e.ID == "" {
-		e.ID = generateID()
+		id, err := r.allocateID("runtime")
+		if err != nil {
+			return err
+		}
+		e.ID = id
+	} else if r.idExistsIn("runtime", e.ID) {
+		return fmt.Errorf("runtime id already exists: %s", e.ID)
 	}
+
 	e.CreatedAt = time.Now()
 	e.UpdatedAt = time.Now()
 
@@ -435,8 +444,15 @@ func (r *JSONRepository) CreateModel(e *ModelEntry) error {
 	defer r.mu.Unlock()
 
 	if e.ID == "" {
-		e.ID = generateID()
+		id, err := r.allocateID("model")
+		if err != nil {
+			return err
+		}
+		e.ID = id
+	} else if r.idExistsIn("model", e.ID) {
+		return fmt.Errorf("model id already exists: %s", e.ID)
 	}
+
 	e.CreatedAt = time.Now()
 	e.UpdatedAt = time.Now()
 
@@ -503,8 +519,15 @@ func (r *JSONRepository) CreateProfile(e *ProfileEntry) error {
 	defer r.mu.Unlock()
 
 	if e.ID == "" {
-		e.ID = generateID()
+		id, err := r.allocateID("profile")
+		if err != nil {
+			return err
+		}
+		e.ID = id
+	} else if r.idExistsIn("profile", e.ID) {
+		return fmt.Errorf("profile id already exists: %s", e.ID)
 	}
+
 	e.CreatedAt = time.Now()
 	e.UpdatedAt = time.Now()
 
@@ -585,8 +608,15 @@ func (r *JSONRepository) CreateLaunchInstance(e *LaunchInstanceEntry) error {
 	// ID is generated exactly once by the caller (Supervisor / Resolver).
 	// Do not overwrite an existing ID.
 	if e.ID == "" {
-		e.ID = generateID()
+		id, err := r.allocateID("instance")
+		if err != nil {
+			return err
+		}
+		e.ID = id
+	} else if r.idExistsIn("instance", e.ID) {
+		return fmt.Errorf("instance id already exists: %s", e.ID)
 	}
+
 	e.CreatedAt = time.Now()
 	e.UpdatedAt = time.Now()
 
@@ -681,6 +711,66 @@ func (r *JSONRepository) ListByProfileID(profileID string) ([]*LaunchInstanceEnt
 // generateID creates a unique ID.
 func generateID() string {
 	return fmt.Sprintf("inst_%d", time.Now().UnixNano())
+}
+
+var idExhaustedErr = fmt.Errorf("could not obtain a unique repository ID")
+
+// idExistsIn checks whether the given ID exists in the entity slice.
+// Must be called while holding the repository lock.
+func (r *JSONRepository) idExistsIn(ns string, id string) bool {
+	var list interface{}
+	switch ns {
+	case "runtime":
+		list = r.runtimes
+	case "model":
+		list = r.models
+	case "profile":
+		list = r.profiles
+	case "instance":
+		list = r.instances
+	default:
+		return false
+	}
+
+	switch items := list.(type) {
+	case []*RuntimeEntry:
+		for _, item := range items {
+			if item.ID == id {
+				return true
+			}
+		}
+	case []*ModelEntry:
+		for _, item := range items {
+			if item.ID == id {
+				return true
+			}
+		}
+	case []*ProfileEntry:
+		for _, item := range items {
+			if item.ID == id {
+				return true
+			}
+		}
+	case []*LaunchInstanceEntry:
+		for _, item := range items {
+			if item.ID == id {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// allocateID generates a unique ID for the given namespace.
+// It retries until a non-colliding ID is found or a bound is exhausted.
+func (r *JSONRepository) allocateID(ns string) (string, error) {
+	for attempt := 0; attempt < 10; attempt++ {
+		id := r.idGenerator()
+		if !r.idExistsIn(ns, id) {
+			return id, nil
+		}
+	}
+	return "", idExhaustedErr
 }
 
 // copyFile copies a file from src to dst atomically with validation.

@@ -3,8 +3,10 @@ package storage
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 )
@@ -792,5 +794,451 @@ func TestJSONRepository_Timestamps(t *testing.T) {
 	}
 	if rt.UpdatedAt.IsZero() {
 		t.Error("UpdatedAt should not be zero after update")
+	}
+}
+
+func TestJSONRepository_IDUniquenessOnExplicitConflict(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "repo.json")
+	repo, err := NewJSONRepository(path)
+	if err != nil {
+		t.Fatalf("NewJSONRepository: %v", err)
+	}
+
+	p1 := &ProfileEntry{ID: "fixed-profile", Name: "one"}
+	if err := repo.CreateProfile(p1); err != nil {
+		t.Fatalf("CreateProfile: %v", err)
+	}
+
+	p2 := &ProfileEntry{ID: "fixed-profile", Name: "two"}
+	err = repo.CreateProfile(p2)
+	if err == nil {
+		t.Fatalf("expected duplicate-ID Create to fail with uniqueness error")
+	}
+
+	profiles, err := repo.ListProfiles()
+	if err != nil {
+		t.Fatalf("ListProfiles: %v", err)
+	}
+	if len(profiles) != 1 || profiles[0].Name != "one" {
+		t.Fatalf("expected original profile to remain, got %d entries", len(profiles))
+	}
+}
+
+func TestJSONRepository_IDUniqueness_GeneratedRetry(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "repo.json")
+	repo, err := NewJSONRepository(path)
+	if err != nil {
+		t.Fatalf("NewJSONRepository: %v", err)
+	}
+
+	p1 := &ProfileEntry{Name: "one"}
+	if err := repo.CreateProfile(p1); err != nil {
+		t.Fatalf("CreateProfile: %v", err)
+	}
+
+	p2 := &ProfileEntry{Name: "two"}
+	if err := repo.CreateProfile(p2); err != nil {
+		t.Fatalf("CreateProfile: %v", err)
+	}
+	if p1.ID == p2.ID {
+		t.Fatalf("expected distinct generated IDs, got same: %s", p1.ID)
+	}
+}
+
+func TestJSONRepository_CallerDuplicate_Runtime(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "repo.json")
+	repo, _ := NewJSONRepository(path)
+
+	r1 := &RuntimeEntry{ID: "fixed-rt", Name: "first", Executable: "ollama"}
+	if err := repo.CreateRuntime(r1); err != nil {
+		t.Fatalf("CreateRuntime: %v", err)
+	}
+
+	r2 := &RuntimeEntry{ID: "fixed-rt", Name: "second", Executable: "llama"}
+	if err := repo.CreateRuntime(r2); err == nil {
+		t.Fatal("expected error for duplicate caller ID")
+	}
+
+	runtimes, _ := repo.ListRuntimes()
+	if len(runtimes) != 1 || runtimes[0].Name != "first" {
+		t.Fatalf("expected 1 runtime 'first', got %d", len(runtimes))
+	}
+}
+
+func TestJSONRepository_CallerDuplicate_Model(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "repo.json")
+	repo, _ := NewJSONRepository(path)
+
+	m1 := &ModelEntry{ID: "fixed-model", Name: "first", Path: "/tmp/f1"}
+	if err := repo.CreateModel(m1); err != nil {
+		t.Fatalf("CreateModel: %v", err)
+	}
+
+	m2 := &ModelEntry{ID: "fixed-model", Name: "second", Path: "/tmp/f2"}
+	if err := repo.CreateModel(m2); err == nil {
+		t.Fatal("expected error for duplicate caller ID")
+	}
+
+	models, _ := repo.ListModels()
+	if len(models) != 1 || models[0].Name != "first" {
+		t.Fatalf("expected 1 model 'first', got %d", len(models))
+	}
+}
+
+func TestJSONRepository_CallerDuplicate_LaunchInstance(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "repo.json")
+	repo, _ := NewJSONRepository(path)
+
+	i1 := &LaunchInstanceEntry{ID: "fixed-inst", ProfileID: "p1", State: "running"}
+	if err := repo.CreateLaunchInstance(i1); err != nil {
+		t.Fatalf("CreateLaunchInstance: %v", err)
+	}
+
+	i2 := &LaunchInstanceEntry{ID: "fixed-inst", ProfileID: "p2", State: "exited"}
+	if err := repo.CreateLaunchInstance(i2); err == nil {
+		t.Fatal("expected error for duplicate caller ID")
+	}
+
+	instances, _ := repo.ListLaunchInstances()
+	if len(instances) != 1 || instances[0].ProfileID != "p1" {
+		t.Fatalf("expected 1 instance with profile 'p1', got %d", len(instances))
+	}
+}
+
+func TestJSONRepository_DeterministicCollision(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "repo.json")
+	repo, _ := NewJSONRepository(path)
+	jsonRepo := repo.(*JSONRepository)
+
+	var callCount int
+	saved := jsonRepo.idGenerator
+	jsonRepo.idGenerator = func() string {
+		callCount++
+		switch callCount {
+		case 1:
+			return "inst_100"
+		case 2:
+			return "inst_200"
+		case 3:
+			return "inst_100"
+		case 4:
+			return "inst_200"
+		case 5:
+			return "inst_300"
+		case 6:
+			return "inst_300"
+		case 7:
+			return "inst_200" // collision with p2, retry → #8
+		case 8:
+			return "inst_400" // no collision
+		default:
+			return fmt.Sprintf("inst_extra_%d", callCount)
+		}
+	}
+	defer func() { jsonRepo.idGenerator = saved }()
+
+	p1 := &ProfileEntry{Name: "one"}
+	if err := repo.CreateProfile(p1); err != nil {
+		t.Fatalf("first CreateProfile: %v", err)
+	}
+	if p1.ID != "inst_100" {
+		t.Fatalf("expected ID 'inst_100', got '%s'", p1.ID)
+	}
+
+	p2 := &ProfileEntry{Name: "two"}
+	if err := repo.CreateProfile(p2); err != nil {
+		t.Fatalf("second CreateProfile: %v", err)
+	}
+	if p2.ID != "inst_200" {
+		t.Fatalf("expected ID 'inst_200', got '%s'", p2.ID)
+	}
+
+	p3 := &ProfileEntry{Name: "three"}
+	if err := repo.CreateProfile(p3); err != nil {
+		t.Fatalf("third CreateProfile: %v", err)
+	}
+	if p3.ID != "inst_300" {
+		t.Fatalf("expected collision retry to find 'inst_300', got '%s'", p3.ID)
+	}
+
+	p4 := &ProfileEntry{Name: "four"}
+	if err := repo.CreateProfile(p4); err != nil {
+		t.Fatalf("fourth CreateProfile: %v", err)
+	}
+	if p4.ID != "inst_400" {
+		t.Fatalf("expected collision retry to find non-colliding 'inst_400', got '%s'", p4.ID)
+	}
+}
+
+func TestJSONRepository_CollisionRetry_Sequence(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "repo.json")
+	repo, _ := NewJSONRepository(path)
+	jsonRepo := repo.(*JSONRepository)
+
+	var callCount int
+	saved := jsonRepo.idGenerator
+	jsonRepo.idGenerator = func() string {
+		callCount++
+		if callCount == 1 {
+			return "inst_50"
+		}
+		return "inst_60"
+	}
+	defer func() { jsonRepo.idGenerator = saved }()
+
+	p1 := &ProfileEntry{Name: "one"}
+	if err := repo.CreateProfile(p1); err != nil {
+		t.Fatalf("first CreateProfile: %v", err)
+	}
+
+	var callCount2 int
+	jsonRepo.idGenerator = func() string {
+		callCount2++
+		if callCount2 == 1 {
+			return "inst_50" // collision with p1, retry
+		}
+		return "inst_60" // accepted
+	}
+
+	p2 := &ProfileEntry{Name: "two"}
+	if err := repo.CreateProfile(p2); err != nil {
+		t.Fatalf("second CreateProfile: %v", err)
+	}
+	if p1.ID == p2.ID {
+		t.Fatalf("expected distinct IDs, both got '%s'", p1.ID)
+	}
+
+	profiles, _ := repo.ListProfiles()
+	if len(profiles) != 2 {
+		t.Fatalf("expected 2 profiles, got %d", len(profiles))
+	}
+}
+
+func TestJSONRepository_Exhaustion(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "repo.json")
+	repo, _ := NewJSONRepository(path)
+	jsonRepo := repo.(*JSONRepository)
+
+	var callCount int
+	saved := jsonRepo.idGenerator
+	jsonRepo.idGenerator = func() string {
+		callCount++
+		return fmt.Sprintf("inst_%d", callCount)
+	}
+	defer func() { jsonRepo.idGenerator = saved }()
+
+	for i := 0; i < 10; i++ {
+		p := &ProfileEntry{Name: fmt.Sprintf("p%d", i)}
+		if err := repo.CreateProfile(p); err != nil {
+			t.Fatalf("CreateProfile %d: %v", i, err)
+		}
+	}
+
+	var exhaustCount int
+	jsonRepo.idGenerator = func() string {
+		exhaustCount++
+		return "inst_1" // always collides with first profile
+	}
+
+	p := &ProfileEntry{Name: "exhaust"}
+	exhaustErr := repo.CreateProfile(p)
+	if exhaustErr == nil {
+		t.Fatal("expected exhaustion error")
+	}
+	if exhaustErr.Error() != "could not obtain a unique repository ID" {
+		t.Fatalf("unexpected error message: %v", exhaustErr)
+	}
+
+	profiles, _ := repo.ListProfiles()
+	if len(profiles) != 10 {
+		t.Fatalf("expected 10 profiles (no partial insert), got %d", len(profiles))
+	}
+}
+
+func TestJSONRepository_Persistence(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "repo.json")
+	repo, _ := NewJSONRepository(path)
+	jsonRepo := repo.(*JSONRepository)
+
+	saved := jsonRepo.idGenerator
+	jsonRepo.idGenerator = func() string { return "inst_persist" }
+	defer func() { jsonRepo.idGenerator = saved }()
+	p1 := &ProfileEntry{Name: "persist-1"}
+	if err := repo.CreateProfile(p1); err != nil {
+		t.Fatalf("CreateProfile: %v", err)
+	}
+
+	jsonRepo.idGenerator = func() string { return "inst_persist2" }
+	p2 := &ProfileEntry{Name: "persist-2"}
+	if err := repo.CreateProfile(p2); err != nil {
+		t.Fatalf("CreateProfile: %v", err)
+	}
+
+	repo2, err := NewJSONRepository(path)
+	if err != nil {
+		t.Fatalf("reopen repository: %v", err)
+	}
+
+	profiles, err := repo2.ListProfiles()
+	if err != nil {
+		t.Fatalf("ListProfiles: %v", err)
+	}
+	if len(profiles) != 2 {
+		t.Fatalf("expected 2 profiles after reopen, got %d", len(profiles))
+	}
+
+	// Verify JSON schema preserved.
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	var parsed map[string]interface{}
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if parsed["schema_version"] != float64(4) {
+		t.Errorf("expected schema_version 4, got %v", parsed["schema_version"])
+	}
+	if _, ok := parsed["profiles"]; !ok {
+		t.Error("expected profiles key in JSON")
+	}
+}
+
+func TestJSONRepository_Concurrency_Uniqueness(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "repo.json")
+	repo, _ := NewJSONRepository(path)
+
+	const n = 50
+	var mu sync.Mutex
+	ids := make(map[string]bool)
+	var wg sync.WaitGroup
+
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			p := &ProfileEntry{Name: fmt.Sprintf("concurrent-%d", idx)}
+			if err := repo.CreateProfile(p); err != nil {
+				t.Errorf("CreateProfile goroutine %d: %v", idx, err)
+				return
+			}
+			mu.Lock()
+			if ids[p.ID] {
+				t.Errorf("duplicate ID detected: %s", p.ID)
+			}
+			ids[p.ID] = true
+			mu.Unlock()
+		}(i)
+	}
+	wg.Wait()
+
+	if len(ids) != n {
+		t.Fatalf("expected %d unique IDs, got %d", n, len(ids))
+	}
+
+	profiles, _ := repo.ListProfiles()
+	if len(profiles) != n {
+		t.Fatalf("expected %d profiles in repo, got %d", n, len(profiles))
+	}
+}
+
+func TestJSONRepository_CollisionRetry_AllEntities(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "repo.json")
+	repo, _ := NewJSONRepository(path)
+	jsonRepo := repo.(*JSONRepository)
+
+	saved := jsonRepo.idGenerator
+	defer func() { jsonRepo.idGenerator = saved }()
+
+	// Runtime
+	var rtCall int
+	jsonRepo.idGenerator = func() string {
+		rtCall++
+		if rtCall == 1 {
+			return "inst-rt-1"
+		}
+		return "inst-rt-2"
+	}
+	r1 := &RuntimeEntry{Name: "rt1", Executable: "ollama"}
+	if err := repo.CreateRuntime(r1); err != nil {
+		t.Fatalf("CreateRuntime: %v", err)
+	}
+
+	var rtCall2 int
+	jsonRepo.idGenerator = func() string {
+		rtCall2++
+		if rtCall2 == 1 {
+			return "inst-rt-1" // collision with r1, retry
+		}
+		return "inst-rt-2" // accepted
+	}
+	r2 := &RuntimeEntry{Name: "rt2", Executable: "llama"}
+	if err := repo.CreateRuntime(r2); err != nil {
+		t.Fatalf("CreateRuntime retry: %v", err)
+	}
+
+	// Model
+	var mlCall int
+	jsonRepo.idGenerator = func() string {
+		mlCall++
+		if mlCall == 1 {
+			return "inst-ml-1"
+		}
+		return "inst-ml-2"
+	}
+	m1 := &ModelEntry{Name: "ml1", Path: "/tmp/ml1"}
+	if err := repo.CreateModel(m1); err != nil {
+		t.Fatalf("CreateModel: %v", err)
+	}
+
+	var mlCall2 int
+	jsonRepo.idGenerator = func() string {
+		mlCall2++
+		if mlCall2 == 1 {
+			return "inst-ml-1" // collision with m1, retry
+		}
+		return "inst-ml-2" // accepted
+	}
+	m2 := &ModelEntry{Name: "ml2", Path: "/tmp/ml2"}
+	if err := repo.CreateModel(m2); err != nil {
+		t.Fatalf("CreateModel retry: %v", err)
+	}
+
+	// LaunchInstance
+	var lnCall int
+	jsonRepo.idGenerator = func() string {
+		lnCall++
+		if lnCall == 1 {
+			return "inst-ln-1"
+		}
+		return "inst-ln-2"
+	}
+	i1 := &LaunchInstanceEntry{ProfileID: "p1", State: "running"}
+	if err := repo.CreateLaunchInstance(i1); err != nil {
+		t.Fatalf("CreateLaunchInstance: %v", err)
+	}
+
+	var lnCall2 int
+	jsonRepo.idGenerator = func() string {
+		lnCall2++
+		if lnCall2 == 1 {
+			return "inst-ln-1" // collision with i1, retry
+		}
+		return "inst-ln-2" // accepted
+	}
+	i2 := &LaunchInstanceEntry{ProfileID: "p2", State: "exited"}
+	if err := repo.CreateLaunchInstance(i2); err != nil {
+		t.Fatalf("CreateLaunchInstance retry: %v", err)
 	}
 }
