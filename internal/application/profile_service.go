@@ -6,6 +6,7 @@ import (
 	"github.com/dsdred/goal/internal/domain"
 	"github.com/dsdred/goal/internal/process"
 	"github.com/dsdred/goal/internal/storage"
+	"github.com/dsdred/goal/internal/webui/errors"
 )
 
 // ProfileService wraps Repository for profile CRUD operations.
@@ -31,7 +32,7 @@ func (s *ProfileService) GetProfile(ctx context.Context, id string) (*storage.Pr
 // CreateProfile creates a new profile.
 func (s *ProfileService) CreateProfile(ctx context.Context, entry *storage.ProfileEntry) error {
 	if entry.Name == "" {
-		return nil
+		return errors.ErrValidation
 	}
 	return s.repo.CreateProfile(entry)
 }

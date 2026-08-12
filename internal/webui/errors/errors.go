@@ -67,6 +67,7 @@ func WriteError(w http.ResponseWriter, statusCode int, apiErr *APIError) {
 
 var (
 	ErrBadRequest     = NewAPIError(CodeBadRequest, "invalid request")
+	ErrValidation     = NewAPIError(CodeBadRequest, "validation failed")
 	ErrUnauthorized   = NewAPIError(CodeUnauthorized, "unauthorized")
 	ErrForbidden      = NewAPIError(CodeForbidden, "forbidden")
 	ErrNotFound       = NewAPIError(CodeNotFound, "resource not found")

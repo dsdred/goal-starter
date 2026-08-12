@@ -1242,3 +1242,36 @@ func TestJSONRepository_CollisionRetry_AllEntities(t *testing.T) {
 		t.Fatalf("CreateLaunchInstance retry: %v", err)
 	}
 }
+
+func TestJSONRepository_CreateProfile_EmptyName(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "repo.json")
+	repo, _ := NewJSONRepository(path)
+
+	// Empty ID is OK — auto-generated.
+	p := &ProfileEntry{Name: "valid", RuntimeID: "rt1", Host: "127.0.0.1", Port: 11434}
+	if err := repo.CreateProfile(p); err != nil {
+		t.Fatalf("CreateProfile: %v", err)
+	}
+	if p.ID == "" {
+		t.Fatal("expected auto-generated ID for profile")
+	}
+
+	// Verify retrievable.
+	got, err := repo.GetProfile(p.ID)
+	if err != nil {
+		t.Fatalf("GetProfile: %v", err)
+	}
+	if got.Name != "valid" {
+		t.Errorf("expected name 'valid', got '%s'", got.Name)
+	}
+
+	// Another create still works.
+	p2 := &ProfileEntry{Name: "valid2", RuntimeID: "rt1", Host: "127.0.0.1", Port: 11435}
+	if err := repo.CreateProfile(p2); err != nil {
+		t.Fatalf("CreateProfile second: %v", err)
+	}
+	if p2.ID == "" || p2.ID == p.ID {
+		t.Fatal("expected distinct auto-generated ID for second profile")
+	}
+}

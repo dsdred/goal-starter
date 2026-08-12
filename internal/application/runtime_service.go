@@ -2,9 +2,9 @@ package application
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/dsdred/goal/internal/storage"
+	"github.com/dsdred/goal/internal/webui/errors"
 )
 
 // RuntimeService wraps Repository for runtime CRUD operations.
@@ -30,7 +30,7 @@ func (s *RuntimeService) GetRuntime(ctx context.Context, id string) (*storage.Ru
 // CreateRuntime creates a new runtime.
 func (s *RuntimeService) CreateRuntime(ctx context.Context, entry *storage.RuntimeEntry) error {
 	if entry.Name == "" {
-		return fmt.Errorf("runtime name is required")
+		return errors.ErrValidation
 	}
 	return s.repo.CreateRuntime(entry)
 }

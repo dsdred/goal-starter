@@ -73,7 +73,7 @@ Copy-Item goal.example.json goal.json
 GoAl автоматически мигрирует конфигурацию при запуске. Поддерживаются шаги:
 - `1 -> 2`: Применение значений по умолчанию для отсутствующих полей (healthCheck для профилей и рантаймов)
 
-Статус миграции: `GET /api/v1/migration/status`
+Миграция происходит автоматически через `config.MigrateConfig()` при вызове `config.Load()`. Отдельная точка статуса миграции не нужна.
 
 ### Горячая перезагрузка конфигурации
 
@@ -116,7 +116,6 @@ GoAl имеет два источника для runtimes/models/profiles:
 | GET | `/` | Веб-панель управления |
 | GET | `/api/v1/health` | Health check |
 | GET | `/api/v1/metrics` | Метрики приложения |
-| GET | `/api/v1/migration/status` | Статус миграции конфигурации |
 
 > `/api/v1/status` удалён. Используйте `GET /api/v1/instances` и `GET /api/v1/instances/{id}`.
 
@@ -184,7 +183,8 @@ GoAl имеет два источника для runtimes/models/profiles:
 | GET | `/api/v1/logs` | QueryLogs с фильтрацией (stream, search, time range, instance_id) |
 | GET | `/api/v1/instances/{id}/logs` | Логи конкретного instance |
 | GET | `/api/v1/instances/{id}/logs/stream` | SSE логов instance |
-| GET | `/ws` | WebSocket поток логов (WIP) |
+
+Live логи используют SSE (Server-Sent Events). WebSocket (`/ws`) реализован в `internal/webui/websocket/` но не подключён к основным роутам — см. ограничения.
 
 ### Structured API errors
 
@@ -274,9 +274,13 @@ SysProcAttr убран из `CommandSpec` — платформенная нас�
 При запуске Supervisor:
 1. Загружает все `LaunchInstanceEntry` из repository
 2. Проверяет, какие экземпляры были running
-3. Проверяет, жив ли PID
-4. Если жив: обновляет state на `running`, подписывает на logs
-5. Если мёртв: маркирует как `exited` с `recovered` exit class
+3. Помечает их как `stale` и обновляет в repository
+4. Stale экземпляры НЕ добавляются в активный список (нет reattachment к PID)
+
+Консервативное восстановление — без проверки PID liveness:
+- `os.FindProcess` не используется для восстановления
+- stdout/stderr предыдущего процесса не восстанавливаются
+- После перезапуска остановленные экземпляры полностью восстанавливаемы (state + exit details сохранены)
 
 ### Хранение данных
 
@@ -327,7 +331,10 @@ Legacy `/api/v1/status` удалён. Переход на `GET /api/v1/instances
 
 ### Health Checks
 
-Периодическая проверка здоровья рантаймов (каждые 30 секунд). Поддерживаются TCP и HTTP health check. Определения строятся на основе Profile host/port полей.
+`GET /api/v1/runtimes/health` — возвращает количество активных экземпляров и список (instance-based health).
+`GET /api/v1/runtimes/health/{id}` — возвращает детали запущенного instance для рантайма (PID, state, uptime).
+
+Периодическая TCP проверка здоровья рантаймов (каждые 30 секунд) работает в фоне через `HealthChecker` — результаты хранятся internally но не вынесены в отдельный API endpoint.
 
 ## Структура репозитория
 

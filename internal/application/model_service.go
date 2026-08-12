@@ -2,9 +2,9 @@ package application
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/dsdred/goal/internal/storage"
+	"github.com/dsdred/goal/internal/webui/errors"
 )
 
 // ModelService wraps Repository for model CRUD operations.
@@ -30,7 +30,7 @@ func (s *ModelService) GetModel(ctx context.Context, id string) (*storage.ModelE
 // CreateModel creates a new model.
 func (s *ModelService) CreateModel(ctx context.Context, entry *storage.ModelEntry) error {
 	if entry.Name == "" {
-		return fmt.Errorf("model name is required")
+		return errors.ErrValidation
 	}
 	return s.repo.CreateModel(entry)
 }

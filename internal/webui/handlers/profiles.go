@@ -2,12 +2,14 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 
 	"github.com/dsdred/goal/internal/application"
 	"github.com/dsdred/goal/internal/process"
 	"github.com/dsdred/goal/internal/storage"
+	apierrors "github.com/dsdred/goal/internal/webui/errors"
 	"github.com/dsdred/goal/internal/webui/security"
 )
 
@@ -62,6 +64,10 @@ func (h *ProfilesHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.profileSvc.CreateProfile(r.Context(), &entry); err != nil {
+		if errors.Is(err, apierrors.ErrValidation) {
+			writeError(w, 400, "validation failed")
+			return
+		}
 		writeError(w, 500, err.Error())
 		return
 	}

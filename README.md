@@ -73,7 +73,7 @@ The `goal.json` file is gitignored (contains secrets and user-specific paths).
 GoAl automatically migrates configuration at startup. Supported steps:
 - `1 -> 2`: Apply default healthCheck values for missing profile/runtime fields
 
-Migration status endpoint: `GET /api/v1/migration/status`
+Migration happens automatically via `config.MigrateConfig()` during `config.Load()`. No manual migration step or status endpoint.
 
 ### Configuration hot-reload
 
@@ -116,7 +116,6 @@ This design avoids silent configuration drift and keeps runtime state consistent
 | GET | `/` | Web dashboard |
 | GET | `/api/v1/health` | Health check |
 | GET | `/api/v1/metrics` | Application metrics |
-| GET | `/api/v1/migration/status` | Migration status |
 
 > `/api/v1/status` removed. Use `GET /api/v1/instances` and `GET /api/v1/instances/{id}`.
 
@@ -185,6 +184,8 @@ Profile is a launch template, not a process.
 | GET | `/api/v1/instances/{id}/logs` | Logs for specific instance |
 | GET | `/api/v1/instances/{id}/logs/stream` | SSE log stream for specific instance |
 
+Live logs use SSE (Server-Sent Events). WebSocket (`/ws`) is implemented in `internal/webui/websocket/` but not wired to main routes — see limitations.
+
 ### Structured API errors
 
 All errors return structured JSON:
@@ -249,17 +250,21 @@ SysProcAttr is removed from `CommandSpec` — platform-specific setup is perform
 
 On startup Supervisor:
 1. Loads all `LaunchInstanceEntry` from repository
-2. Checks which instances were running
-3. Verifies PID liveness
-4. If alive: updates state to `running`, subscribes to logs
-5. If dead: marks as `exited` with `recovered` exit class
+2. Checks which instances were in transitional states (running/starting/stopping/pending)
+3. Marks them as `stale` and persists the updated state
+4. Stale instances are NOT added to the active instance list (no PID reattachment)
 
 ### Recovery Policy
 
-- **Restorable**: PID exists, identity matches, pipes owned → restore state to `running`
-- **Stale**: PID exists but identity mismatch or pipes lost → state becomes `stale`
-- **Orphaned**: PID reused by another process → state becomes `orphaned`
-- **Terminal states**: persist reliably via `RemoveTerminal()`
+Conservative stale recovery — no PID liveness verification:
+
+- **Stale**: instance was running when application stopped → marked as `stale` on restart
+- **Terminal states** (exited/failed): persisted reliably via `RemoveTerminal()`
+- No PID reuse protection — `os.FindProcess` not used for recovery
+- No pipe reattachment — stdout/stderr from previous process not restored
+- After restart, stopped instances are fully recoverable (state + exit details preserved)
+
+The `stale` state indicates an instance that was running but is now stopped. User must manually start a new instance if the previous one is still running externally.
 
 See `docs/adr/` for detailed recovery semantics.
 
@@ -312,7 +317,10 @@ Legacy `/api/v1/status` removed. Use `GET /api/v1/instances` and `GET /api/v1/in
 
 ### Health Checks
 
-Periodic runtime health checking (every 30 seconds). Supports TCP and HTTP health checks. Health check definitions are built from Profile host/port fields.
+`GET /api/v1/runtimes/health` — returns active instance count and list (instance-based health).
+`GET /api/v1/runtimes/health/{id}` — returns running instance details for a runtime (PID, state, uptime).
+
+Periodic TCP health checking runs in background (every 30 seconds) via `HealthChecker` — results stored internally but not exposed via a separate API endpoint.
 
 ### Configuration Hot-Reload
 
