@@ -13,7 +13,7 @@ Configuration is loaded from a JSON file (default: `goal.json`) at application s
 | `webPort` | int | No | `9090` | HTTP server port (1–65535). |
 | `dataDir` | string | No | `./data` | Directory for `goal_repo.json` and runtime data. |
 | `adminUser` | string | No | `admin` | Administrator username. Required when `authEnabled` is true. |
-| `adminPassword` | string | No | `""` | Administrator password (cleared after first save). |
+| `adminPassword` | string | Conditional | `""` | Administrator password; required when `authEnabled=true`. Configuration files use mode `0600` on POSIX; restrict the containing directory with an ACL on Windows. |
 | `authEnabled` | bool | No | `false` | Enable session-based authentication and CSRF. |
 | `runtimes` | array | No | `[]` | Initial runtime definitions (seeded once). |
 | `models` | array | No | `[]` | Initial model definitions (seeded once). |
@@ -130,6 +130,6 @@ Hot-reload is implemented in `internal/config` but not yet wired into main start
 
 | Field | Security note |
 |-------|--------------|
-| `adminPassword` | Cleared to `""` after the first `Save()`. Stored as bcrypt hash in session store. |
+| `adminPassword` | Persisted in `goal.json` so authentication survives restart; stored as a bcrypt hash in memory. Protect the file with POSIX permissions or a Windows ACL. |
 | `authEnabled` | Must be `true` when `listenAddress` is non-loopback. |
 | `dataDir` | Contains `goal_repo.json` (secrets, paths). Default `./data` is gitignored. |

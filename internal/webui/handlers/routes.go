@@ -95,7 +95,8 @@ func (r *RouteRegistry) Build() http.Handler {
 
 	// Auth endpoints.
 	mux.HandleFunc("POST /api/v1/auth/login", r.authHandler.Login)
-	mux.HandleFunc("POST /api/v1/auth/logout", r.authHandler.Logout)
+	mux.HandleFunc("POST /api/v1/auth/logout", r.requireAuthCSRF(r.authHandler.Logout))
+	mux.HandleFunc("GET /api/v1/auth/session", r.authHandler.CheckSession)
 
 	// Authenticated system endpoints.
 	mux.HandleFunc("GET /api/v1/metrics", r.requireAuth(r.systemHandler.Metrics))
@@ -147,11 +148,9 @@ func (r *RouteRegistry) Build() http.Handler {
 	mux.HandleFunc("DELETE /api/v1/models/{id}", r.requireAuthCSRF(r.modelHandler.Delete))
 
 	// Main UI.
-	if !r.authEnabled {
-		mux.HandleFunc("/", r.systemHandler.ServeIndex)
-	} else {
-		mux.HandleFunc("/", r.requireAuth(r.systemHandler.ServeIndex))
-	}
+	// The shell page stays public so auth-enabled users can reach the login UI.
+	// All data and mutation endpoints remain protected above.
+	mux.HandleFunc("/", r.systemHandler.ServeIndex)
 
 	// Static files.
 	if r.staticFS != nil {
@@ -165,7 +164,6 @@ func (r *RouteRegistry) Build() http.Handler {
 
 	// Apply middleware chain.
 	var handler http.Handler = mux
-	handler = r.applyCSRF(handler)
 	handler = r.applyRateLimit(handler)
 	handler = r.applyLogging(handler)
 

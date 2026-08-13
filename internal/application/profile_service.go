@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"strings"
 
 	"github.com/dsdred/goal/internal/domain"
 	"github.com/dsdred/goal/internal/process"
@@ -39,6 +40,17 @@ func (s *ProfileService) CreateProfile(ctx context.Context, entry *storage.Profi
 
 // UpdateProfile updates an existing profile.
 func (s *ProfileService) UpdateProfile(ctx context.Context, entry *storage.ProfileEntry) error {
+	existing, err := s.repo.GetProfile(entry.ID)
+	if err != nil {
+		return err
+	}
+	// The Web UI edits launch fields only. Preserve state and optional values
+	// that were omitted from the update instead of silently erasing them.
+	entry.CreatedAt = existing.CreatedAt
+	entry.Active = existing.Active
+	if entry.Environment == nil {
+		entry.Environment = existing.Environment
+	}
 	return s.repo.UpdateProfile(entry)
 }
 
@@ -118,14 +130,17 @@ func (s *ProfileService) ResolveWithSupervisor(supervisor *process.Supervisor, p
 		rte.DefaultArgs, rte.Environment,
 	)
 
-	spec, err := supervisor.Resolve(domainProfile, domainRuntime, mdl, nil, nil)
+	spec, err := supervisor.ResolvePreview(domainProfile, domainRuntime, mdl, nil, nil)
 	if err != nil {
 		return nil, err
 	}
 
 	keys := make([]string, 0, len(spec.Environment))
 	for _, kv := range spec.Environment {
-		keys = append(keys, kv)
+		key, _, ok := strings.Cut(kv, "=")
+		if ok {
+			keys = append(keys, key)
+		}
 	}
 
 	return &ProfileResolveResult{

@@ -8,19 +8,22 @@
 #
 # If SIGN_CERT is set, Windows binary will be Authenticode-signed with trusted timestamp.
 
+param(
+    [string]$ReleaseVersion = "dev"
+)
+
 $ErrorActionPreference = "Stop"
 
 $OUTPUT_DIR = "bin"
 $SOURCE = "./cmd/goal"
 
 # Get version info and build time
-$VERSION = "dev"
+$VERSION = $ReleaseVersion
 $GIT_HASH = "none"
 $BUILD_TIME = "unknown"
 $LDFLAGS = "-ldflags=-s -w"
 
 try {
-    $VERSION = git describe --tags --abbrev=0 2>$null
     $GIT_HASH = git rev-parse --short HEAD 2>$null
     $BUILD_TIME = (Get-Date -UFormat "%Y-%m-%dT%H:%M:%SZ")
     $LDFLAGS = "-ldflags=-s -w -X github.com/dsdred/goal/internal/version.Version=$VERSION -X github.com/dsdred/goal/internal/version.GitCommit=$GIT_HASH -X github.com/dsdred/goal/internal/version.BuildTime=$BUILD_TIME"
@@ -35,9 +38,32 @@ function Invoke-GenResources {
         Write-Host "    go-winres not found, installing..." -ForegroundColor Gray
         go install github.com/tc-hib/go-winres@latest 2>&1 | Out-Null
     }
+    # Clean old syso files to force regeneration
+    Remove-Item "$SOURCE\rsrc.syso" -ErrorAction SilentlyContinue
+    Remove-Item "rsrc_*.syso" -ErrorAction SilentlyContinue
+
     # Check if winres.json exists
     if (Test-Path "winres\winres.json") {
-        go-winres make --arch amd64 2>&1 | Out-Null
+        # Generate a temporary resource definition without modifying tracked files.
+        $versionForPE = $VERSION -replace '^v', ''
+        $numericVersion = if ($versionForPE -match '^\d+\.\d+\.\d+$') { $versionForPE } else { '0.0.0' }
+        $fileVersion = $numericVersion + '.0'
+        $productVersion = $versionForPE
+        $winresPath = "winres\winres.json"
+        $generatedWinresPath = "winres\winres.generated.json"
+        $winresContent = Get-Content $winresPath -Raw
+        $winresContent = $winresContent -replace '"file_version":\s*"[^"]*"', "`"file_version`": `"$fileVersion`""
+        $winresContent = $winresContent -replace '"product_version":\s*"[^"]*"', "`"product_version`": `"$productVersion`""
+        $winresContent = $winresContent -replace '"FileVersion":\s*"[^"]*"', "`"FileVersion`": `"$fileVersion`""
+        $winresContent = $winresContent -replace '"ProductVersion":\s*"[^"]*"', "`"ProductVersion`": `"$productVersion`""
+        [System.IO.File]::WriteAllText($generatedWinresPath, $winresContent, (New-Object System.Text.UTF8Encoding $false))
+        Write-Host "    Injected PE version: $productVersion (file: $fileVersion)" -ForegroundColor Gray
+
+        try {
+            go-winres make --in $generatedWinresPath --arch amd64 2>&1 | Out-Null
+        } finally {
+            Remove-Item $generatedWinresPath -ErrorAction SilentlyContinue
+        }
         $sysoFile = Get-ChildItem rsrc_windows_amd64.syso -ErrorAction SilentlyContinue
         if ($sysoFile) {
             Copy-Item $sysoFile "$SOURCE\rsrc.syso"
@@ -157,9 +183,21 @@ $WIN_OUTPUT = "$OUTPUT_DIR\goal-windows-amd64.exe"
 # Generate Windows resource metadata before build
 Invoke-GenResources
 
+# Clean Go build cache to ensure syso is picked up
+go clean -cache 2>&1 | Out-Null
+
 if (Invoke-GoBuild "windows" "amd64" $WIN_OUTPUT) {
     $size = [math]::Round((Get-Item $WIN_OUTPUT).Length / 1MB, 2)
     Write-Host "+ Windows amd64: $WIN_OUTPUT ($size MB)" -ForegroundColor Green
+
+    # Version consistency check: verify binary --version matches expected
+    $binaryVersion = & $WIN_OUTPUT --version 2>&1
+    if ($binaryVersion -notlike "*$VERSION*") {
+        Write-Host "- VERSION MISMATCH: binary reports '$binaryVersion', expected '$VERSION'" -ForegroundColor Red
+        Write-Host "  This indicates ldflags or PE version injection failed." -ForegroundColor Red
+        exit 1
+    }
+    Write-Host "    Version check PASS: $binaryVersion" -ForegroundColor Green
 } else {
     Write-Host "- Windows amd64 build failed" -ForegroundColor Red
     exit 1

@@ -191,16 +191,22 @@ func (a *App) Run(ctx context.Context) error {
 		MaxHeaderBytes:    1 << 20,
 	}
 
+	serverErr := make(chan error, 1)
 	// Start server in goroutine.
 	go func() {
 		slog.Info("starting HTTP server", "addr", addr)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			slog.Error("HTTP server error", "error", err)
+			serverErr <- err
 		}
 	}()
 
-	// Wait for shutdown signal.
-	<-ctx.Done()
+	// Wait for shutdown signal or a startup/serve failure.
+	select {
+	case <-ctx.Done():
+	case err := <-serverErr:
+		return fmt.Errorf("serve HTTP: %w", err)
+	}
 
 	slog.Info("shutting down HTTP server...")
 

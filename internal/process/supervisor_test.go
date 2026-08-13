@@ -409,6 +409,103 @@ func TestSupervisorRestartReusesSlot(t *testing.T) {
 	sup.semaphore <- struct{}{}
 }
 
+func TestControllerDoneClosesAfterFinalPersistence(t *testing.T) {
+	store := newMockStore()
+	terminalUpdateStarted := make(chan struct{})
+	releaseTerminalUpdate := make(chan struct{})
+	var terminalOnce sync.Once
+	store.updateFn = func(e *domain.LaunchInstanceEntry) error {
+		if e.State == string(domain.InstanceStateExited) || e.State == string(domain.InstanceStateFailed) {
+			terminalOnce.Do(func() { close(terminalUpdateStarted) })
+			<-releaseTerminalUpdate
+		}
+		store.instances[e.ID] = e
+		return nil
+	}
+
+	sup := newTestSupervisor(t, store, SupervisorConfig{LogBufferSize: 64})
+	profile := &domain.Profile{ID: "done-order", Name: "done-order"}
+	runtime := &domain.Runtime{ID: "runtime", Name: "runtime", Executable: buildFakeRuntimeForTest(t)}
+	inst, err := sup.Start(context.Background(), profile, runtime, nil, []string{"exit-code", "0"}, nil)
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	sup.mu.RLock()
+	ctrl := sup.instances[inst.ID]
+	sup.mu.RUnlock()
+
+	select {
+	case <-terminalUpdateStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("terminal persistence did not start")
+	}
+	select {
+	case <-ctrl.GetControllerDone():
+		t.Fatal("controller done closed before terminal persistence completed")
+	default:
+	}
+	close(releaseTerminalUpdate)
+	if err := waitForProcess(context.Background(), ctrl, 5*time.Second); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRestartHoldsConcurrencySlotAndUsesFreshDoneSignal(t *testing.T) {
+	store := newMockStore()
+	sup := newTestSupervisor(t, store, SupervisorConfig{MaxConcurrent: 1, LogBufferSize: 64})
+	profile := &domain.Profile{ID: "restart", Name: "restart"}
+	runtime := &domain.Runtime{ID: "runtime", Name: "runtime", Executable: buildFakeRuntimeForTest(t)}
+	inst, err := sup.Start(context.Background(), profile, runtime, nil, []string{"-sleep", "30"}, nil)
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	oldPID := inst.PID
+	restarted, err := sup.Restart(context.Background(), inst.ID)
+	if err != nil {
+		t.Fatalf("restart: %v", err)
+	}
+	if restarted.PID == 0 || restarted.PID == oldPID {
+		t.Fatalf("restart PID = %d, old PID = %d", restarted.PID, oldPID)
+	}
+	if got := len(sup.semaphore); got != 0 {
+		t.Fatalf("available slots after restart = %d, want 0 while process is running", got)
+	}
+	sup.mu.RLock()
+	ctrl := sup.instances[inst.ID]
+	sup.mu.RUnlock()
+	select {
+	case <-ctrl.GetControllerDone():
+		t.Fatal("restarted process inherited an already-closed done signal")
+	default:
+	}
+	if err := sup.Stop(context.Background(), inst.ID); err != nil {
+		t.Fatalf("stop restarted process: %v", err)
+	}
+}
+
+func TestSupervisorStreamsProcessOutputThroughBroker(t *testing.T) {
+	store := newMockStore()
+	sup := newTestSupervisor(t, store, SupervisorConfig{LogBufferSize: 64})
+	sub := sup.SubscribeLogs("")
+	defer sub.Cancel()
+	profile := &domain.Profile{ID: "logs", Name: "logs"}
+	runtime := &domain.Runtime{ID: "runtime", Name: "runtime", Executable: buildFakeRuntimeForTest(t)}
+	if _, err := sup.Start(context.Background(), profile, runtime, nil, []string{"stdout"}, nil); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	deadline := time.After(5 * time.Second)
+	for {
+		select {
+		case event := <-sub.Channel():
+			if event.Stream == LogStreamStdout && strings.Contains(event.Message, "fake-output-line-") {
+				return
+			}
+		case <-deadline:
+			t.Fatal("stdout was not forwarded to LogBroker")
+		}
+	}
+}
+
 // TestSupervisorRemoveTerminalDoesNotDoubleRelease verifies RemoveTerminal doesn't double-release.
 func TestSupervisorRemoveTerminalDoesNotDoubleRelease(t *testing.T) {
 	store := newMockStore()

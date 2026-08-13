@@ -134,6 +134,7 @@ func (h *RuntimesHandler) Action(w http.ResponseWriter, r *http.Request) {
 					writeError(w, 500, err.Error())
 					return
 				}
+				inst.Environment = nil
 				writeJSON(w, http.StatusOK, inst)
 				return
 			}
@@ -171,10 +172,16 @@ func (h *RuntimesHandler) Action(w http.ResponseWriter, r *http.Request) {
 // HealthCheck handles GET /api/v1/runtimes/health
 func (h *RuntimesHandler) HealthCheck(w http.ResponseWriter, r *http.Request) {
 	instances, _ := h.instances.ListInstances(r.Context())
+	active := 0
+	for _, inst := range instances {
+		if inst.IsActive() {
+			active++
+		}
+	}
 
 	health := map[string]any{
-		"active_instances":  len(instances),
-		"running_instances": len(instances),
+		"active_instances":  active,
+		"running_instances": active,
 		"instances":         instances,
 	}
 	writeJSON(w, http.StatusOK, health)

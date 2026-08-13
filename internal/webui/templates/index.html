@@ -155,7 +155,7 @@
                 </div>
                 <div class="form-group">
                     <label for="model-kind">Model Type *</label>
-                    <select id="model-kind" name="kind" required>
+                    <select id="model-kind" name="kind" required onchange="updateModelKindVisibility()">
                         <option value="">Select...</option>
                         <option value="path">Path (GGUF file)</option>
                         <option value="arguments">Arguments (inline args)</option>
@@ -258,30 +258,14 @@
                 <h2>Runtimes <span class="count">({{len .Runtimes}})</span></h2>
                 <button class="btn btn-primary" onclick="showCreateRuntimeModal()">+ Add Runtime</button>
             </div>
-            {{if .Runtimes}}
             <table class="data-table">
                 <thead>
                     <tr><th>Name</th><th>Executable</th><th>Working Dir</th><th>Default Args</th><th>ID</th><th>Actions</th></tr>
                 </thead>
                 <tbody>
-                    {{range .Runtimes}}
-                    <tr>
-                        <td>{{.Name}}</td>
-                        <td><code>{{.Executable}}</code></td>
-                        <td><code>{{.WorkingDirectory}}</code></td>
-                        <td>{{range .DefaultArgs}}<span class="arg">{{.}}</span>{{end}}</td>
-                        <td><code>{{.ID}}</code></td>
-                        <td class="actions">
-                            <button onclick="showEditRuntimeModal('{{.ID}}')" class="btn btn-secondary btn-sm">Edit</button>
-                            <button onclick="deleteRuntime('{{.ID}}')" class="btn btn-danger btn-sm">Delete</button>
-                        </td>
-                    </tr>
-                    {{end}}
                 </tbody>
             </table>
-            {{else}}
             <p class="empty">No runtimes configured. Add one via API or UI.</p>
-            {{end}}
         </section>
 
         <!-- Models -->
@@ -290,30 +274,14 @@
                 <h2>Models <span class="count">({{len .Models}})</span></h2>
                 <button class="btn btn-primary" onclick="showCreateModelModal()">+ Add Model</button>
             </div>
-            {{if .Models}}
             <table class="data-table">
                 <thead>
-                    <tr><th>Name</th><th>Path</th><th>MMProj</th><th>Format</th><th>ID</th><th>Actions</th></tr>
+                    <tr><th>Name</th><th>Runtime</th><th>Path</th><th>MMProj</th><th>Format</th><th>ID</th><th>Actions</th></tr>
                 </thead>
                 <tbody>
-                    {{range .Models}}
-                    <tr>
-                        <td>{{.Name}}</td>
-                        <td><code>{{.Path}}</code></td>
-                        <td><code>{{.MMProj}}</code></td>
-                        <td>{{.Format}}</td>
-                        <td><code>{{.ID}}</code></td>
-                        <td class="actions">
-                            <button onclick="showEditModelModal('{{.ID}}')" class="btn btn-secondary btn-sm">Edit</button>
-                            <button onclick="deleteModel('{{.ID}}')" class="btn btn-danger btn-sm">Delete</button>
-                        </td>
-                    </tr>
-                    {{end}}
                 </tbody>
             </table>
-            {{else}}
             <p class="empty">No models configured. Add one via API or UI.</p>
-            {{end}}
         </section>
 
         <!-- Profiles -->
@@ -322,34 +290,14 @@
                 <h2>Profiles <span class="count">({{len .Profiles}})</span></h2>
                 <button class="btn btn-primary" onclick="openCreateProfileModal()">+ Create Profile</button>
             </div>
-            {{if .Profiles}}
             <table class="data-table">
                 <thead>
                     <tr><th>Name</th><th>Runtime</th><th>Model</th><th>Host:Port</th><th>Args</th><th>Status</th><th>Actions</th></tr>
                 </thead>
                 <tbody id="profiles-body">
-                    {{range .Profiles}}
-                    <tr id="profile-row-{{.ID}}">
-                        <td>{{.Name}}</td>
-                        <td>{{.RuntimeID}}</td>
-                        <td>{{.ModelID}}</td>
-                        <td>{{if .Host}}{{.Host}}{{end}}{{if .Port}}:{{.Port}}{{end}}</td>
-                        <td>{{range .Args}}<span class="arg">{{.}}</span>{{end}}</td>
-                        <td><span class="profile-status" data-profile-id="{{.ID}}">not started</span></td>
-                        <td class="actions">
-                            <button onclick="showProfilePreview('{{.ID}}')" class="btn btn-secondary btn-sm" title="Show resolved command">Preview</button>
-                            <button onclick="showEditProfileModal('{{.ID}}')" class="btn btn-secondary btn-sm" title="Edit profile">Edit</button>
-                            <button onclick="startProfile('{{.ID}}')" class="btn btn-success btn-sm">Start</button>
-                            <button onclick="stopProfile('{{.ID}}')" class="btn btn-danger btn-sm">Stop</button>
-                            <button onclick="restartProfile('{{.ID}}')" class="btn btn-warning btn-sm">Restart</button>
-                        </td>
-                    </tr>
-                    {{end}}
                 </tbody>
             </table>
-            {{else}}
             <p class="empty">No profiles configured. Create one to get started.</p>
-            {{end}}
         </section>
 
         <!-- Logs -->
@@ -454,7 +402,7 @@
                 </div>
                 <div class="form-group">
                     <label for="edit-model-kind">Model Type *</label>
-                    <select id="edit-model-kind" name="kind" required>
+                    <select id="edit-model-kind" name="kind" required onchange="updateEditModelKindVisibility()">
                         <option value="">Select...</option>
                         <option value="path">Path (GGUF file)</option>
                         <option value="arguments">Arguments (inline args)</option>

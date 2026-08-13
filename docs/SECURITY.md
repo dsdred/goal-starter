@@ -20,7 +20,7 @@ Logout endpoint: `POST /api/v1/auth/logout`
 
 ### Password storage
 
-Passwords are hashed with bcrypt when saved. On login, if the stored hash is empty, plaintext comparison is used (legacy fallback). The `adminPassword` field in `goal.json` is cleared after the first save.
+At startup, the configured password is hashed with bcrypt in memory. Authentication-enabled startup rejects an empty password. `Config.Save()` retains the password so authentication continues to work after restart. The file uses mode `0600` on POSIX; on Windows, restrict its directory with an ACL.
 
 ### Session store
 
@@ -32,7 +32,7 @@ Sessions are stored in memory with automatic cleanup of expired sessions. There 
 
 | Cookie | Name | SameSite |
 |--------|------|----------|
-| CSRF token | `csrf` | `Strict` |
+| CSRF token | `goal_csrf_token` | `Strict` |
 | Token in header | `X-CSRF-Token` | — |
 
 The middleware validates that the cookie and header values match for unsafe methods (POST, PUT, DELETE). GET, HEAD, and OPTIONS are not CSRF-protected.
@@ -58,7 +58,7 @@ GoAl has a single admin user. There are no roles or permissions — if the user 
 
 | Secret | Location | Cleared on save |
 |--------|----------|-----------------|
-| `adminPassword` | `goal.json` → `AdminPassword` field | Yes |
+| `adminPassword` | `goal.json` → `AdminPassword` field | No; protect it with POSIX permissions or a Windows ACL |
 | Session tokens | In-memory store | Yes (expiry-based) |
 | CSRF tokens | Cookie + header | Rotated on login |
 

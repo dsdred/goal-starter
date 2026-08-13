@@ -57,6 +57,19 @@ func TestValidateAuthRequiresAdminUser(t *testing.T) {
 	}
 }
 
+func TestValidateAuthRequiresAdminPassword(t *testing.T) {
+	cfg := Config{
+		Version:       1,
+		ListenAddress: "127.0.0.1",
+		WebPort:       8080,
+		AdminUser:     "admin",
+		AuthEnabled:   true,
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected error when auth is enabled without an admin password")
+	}
+}
+
 func TestValidateRuntimeExecutableExists(t *testing.T) {
 	tmpDir := t.TempDir()
 	exePath := filepath.Join(tmpDir, "test-runtime")

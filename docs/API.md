@@ -6,11 +6,11 @@ All endpoints are under the `/api/v1` prefix. Base URL is `http://127.0.0.1:9090
 
 | Mode | `authEnabled` | Effect |
 |------|--------------|--------|
-| Private | `true` | All endpoints (except `/health` and `/version`) require valid session cookie. Unsafe methods additionally require CSRF token. |
+| Private | `true` | Management endpoints require a valid session cookie. Login, session discovery, `/health`, `/version`, the UI shell, and static assets remain public. Unsafe authenticated methods additionally require a CSRF token. |
 | Public | `false` | No authentication required. Non-loopback bind (`0.0.0.0`) rejects `authEnabled=false`. |
 
-Session cookie: `session` (HTTP-only, SameSite=Lax).
-CSRF cookie: `csrf` (double-submit pattern).
+Session cookie: `goal_session` (HTTP-only, SameSite=Lax).
+CSRF cookie: `goal_csrf_token` (double-submit pattern). Send the same value in `X-CSRF-Token` for unsafe authenticated requests.
 
 ## Structured errors
 
@@ -40,7 +40,8 @@ Error codes: `bad_request`, `unauthorized`, `forbidden`, `not_found`, `conflict`
 | Method | Path | Auth | CSRF | Description |
 |--------|------|------|------|-------------|
 | `POST` | `/api/v1/auth/login` | No | No | Login with credentials. Sets session cookie. |
-| `POST` | `/api/v1/auth/logout` | Yes | No | Clears session cookie. |
+| `POST` | `/api/v1/auth/logout` | Yes | Yes | Clears session cookie. |
+| `GET` | `/api/v1/auth/session` | No | — | Reports whether the current browser session is authenticated. |
 
 ## Sessions & admin
 
@@ -99,9 +100,6 @@ Profiles are static configuration. Instances are created from profiles.
 | `POST` | `/api/v1/runtimes` | Yes | Yes | Create runtime. |
 | `PUT` | `/api/v1/runtimes/{id}` | Yes | Yes | Update runtime. |
 | `DELETE` | `/api/v1/runtimes/{id}` | Yes | Yes | Delete runtime. |
-| `POST` | `/api/v1/runtimes/{id}/start` | Yes | Yes | Start runtime process. |
-| `POST` | `/api/v1/runtimes/{id}/stop` | Yes | Yes | Stop runtime process. |
-| `POST` | `/api/v1/runtimes/{id}/restart` | Yes | Yes | Restart runtime process. |
 | `POST` | `/api/v1/runtimes/{id}/action/{action}` | Yes | Yes | Legacy action endpoint. |
 | `GET` | `/api/v1/runtimes/health` | Yes | — | Health of all runtimes (instance-based). |
 | `GET` | `/api/v1/runtimes/health/{id}` | Yes | — | Health of specific runtime. |

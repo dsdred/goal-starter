@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -23,6 +24,7 @@ import (
 //   - delayed         Wait N seconds then exit with code
 //   - exit-code       Exit with specified code immediately
 //   - infinite        Run until killed (SIGKILL)
+//   - echo            Print all remaining arguments and wait briefly
 
 func main() {
 	// Check for -sleep <duration> flag (used by supervisor tests).
@@ -63,6 +65,9 @@ func main() {
 		doExitCode()
 	case "infinite":
 		doInfinite()
+	case "echo":
+		fmt.Println(strings.Join(os.Args[2:], " "))
+		time.Sleep(2 * time.Second)
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown mode: %s\n", mode)
 		os.Exit(1)
@@ -153,6 +158,9 @@ func doExitCode() {
 }
 
 func doInfinite() {
+	if len(os.Args) > 2 {
+		fmt.Println(strings.Join(os.Args[2:], " "))
+	}
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGTERM)
 	signal.Notify(sigCh, syscall.SIGINT)

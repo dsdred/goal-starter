@@ -15,7 +15,7 @@
 
     // ========== CSRF ==========
     function getCSRFToken() {
-        const match = document.cookie.match(/csrf_token=([^;]+)/);
+        const match = document.cookie.match(/(?:^|;\s*)goal_csrf_token=([^;]+)/);
         return match ? match[1] : '';
     }
 
@@ -43,7 +43,7 @@
 
             if (response.ok) {
                 const data = await response.json();
-                csrfToken = data.csrf_token || '';
+                csrfToken = data.csrf_token || data.csrf || '';
                 isAuthenticated = true;
                 document.getElementById('login-modal').style.display = 'none';
                 document.getElementById('user-info').style.display = 'flex';
@@ -76,7 +76,7 @@
         try {
             const response = await fetch('/api/v1/auth/session');
             const data = await response.json();
-            if (data.authenticated === 'true') {
+            if (data.authenticated === true || data.authenticated === 'true') {
                 isAuthenticated = true;
                 csrfToken = getCSRFToken();
                 document.getElementById('user-info').style.display = 'flex';
@@ -169,16 +169,20 @@
     function renderRuntimes(runtimes) {
         const tbody = document.querySelector('#runtimes tbody');
         if (!tbody) return;
+		const emptyEl = document.querySelector('#runtimes .empty');
 
         if (runtimes.length === 0) {
-            const emptyEl = document.querySelector('#runtimes .empty');
             if (emptyEl) emptyEl.style.display = 'block';
             tbody.style.display = 'none';
+			const countEl = document.querySelector('#runtimes .count');
+			if (countEl) countEl.textContent = '(0)';
             return;
         }
 
         if (emptyEl) emptyEl.style.display = 'none';
         tbody.style.display = '';
+		const countEl = document.querySelector('#runtimes .count');
+		if (countEl) countEl.textContent = '(' + runtimes.length + ')';
 
         tbody.innerHTML = runtimes.map(r => `
             <tr>
@@ -188,8 +192,8 @@
                 <td>${(r.default_args || []).map(a => '<span class="arg">' + escapeHtml(a) + '</span>').join('')}</td>
                 <td><code>${escapeHtml(r.id)}</code></td>
                 <td class="actions">
-                    <button onclick="showEditRuntimeModal('${r.id}')" class="btn btn-secondary btn-sm">Edit</button>
-                    <button onclick="deleteRuntime('${r.id}')" class="btn btn-danger btn-sm">Delete</button>
+                    <button onclick="showEditRuntimeModal(${safeInlineArg(r.id)})" class="btn btn-secondary btn-sm">Edit</button>
+                    <button onclick="deleteRuntime(${safeInlineArg(r.id)})" class="btn btn-danger btn-sm">Delete</button>
                 </td>
             </tr>
         `).join('');
@@ -345,7 +349,7 @@
             if (response.ok) {
                 closeCreateRuntimeModal();
                 await loadRuntimes();
-                await refreshStatus();
+                await refreshDashboard();
                 return false;
             }
 
@@ -419,16 +423,20 @@
     function renderModels(models) {
         const tbody = document.querySelector('#models tbody');
         if (!tbody) return;
+		const emptyEl = document.querySelector('#models .empty');
 
         if (models.length === 0) {
-            const emptyEl = document.querySelector('#models .empty');
             if (emptyEl) emptyEl.style.display = 'block';
             tbody.style.display = 'none';
+			const countEl = document.querySelector('#models .count');
+			if (countEl) countEl.textContent = '(0)';
             return;
         }
 
         if (emptyEl) emptyEl.style.display = 'none';
         tbody.style.display = '';
+		const countEl = document.querySelector('#models .count');
+		if (countEl) countEl.textContent = '(' + models.length + ')';
 
         // Build runtime lookup for display
         const runtimeMap = {};
@@ -443,8 +451,8 @@
                 <td>${escapeHtml(m.format || '-')}</td>
                 <td><code>${escapeHtml(m.id)}</code></td>
                 <td class="actions">
-                    <button onclick="showEditModelModal('${m.id}')" class="btn btn-secondary btn-sm">Edit</button>
-                    <button onclick="deleteModel('${m.id}')" class="btn btn-danger btn-sm">Delete</button>
+                    <button onclick="showEditModelModal(${safeInlineArg(m.id)})" class="btn btn-secondary btn-sm">Edit</button>
+                    <button onclick="deleteModel(${safeInlineArg(m.id)})" class="btn btn-danger btn-sm">Delete</button>
                 </td>
             </tr>
         `).join('');
@@ -514,7 +522,7 @@
                 .then(r => r.ok ? r.json() : [])
                 .then(runtimes => {
                     select.innerHTML = '<option value="">Select a runtime...</option>' +
-                        runtimes.map(r => '<option value="' + r.id + '" ' + (r.id === m.runtime_id ? 'selected' : '') + '>' + escapeHtml(r.name) + '</option>').join('');
+                        runtimes.map(r => '<option value="' + escapeHtml(r.id) + '" ' + (r.id === m.runtime_id ? 'selected' : '') + '>' + escapeHtml(r.name) + '</option>').join('');
                 })
                 .catch(() => { select.innerHTML = '<option value="">Error loading runtimes</option>'; });
             }
@@ -543,6 +551,7 @@
             if (pathGroup) pathGroup.style.display = 'block';
         }
     }
+	window.updateEditModelKindVisibility = updateEditModelKindVisibility;
 
     window.handleEditModel = async function(event) {
         event.preventDefault();
@@ -565,11 +574,11 @@
         }
 
         let path = '';
-        let arguments = [];
+        let modelArguments = [];
         if (kind === 'arguments') {
             const argsText = document.getElementById('edit-model-arguments').value.trim();
-            arguments = argsText ? argsText.split(/\s+/).filter(a => a.length > 0) : [];
-            if (arguments.length === 0) {
+            modelArguments = argsText ? argsText.split(/\s+/).filter(a => a.length > 0) : [];
+            if (modelArguments.length === 0) {
                 const errArgs = document.getElementById('edit-model-args-error');
                 if (errArgs) { errArgs.textContent = 'Arguments are required for kind=arguments'; errArgs.style.display = 'block'; }
                 return false;
@@ -591,7 +600,7 @@
             name: name,
             runtime_id: runtimeId,
             path: path,
-            arguments: arguments
+            arguments: modelArguments
         };
 
         try {
@@ -637,7 +646,7 @@
             if (resp.ok) {
                 const runtimes = await resp.json();
                 select.innerHTML = '<option value="">Select a runtime...</option>' +
-                    runtimes.map(r => '<option value="' + r.id + '">' + escapeHtml(r.name) + '</option>').join('');
+                    runtimes.map(r => '<option value="' + escapeHtml(r.id) + '">' + escapeHtml(r.name) + '</option>').join('');
             }
         } catch { /* ignore */ }
     }
@@ -658,6 +667,7 @@
         if (errPath) { errPath.style.display = 'none'; }
         if (errArgs) { errArgs.style.display = 'none'; }
     }
+	window.updateModelKindVisibility = updateModelKindVisibility;
 
     window.handleCreateModel = async function(event) {
         event.preventDefault();
@@ -685,11 +695,11 @@
         }
 
         let path = '';
-        let arguments = [];
+        let modelArguments = [];
         if (kind === 'arguments') {
             const argsText = document.getElementById('model-arguments').value.trim();
-            arguments = argsText ? argsText.split(/\s+/).filter(a => a.length > 0) : [];
-            if (arguments.length === 0) {
+            modelArguments = argsText ? argsText.split(/\s+/).filter(a => a.length > 0) : [];
+            if (modelArguments.length === 0) {
                 if (errArgs) { errArgs.textContent = 'Arguments are required for kind=arguments'; errArgs.style.display = 'block'; }
                 return false;
             }
@@ -708,7 +718,7 @@
             name: name,
             runtime_id: runtimeId,
             path: path,
-            arguments: arguments
+            arguments: modelArguments
         };
 
         try {
@@ -764,14 +774,19 @@
     function renderProfiles(profiles) {
         const tbody = document.getElementById('profiles-body');
         if (!tbody) return;
+		const emptyEl = document.querySelector('#profiles .empty');
 
         if (profiles.length === 0) {
-            const emptyEl = document.querySelector('#profiles .empty');
             if (emptyEl) emptyEl.style.display = 'block';
+			tbody.innerHTML = '';
+			const countEl = document.querySelector('#profiles .count');
+			if (countEl) countEl.textContent = '(0)';
             return;
         }
 
         if (emptyEl) emptyEl.style.display = 'none';
+		const countEl = document.querySelector('#profiles .count');
+		if (countEl) countEl.textContent = '(' + profiles.length + ')';
 
         // Build lookups for display names
         const rtMap = {};
@@ -783,19 +798,19 @@
             const rtName = p.runtime_id ? (rtMap[p.runtime_id] || p.runtime_id) : '-';
             const mdName = p.model_id ? (mdMap[p.model_id] || p.model_id) : '-';
             return `
-            <tr id="profile-row-${p.id}">
+            <tr id="profile-row-${escapeHtml(p.id)}">
                 <td>${escapeHtml(p.name)}</td>
                 <td>${escapeHtml(rtName)}</td>
                 <td>${escapeHtml(mdName)}</td>
-                <td>${p.host || ''}${p.port ? ':' + p.port : ''}</td>
+                <td>${escapeHtml(p.host || '')}${p.port ? ':' + p.port : ''}</td>
                 <td>${(p.args || []).map(a => '<span class="arg">' + escapeHtml(a) + '</span>').join('')}</td>
                 <td><span class="profile-status stopped">not started</span></td>
                 <td class="actions">
-                    <button onclick="showProfilePreview('${p.id}')" class="btn btn-secondary btn-sm" title="Show resolved command">Preview</button>
-                    <button onclick="showEditProfileModal('${p.id}')" class="btn btn-secondary btn-sm">Edit</button>
-                    <button onclick="startProfile('${p.id}')" class="btn btn-success btn-sm">Start</button>
-                    <button onclick="stopProfile('${p.id}')" class="btn btn-danger btn-sm">Stop</button>
-                    <button onclick="restartProfile('${p.id}')" class="btn btn-warning btn-sm">Restart</button>
+                    <button onclick="showProfilePreview(${safeInlineArg(p.id)})" class="btn btn-secondary btn-sm" title="Show resolved command">Preview</button>
+                    <button onclick="showEditProfileModal(${safeInlineArg(p.id)})" class="btn btn-secondary btn-sm">Edit</button>
+                    <button onclick="startProfile(${safeInlineArg(p.id)})" class="btn btn-success btn-sm">Start</button>
+                    <button onclick="stopProfile(${safeInlineArg(p.id)})" class="btn btn-danger btn-sm">Stop</button>
+                    <button onclick="restartProfile(${safeInlineArg(p.id)})" class="btn btn-warning btn-sm">Restart</button>
                 </td>
             </tr>
         `}).join('');
@@ -855,7 +870,7 @@
                 .then(r => r.ok ? r.json() : [])
                 .then(runtimes => {
                     rtSelect.innerHTML = '<option value="">Select a runtime...</option>' +
-                        runtimes.map(r => '<option value="' + r.id + '" ' + (r.id === p.runtime_id ? 'selected' : '') + '>' + escapeHtml(r.name) + '</option>').join('');
+                        runtimes.map(r => '<option value="' + escapeHtml(r.id) + '" ' + (r.id === p.runtime_id ? 'selected' : '') + '>' + escapeHtml(r.name) + '</option>').join('');
                 })
                 .catch(() => { rtSelect.innerHTML = '<option value="">Error loading runtimes</option>'; });
             }
@@ -869,7 +884,7 @@
                 .then(r => r.ok ? r.json() : [])
                 .then(models => {
                     mdSelect.innerHTML = '<option value="">Select a model...</option>' +
-                        models.map(m => '<option value="' + m.id + '" ' + (m.id === p.model_id ? 'selected' : '') + '>' + escapeHtml(m.name) + '</option>').join('');
+                        models.map(m => '<option value="' + escapeHtml(m.id) + '" ' + (m.id === p.model_id ? 'selected' : '') + '>' + escapeHtml(m.name) + '</option>').join('');
                 })
                 .catch(() => { mdSelect.innerHTML = '<option value="">Error loading models</option>'; });
             }
@@ -951,7 +966,7 @@
             if (resp.ok) {
                 const runtimes = await resp.json();
                 runtimeSelect.innerHTML = '<option value="">Select a runtime...</option>' +
-                    runtimes.map(r => '<option value="' + r.id + '">' + escapeHtml(r.name) + '</option>').join('');
+                    runtimes.map(r => '<option value="' + escapeHtml(r.id) + '">' + escapeHtml(r.name) + '</option>').join('');
             }
         } catch { /* ignore */ }
 
@@ -965,7 +980,7 @@
             if (resp.ok) {
                 const models = await resp.json();
                 modelSelect.innerHTML = '<option value="">Select a model...</option>' +
-                    models.map(m => '<option value="' + m.id + '">' + escapeHtml(m.name) + '</option>').join('');
+                    models.map(m => '<option value="' + escapeHtml(m.id) + '">' + escapeHtml(m.name) + '</option>').join('');
             }
         } catch { /* ignore */ }
     }
@@ -1057,7 +1072,8 @@
                 credentials: 'same-origin'
             });
             if (response.ok) {
-                await refreshStatus();
+                await loadInstances();
+				await refreshDashboard();
                 await loadProfiles();
                 showToast('Profile started', 'success');
             } else {
@@ -1084,7 +1100,8 @@
                 credentials: 'same-origin'
             });
             if (response.ok) {
-                await refreshStatus();
+                await loadInstances();
+				await refreshDashboard();
                 await loadProfiles();
                 showToast('Profile stopped', 'success');
             } else {
@@ -1111,7 +1128,8 @@
                 credentials: 'same-origin'
             });
             if (response.ok) {
-                await refreshStatus();
+                await loadInstances();
+				await refreshDashboard();
                 await loadProfiles();
                 showToast('Profile restarted', 'success');
             } else {
@@ -1198,7 +1216,7 @@
         }
 
         const p = document.createElement('p');
-        const time = new Date(ev.time).toLocaleTimeString();
+        const time = ev.time ? new Date(ev.time).toLocaleTimeString() : new Date().toLocaleTimeString();
         const cls = ev.stream === 'stderr' ? 'log-stderr' :
                     ev.stream === 'system' ? 'log-system' : 'log-stdout';
         p.className = cls;
@@ -1282,7 +1300,7 @@
         panel.innerHTML = '';
         items.forEach(ev => {
             const p = document.createElement('p');
-            const time = new Date(ev.timestamp).toLocaleTimeString();
+			const time = ev.time ? new Date(ev.time).toLocaleTimeString() : new Date().toLocaleTimeString();
             const cls = ev.stream === 'stderr' ? 'log-stderr' :
                         ev.stream === 'system' ? 'log-system' : 'log-stdout';
             p.className = cls;
@@ -1316,26 +1334,28 @@
         tbody.innerHTML = instances.map(inst => {
             const profileName = inst.profile_id ? (profileMap[inst.profile_id] || inst.profile_id) : '-';
             const stateClass = inst.state ? inst.state.toLowerCase() : 'unknown';
-            const exitInfo = (inst.exit_class || inst.exit_code !== null)
-                ? `${inst.exit_class || '-'} (${inst.exit_code !== null ? inst.exit_code : '-'})`
+			const hasExitCode = inst.exit_code !== null && inst.exit_code !== undefined;
+            const exitInfo = (inst.exit_class || hasExitCode)
+                ? `${inst.exit_class || '-'} (${hasExitCode ? inst.exit_code : '-'})`
                 : '-';
             const started = inst.started_at ? new Date(inst.started_at).toLocaleString() : '-';
-            const stopped = inst.stopped_at ? new Date(inst.stopped_at).toLocaleString() : '-';
+			const stoppedAt = inst.stopped_at ? new Date(inst.stopped_at) : null;
+            const stopped = stoppedAt && stoppedAt.getFullYear() > 1 ? stoppedAt.toLocaleString() : '-';
 
             let actions = '';
             if (inst.state === 'running' || inst.state === 'starting' || inst.state === 'stopping') {
                 actions = `
-                    <button onclick="stopInstanceInstance('${inst.id}')" class="btn btn-danger btn-sm">Stop</button>
-                    <button onclick="restartInstanceInstance('${inst.id}')" class="btn btn-warning btn-sm">Restart</button>
-                    <button onclick="showInstanceLogs('${inst.id}')" class="btn btn-secondary btn-sm">Logs</button>
+                    <button onclick="stopInstanceInstance(${safeInlineArg(inst.id)})" class="btn btn-danger btn-sm">Stop</button>
+                    <button onclick="restartInstanceInstance(${safeInlineArg(inst.id)})" class="btn btn-warning btn-sm">Restart</button>
+                    <button onclick="showInstanceLogs(${safeInlineArg(inst.id)})" class="btn btn-secondary btn-sm">Logs</button>
                 `;
             } else if (inst.state === 'exited' || inst.state === 'failed' || inst.state === 'stale') {
                 actions = `
-                    <button onclick="restartInstanceInstance('${inst.id}')" class="btn btn-warning btn-sm">Restart</button>
-                    <button onclick="showInstanceLogs('${inst.id}')" class="btn btn-secondary btn-sm">Logs</button>
+                    <button onclick="restartInstanceInstance(${safeInlineArg(inst.id)})" class="btn btn-warning btn-sm">Restart</button>
+                    <button onclick="showInstanceLogs(${safeInlineArg(inst.id)})" class="btn btn-secondary btn-sm">Logs</button>
                 `;
             } else {
-                actions = `<button onclick="showInstanceLogs('${inst.id}')" class="btn btn-secondary btn-sm">Logs</button>`;
+                actions = `<button onclick="showInstanceLogs(${safeInlineArg(inst.id)})" class="btn btn-secondary btn-sm">Logs</button>`;
             }
 
             return `
@@ -1500,6 +1520,14 @@
         div.textContent = str;
         return div.innerHTML;
     }
+
+	function safeInlineArg(value) {
+		return JSON.stringify(String(value))
+			.replace(/&/g, '&amp;')
+			.replace(/"/g, '&quot;')
+			.replace(/</g, '&lt;')
+			.replace(/>/g, '&gt;');
+	}
 
     // ========== Init ==========
     async function init() {

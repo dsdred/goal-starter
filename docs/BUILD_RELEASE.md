@@ -10,7 +10,7 @@ This document describes the release process for GoAl.
 | `goal-linux-amd64` | Linux | amd64 |
 | `checksums.txt` | — | SHA256 checksums for all binaries |
 
-**Tag:** `v1.0.0`
+**Latest published tag:** `v1.0.0`
 **Release:** [GitHub Releases](https://github.com/dsdred/goal-starter/releases/tag/v1.0.0)
 
 ## Windows Authenticode signing
@@ -63,7 +63,7 @@ For a signed build:
 $env:SIGN_CERT = "C:\certs\goal.pfx"
 $env:SIGN_PASSWORD = "your_password"
 $env:SIGN_TIMESTAMP = "http://timestamp.digicert.com"
-.\scripts\build-all.ps1
+.\scripts\build-all.ps1 -ReleaseVersion vX.Y.Z
 ```
 
 Output:

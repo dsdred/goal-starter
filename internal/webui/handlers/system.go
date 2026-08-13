@@ -43,6 +43,7 @@ type SystemHandler struct {
 	tmpl      *template.Template
 	tmplErr   error
 	heartbeat time.Duration
+	startedAt time.Time
 }
 
 // NewSystemHandler creates a new SystemHandler.
@@ -52,6 +53,7 @@ func NewSystemHandler(supervisor *process.Supervisor, sess *security.SessionStor
 		sess:       sess,
 		csrf:       csrf,
 		insSvc:     insSvc,
+		startedAt:  time.Now(),
 	}
 	for _, opt := range opts {
 		opt(h)
@@ -69,7 +71,7 @@ func (h *SystemHandler) WithTemplateFS(fsys fs.FS) *SystemHandler {
 func (h *SystemHandler) Health(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status": "ok",
-		"uptime": time.Since(time.Now().Add(-time.Since(time.Now()))).String(),
+		"uptime": time.Since(h.startedAt).Truncate(time.Millisecond).String(),
 	})
 }
 

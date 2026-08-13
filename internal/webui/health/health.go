@@ -86,7 +86,7 @@ func (h *HealthChecker) CheckAll() []*CheckResult {
 			}
 			defer conn.Close()
 
-			results[idx].Latency = time.Since(start)
+			results[idx].Latency = positiveLatency(time.Since(start))
 			results[idx].Healthy = true
 		}(i, def)
 	}
@@ -127,10 +127,17 @@ func (h *HealthChecker) CheckRuntime(id string) (*CheckResult, error) {
 				Name:    def.Name,
 				Healthy: true,
 				Address: address,
-				Latency: time.Since(start),
+				Latency: positiveLatency(time.Since(start)),
 			}, nil
 		}
 	}
 
 	return nil, errors.New("runtime not found")
+}
+
+func positiveLatency(elapsed time.Duration) time.Duration {
+	if elapsed <= 0 {
+		return time.Nanosecond
+	}
+	return elapsed
 }

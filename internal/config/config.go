@@ -166,13 +166,10 @@ func migrateV1ToV2(cfg *Config) error {
 }
 
 func Save(path string, cfg Config) error {
-	// Clear sensitive fields before saving.
-	clone := cfg
-	clone.AdminPassword = ""
-	if err := clone.Validate(); err != nil {
+	if err := cfg.Validate(); err != nil {
 		return err
 	}
-	data, err := json.MarshalIndent(clone, "", "  ")
+	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return err
 	}
@@ -198,6 +195,9 @@ func (c Config) Validate() error {
 	}
 	if c.AuthEnabled && c.AdminUser == "" {
 		return errors.New("adminUser is required when auth is enabled")
+	}
+	if c.AuthEnabled && c.AdminPassword == "" {
+		return errors.New("adminPassword is required when auth is enabled")
 	}
 	return nil
 }

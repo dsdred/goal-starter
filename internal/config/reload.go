@@ -160,8 +160,6 @@ func (rc *ReloadConfig) Save() error {
 	clone := rc.cfg
 	rc.mu.RUnlock()
 
-	// Clear sensitive fields before saving.
-	clone.AdminPassword = ""
 	if err := clone.Validate(); err != nil {
 		return err
 	}

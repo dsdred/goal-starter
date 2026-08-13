@@ -244,9 +244,9 @@ func TestReloadConfig_Save(t *testing.T) {
 	if loaded.AdminUser != "newadmin" {
 		t.Errorf("expected admin user 'newadmin', got %s", loaded.AdminUser)
 	}
-	// Password should be cleared on save.
-	if loaded.AdminPassword != "" {
-		t.Error("expected password to be cleared on save")
+	// The password must remain available after a restart when auth is enabled.
+	if loaded.AdminPassword != "secret" {
+		t.Errorf("expected password to be preserved on save, got %q", loaded.AdminPassword)
 	}
 }
 

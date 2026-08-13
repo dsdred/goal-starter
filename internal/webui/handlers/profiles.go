@@ -163,6 +163,7 @@ func (h *ProfilesHandler) Start(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, err.Error())
 		return
 	}
+	inst.Environment = nil
 	writeJSON(w, http.StatusOK, inst)
 }
 
@@ -179,14 +180,19 @@ func (h *ProfilesHandler) Stop(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, err.Error())
 		return
 	}
+	stopped := 0
 	for _, inst := range instances {
 		if inst.ProfileID == id && inst.IsActive() {
 			if err := h.instanceSvc.StopInstance(r.Context(), inst.ID); err != nil {
 				writeError(w, 500, err.Error())
 				return
 			}
-			break
+			stopped++
 		}
+	}
+	if stopped == 0 {
+		writeError(w, http.StatusNotFound, "no running instance for this profile")
+		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "stopped"})
 }
@@ -204,14 +210,19 @@ func (h *ProfilesHandler) Restart(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, err.Error())
 		return
 	}
+	restarted := 0
 	for _, inst := range instances {
 		if inst.ProfileID == id && inst.IsActive() {
 			if _, err := h.instanceSvc.RestartInstance(r.Context(), inst.ID); err != nil {
 				writeError(w, 500, err.Error())
 				return
 			}
-			break
+			restarted++
 		}
+	}
+	if restarted == 0 {
+		writeError(w, http.StatusNotFound, "no running instance for this profile")
+		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "restarted"})
 }
@@ -249,29 +260,40 @@ func (h *ProfilesHandler) Action(w http.ResponseWriter, r *http.Request) {
 			writeError(w, 500, err.Error())
 			return
 		}
+		inst.Environment = nil
 		writeJSON(w, http.StatusOK, inst)
 	case "stop":
 		instances, _ := h.instanceSvc.ListInstances(r.Context())
+		stopped := 0
 		for _, inst := range instances {
 			if inst.ProfileID == id && inst.IsActive() {
 				if err := h.instanceSvc.StopInstance(r.Context(), inst.ID); err != nil {
 					writeError(w, 500, err.Error())
 					return
 				}
-				break
+				stopped++
 			}
+		}
+		if stopped == 0 {
+			writeError(w, http.StatusNotFound, "no running instance for this profile")
+			return
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"status": "stopped"})
 	case "restart":
 		instances, _ := h.instanceSvc.ListInstances(r.Context())
+		restarted := 0
 		for _, inst := range instances {
 			if inst.ProfileID == id && inst.IsActive() {
 				if _, err := h.instanceSvc.RestartInstance(r.Context(), inst.ID); err != nil {
 					writeError(w, 500, err.Error())
 					return
 				}
-				break
+				restarted++
 			}
+		}
+		if restarted == 0 {
+			writeError(w, http.StatusNotFound, "no running instance for this profile")
+			return
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"status": "restarted"})
 	default:

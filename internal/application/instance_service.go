@@ -106,6 +106,7 @@ func (s *InstanceService) GetProfileStatus(ctx context.Context, profileID string
 	for _, inst := range instances {
 		if inst.State == "running" || inst.State == "starting" {
 			summary.Running++
+			inst.Environment = nil
 			summary.ActiveInst = inst
 		}
 	}

@@ -55,7 +55,7 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
 
-          $VERSION = git describe --tags --abbrev=0
+          $VERSION = "${{ github.ref_name }}"
           $GIT_HASH = git rev-parse --short HEAD
           $BUILD_TIME = (Get-Date -UFormat "%Y-%m-%dT%H:%M:%SZ")
           $LDFLAGS = "-ldflags=-s -w -X github.com/dsdred/goal/internal/version.Version=$VERSION -X github.com/dsdred/goal/internal/version.GitCommit=$GIT_HASH -X github.com/dsdred/goal/internal/version.BuildTime=$BUILD_TIME"
@@ -83,7 +83,24 @@ jobs:
         shell: pwsh
         run: |
           if (Test-Path winres\winres.json) {
-            go-winres make --arch amd64 2>&1 | Out-Null
+            $VERSION = "${{ github.ref_name }}"
+            $productVersion = $VERSION -replace '^v', ''
+            if ($productVersion -notmatch '^\d+\.\d+\.\d+$') {
+              throw "release version must be MAJOR.MINOR.PATCH: $VERSION"
+            }
+            $fileVersion = "$productVersion.0"
+            $generatedWinresPath = "winres\winres.generated.json"
+            $winresContent = Get-Content winres\winres.json -Raw
+            $winresContent = $winresContent -replace '"file_version":\s*"[^"]*"', "`"file_version`": `"$fileVersion`""
+            $winresContent = $winresContent -replace '"product_version":\s*"[^"]*"', "`"product_version`": `"$productVersion`""
+            $winresContent = $winresContent -replace '"FileVersion":\s*"[^"]*"', "`"FileVersion`": `"$fileVersion`""
+            $winresContent = $winresContent -replace '"ProductVersion":\s*"[^"]*"', "`"ProductVersion`": `"$productVersion`""
+            [System.IO.File]::WriteAllText($generatedWinresPath, $winresContent, (New-Object System.Text.UTF8Encoding $false))
+            try {
+              go-winres make --in $generatedWinresPath --arch amd64 2>&1 | Out-Null
+            } finally {
+              Remove-Item $generatedWinresPath -ErrorAction SilentlyContinue
+            }
             $syso = Get-ChildItem rsrc_windows_amd64.syso -ErrorAction SilentlyContinue
             if ($syso) {
               Copy-Item $syso cmd\goal\rsrc.syso
@@ -96,7 +113,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $VERSION = git describe --tags --abbrev=0
+          $VERSION = "${{ github.ref_name }}"
           $GIT_HASH = git rev-parse --short HEAD
           $BUILD_TIME = (Get-Date -UFormat "%Y-%m-%dT%H:%M:%SZ")
           $LDFLAGS = "-ldflags=-s -w -X github.com/dsdred/goal/internal/version.Version=$VERSION -X github.com/dsdred/goal/internal/version.GitCommit=$GIT_HASH -X github.com/dsdred/goal/internal/version.BuildTime=$BUILD_TIME"
@@ -273,16 +290,7 @@ jobs:
             bin/goal-windows-amd64.exe
             bin/goal-linux-amd64
             bin/checksums.txt
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Upload Linux artifacts
-        if: matrix.os == 'ubuntu-latest'
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            bin/goal-windows-amd64.exe
-            bin/goal-linux-amd64
-            bin/checksums.txt
+            releases/goal-*-windows-amd64.zip
+            releases/goal-*-linux-amd64.tar.gz
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

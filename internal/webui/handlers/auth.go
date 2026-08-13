@@ -63,13 +63,12 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	}
 	security.SetSessionCookie(w, session.Token)
 
-	// Set CSRF token cookie.
-	csrfToken := h.csrf.RotateToken()
-	security.SetCSRFCookie(w, csrfToken)
+	// The CSRF token is generated with and bound to this session.
+	security.SetCSRFCookie(w, session.CSRFToken)
 
 	writeJSON(w, http.StatusOK, map[string]string{
-		"token":         session.Token,
-		"csrf":          csrfToken,
+		"csrf":          session.CSRFToken,
+		"csrf_token":    session.CSRFToken,
 		"authenticated": "true",
 	})
 }

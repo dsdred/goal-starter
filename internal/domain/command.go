@@ -150,6 +150,12 @@ func (r *LaunchResolver) resolveModelArgs(spec *CommandSpec, model *Model) {
 	}
 }
 
+// AddModelArgs adds the same model-specific arguments used by process launch.
+// It is exported so preview can share the exact launch composition.
+func (r *LaunchResolver) AddModelArgs(spec *CommandSpec, model *Model) {
+	r.resolveModelArgs(spec, model)
+}
+
 // normalizeKey returns the environment key in a consistent case.
 // On Windows, environment variable names are case-insensitive.
 func (r *LaunchResolver) normalizeKey(key string) string {

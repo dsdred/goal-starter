@@ -185,7 +185,7 @@ type InstanceStore interface {
 - `listenAddress` — bind address
 - `webPort` — listen port
 - `dataDir` — путь к хранилищу
-- `adminPassword` — сбрасывается при Save
+- `adminPassword` — сохраняется в конфигурации для работы после перезапуска; файл требует POSIX permissions или Windows ACL
 
 ### Поля hot-reload (применяются без restart):
 - `authEnabled` — влияет на аутентификацию
@@ -207,7 +207,7 @@ type InstanceStore interface {
 `AuthEnabled` из config контролирует включение аутентификации ✅
 
 ### 9.3. Cookie security — ПРОВЕРЕНО ✅
-- `HttpOnly: true` — session и CSRF cookies ✅
+- `HttpOnly: true` для session cookie; CSRF cookie доступен same-origin JavaScript для double-submit ✅
 - `SameSite: LaxMode` (session), `StrictMode` (CSRF) ✅
 - `Secure: false` — будет true в HTTPS middleware ✅
 

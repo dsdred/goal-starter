@@ -3,6 +3,7 @@ package handlers
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"io/fs"
 	"net/http"
@@ -18,6 +19,28 @@ import (
 	"github.com/dsdred/goal/internal/process"
 	"github.com/dsdred/goal/internal/webui/security"
 )
+
+func TestSystemHandler_HealthReportsElapsedUptime(t *testing.T) {
+	h := NewSystemHandler(nil, nil, nil, nil)
+	time.Sleep(2 * time.Millisecond)
+
+	w := httptest.NewRecorder()
+	h.Health(w, httptest.NewRequest(http.MethodGet, "/api/v1/health", nil))
+
+	var body struct {
+		Uptime string `json:"uptime"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode health response: %v", err)
+	}
+	uptime, err := time.ParseDuration(body.Uptime)
+	if err != nil {
+		t.Fatalf("parse uptime %q: %v", body.Uptime, err)
+	}
+	if uptime < time.Millisecond {
+		t.Fatalf("expected elapsed uptime, got %s", uptime)
+	}
+}
 
 func TestSystemHandler_ServeIndex_RendersTemplate(t *testing.T) {
 	// Build a minimal template FS that mirrors the real template structure.
