@@ -22,6 +22,26 @@ type mockStore struct {
 	updateFn  func(e *domain.LaunchInstanceEntry) error
 }
 
+// concurrentHookStore runs its update hook without holding the backing store
+// mutex. It lets lifecycle tests block one persistence operation while proving
+// whether a later process generation is incorrectly allowed to start.
+type concurrentHookStore struct {
+	*mockStore
+	updateHook func(e *domain.LaunchInstanceEntry) error
+}
+
+func (s *concurrentHookStore) Update(e *domain.LaunchInstanceEntry) error {
+	if s.updateHook != nil {
+		if err := s.updateHook(e); err != nil {
+			return err
+		}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.instances[string(e.ID)] = e
+	return nil
+}
+
 func newMockStore() *mockStore {
 	return &mockStore{
 		instances: make(map[string]*domain.LaunchInstanceEntry),
@@ -150,6 +170,48 @@ func TestSlotReservationDoubleRelease(t *testing.T) {
 	<-sem
 	if got := len(sem); got != 0 {
 		t.Fatalf("expected zero tokens after drain, got %d", got)
+	}
+}
+
+func TestInstanceRunStateCompletionAndSlotAreGenerationScoped(t *testing.T) {
+	sem := newSemaphore(2)
+	<-sem
+	<-sem
+	oldRun := newInstanceRunState(newSlotReservation(sem))
+	newRun := newInstanceRunState(newSlotReservation(sem))
+
+	if oldRun.done == newRun.done {
+		t.Fatal("different process generations share a completion channel")
+	}
+
+	oldRun.releaseSlot()
+	oldRun.releaseSlot()
+	oldRun.complete()
+	oldRun.complete()
+
+	select {
+	case <-oldRun.done:
+	default:
+		t.Fatal("old generation completion signal is still open")
+	}
+	select {
+	case <-newRun.done:
+		t.Fatal("old generation closed the new generation completion signal")
+	default:
+	}
+	if got := len(sem); got != 1 {
+		t.Fatalf("available slots after repeated old-run release = %d, want 1", got)
+	}
+
+	newRun.releaseSlot()
+	newRun.complete()
+	select {
+	case <-newRun.done:
+	default:
+		t.Fatal("new generation completion signal is still open")
+	}
+	if got := len(sem); got != 2 {
+		t.Fatalf("available slots after new-run release = %d, want 2", got)
 	}
 }
 
@@ -450,6 +512,72 @@ func TestControllerDoneClosesAfterFinalPersistence(t *testing.T) {
 	}
 }
 
+func TestRestartWaitsForTerminalRunCompletionBeforePublishingNextRun(t *testing.T) {
+	terminalUpdateStarted := make(chan struct{})
+	releaseTerminalUpdate := make(chan struct{})
+	var terminalOnce sync.Once
+	store := &concurrentHookStore{mockStore: newMockStore()}
+	store.updateHook = func(e *domain.LaunchInstanceEntry) error {
+		if e.State == string(domain.InstanceStateExited) || e.State == string(domain.InstanceStateFailed) {
+			terminalOnce.Do(func() {
+				close(terminalUpdateStarted)
+				<-releaseTerminalUpdate
+			})
+		}
+		return nil
+	}
+
+	sup := newTestSupervisor(t, store, SupervisorConfig{LogBufferSize: 64})
+	profile := &domain.Profile{ID: "restart-order", Name: "restart-order"}
+	runtime := &domain.Runtime{ID: "runtime", Name: "runtime", Executable: buildFakeRuntimeForTest(t)}
+	inst, err := sup.Start(context.Background(), profile, runtime, nil, []string{"exit-code", "0"}, nil)
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	sup.mu.RLock()
+	ctrl := sup.instances[inst.ID]
+	sup.mu.RUnlock()
+	oldDone := ctrl.GetControllerDone()
+
+	select {
+	case <-terminalUpdateStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("terminal persistence did not start")
+	}
+
+	restartResult := make(chan error, 1)
+	go func() {
+		_, restartErr := sup.Restart(context.Background(), inst.ID)
+		restartResult <- restartErr
+	}()
+
+	select {
+	case restartErr := <-restartResult:
+		t.Fatalf("restart completed before previous run persistence: %v", restartErr)
+	case <-time.After(100 * time.Millisecond):
+	}
+	if currentDone := ctrl.GetControllerDone(); currentDone != oldDone {
+		t.Fatal("new run was published before previous run completion")
+	}
+
+	close(releaseTerminalUpdate)
+	select {
+	case restartErr := <-restartResult:
+		if restartErr != nil {
+			t.Fatalf("restart: %v", restartErr)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("restart did not continue after previous run completion")
+	}
+	newDone := ctrl.GetControllerDone()
+	if newDone == oldDone {
+		t.Fatal("restart reused the previous run completion signal")
+	}
+	if err := waitForProcess(context.Background(), ctrl, 5*time.Second); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestRestartHoldsConcurrencySlotAndUsesFreshDoneSignal(t *testing.T) {
 	store := newMockStore()
 	sup := newTestSupervisor(t, store, SupervisorConfig{MaxConcurrent: 1, LogBufferSize: 64})
@@ -460,6 +588,16 @@ func TestRestartHoldsConcurrencySlotAndUsesFreshDoneSignal(t *testing.T) {
 		t.Fatalf("start: %v", err)
 	}
 	oldPID := inst.PID
+	sup.mu.RLock()
+	ctrl := sup.instances[inst.ID]
+	sup.mu.RUnlock()
+	oldDone := ctrl.GetControllerDone()
+	select {
+	case <-oldDone:
+		t.Fatal("initial process completion signal closed while process is running")
+	default:
+	}
+
 	restarted, err := sup.Restart(context.Background(), inst.ID)
 	if err != nil {
 		t.Fatalf("restart: %v", err)
@@ -470,16 +608,30 @@ func TestRestartHoldsConcurrencySlotAndUsesFreshDoneSignal(t *testing.T) {
 	if got := len(sup.semaphore); got != 0 {
 		t.Fatalf("available slots after restart = %d, want 0 while process is running", got)
 	}
-	sup.mu.RLock()
-	ctrl := sup.instances[inst.ID]
-	sup.mu.RUnlock()
+	newDone := ctrl.GetControllerDone()
+	if oldDone == newDone {
+		t.Fatal("restarted process reused the previous generation's completion signal")
+	}
 	select {
-	case <-ctrl.GetControllerDone():
+	case <-oldDone:
+	default:
+		t.Fatal("previous generation completion signal remained open after restart")
+	}
+	select {
+	case <-newDone:
 		t.Fatal("restarted process inherited an already-closed done signal")
 	default:
 	}
 	if err := sup.Stop(context.Background(), inst.ID); err != nil {
 		t.Fatalf("stop restarted process: %v", err)
+	}
+	select {
+	case <-newDone:
+	default:
+		t.Fatal("restarted process completion signal remained open after stop")
+	}
+	if got := len(sup.semaphore); got != 1 {
+		t.Fatalf("available slots after stopping restarted process = %d, want 1", got)
 	}
 }
 
