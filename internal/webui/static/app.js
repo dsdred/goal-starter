@@ -24,11 +24,34 @@
     }
 
     // ========== Auth ==========
+    function resetLoginState() {
+        const passwordEl = document.getElementById('password');
+        const errorEl = document.getElementById('login-error');
+        if (passwordEl) passwordEl.value = '';
+        if (errorEl) {
+            errorEl.textContent = '';
+            errorEl.style.display = 'none';
+        }
+    }
+
+    function showLoginError(message) {
+        resetLoginState();
+        const errorEl = document.getElementById('login-error');
+        if (errorEl) {
+            errorEl.textContent = message;
+            errorEl.style.display = 'block';
+        }
+    }
+
+    function showLogin() {
+        resetLoginState();
+        document.getElementById('login-modal').style.display = 'flex';
+    }
+
     window.handleLogin = async function(event) {
         event.preventDefault();
         const username = document.getElementById('username').value;
         const password = document.getElementById('password').value;
-        const errorEl = document.getElementById('login-error');
 
         try {
             const response = await fetch('/api/v1/auth/login', {
@@ -45,18 +68,17 @@
                 const data = await response.json();
                 csrfToken = data.csrf_token || data.csrf || '';
                 isAuthenticated = true;
+                resetLoginState();
                 document.getElementById('login-modal').style.display = 'none';
                 document.getElementById('user-info').style.display = 'flex';
                 document.getElementById('username-display').textContent = username;
                 reloadAllData();
             } else {
                 const data = await response.json().catch(() => ({}));
-                errorEl.textContent = data.error || 'Authentication failed';
-                errorEl.style.display = 'block';
+                showLoginError(data.error || 'Authentication failed');
             }
         } catch (err) {
-            errorEl.textContent = 'Login request failed: ' + err.message;
-            errorEl.style.display = 'block';
+            showLoginError('Login request failed: ' + err.message);
         }
         return false;
     };
@@ -69,7 +91,7 @@
         });
         isAuthenticated = false;
         document.getElementById('user-info').style.display = 'none';
-        document.getElementById('login-modal').style.display = 'flex';
+        showLogin();
     };
 
     async function checkAuth() {
@@ -81,10 +103,10 @@
                 csrfToken = getCSRFToken();
                 document.getElementById('user-info').style.display = 'flex';
             } else {
-                document.getElementById('login-modal').style.display = 'flex';
+                showLogin();
             }
         } catch {
-            document.getElementById('login-modal').style.display = 'flex';
+            showLogin();
         }
     }
 
