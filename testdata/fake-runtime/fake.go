@@ -25,6 +25,7 @@ import (
 //   - exit-code       Exit with specified code immediately
 //   - infinite        Run until killed (SIGKILL)
 //   - echo            Print all remaining arguments and wait briefly
+//   - env-file        Write selected environment values to a file and exit
 
 func main() {
 	// Check for -sleep <duration> flag (used by supervisor tests).
@@ -68,8 +69,25 @@ func main() {
 	case "echo":
 		fmt.Println(strings.Join(os.Args[2:], " "))
 		time.Sleep(2 * time.Second)
+	case "env-file":
+		doEnvFile()
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown mode: %s\n", mode)
+		os.Exit(1)
+	}
+}
+
+func doEnvFile() {
+	if len(os.Args) < 4 {
+		fmt.Fprintln(os.Stderr, "env-file mode: need output path and at least one environment key")
+		os.Exit(1)
+	}
+	lines := make([]string, 0, len(os.Args)-3)
+	for _, key := range os.Args[3:] {
+		lines = append(lines, key+"="+os.Getenv(key))
+	}
+	if err := os.WriteFile(os.Args[2], []byte(strings.Join(lines, "\n")), 0o600); err != nil {
+		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }

@@ -34,9 +34,10 @@ Migration runs via `config.MigrateConfig()` during `config.Load()`. No separate 
 | `goal.json` | Startup seed | Read once at startup; subsequent edits do not update existing entities. New entities (by ID) are added. |
 | `goal_repo.json` | Authoritative store | Written by API/UI; survives restarts; contains runtimes, models, profiles, and instances. |
 
-`goal_repo.json` can contain profile environment values and must be protected as
-sensitive local data. Profile API responses omit those values and expose only
-their keys; the values remain available internally when GoAl launches a runtime.
+`goal_repo.json` can contain runtime and profile environment values and must be
+protected as sensitive local data. Runtime and profile API responses omit those
+values and expose only their keys; the values remain available internally when
+GoAl launches a runtime. This storage is not an encrypted secret vault.
 
 After the first startup, `goal_repo.json` is the source of truth. To modify existing entities after the first run, use the API or Web UI.
 
@@ -54,6 +55,11 @@ Each runtime entry defines an external inference server or service.
 | `environment` | map[string]string | No | `{}` | Process environment variables. |
 | `healthCheck` | object | No | — | Health check configuration (see below). |
 | `active` | bool | No | `true` | Whether the runtime is enabled. |
+
+Runtime environment values may contain sensitive process configuration. The
+HTTP API accepts them as write-only input and returns sorted
+`environment_keys`, never the values. For API updates, omitting `environment`
+preserves the stored map, `{}` clears it, and an explicit map replaces it.
 
 ### Runtime healthCheck
 

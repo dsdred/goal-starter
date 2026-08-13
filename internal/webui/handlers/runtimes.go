@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -14,6 +15,65 @@ import (
 	apierrors "github.com/dsdred/goal/internal/webui/errors"
 	"github.com/dsdred/goal/internal/webui/security"
 )
+
+// runtimeRequest is the writable representation of a runtime. A pointer to
+// Environment preserves the distinction between an omitted field and an
+// explicit empty object during updates.
+type runtimeRequest struct {
+	ID               string             `json:"id"`
+	Name             string             `json:"name"`
+	Executable       string             `json:"executable"`
+	WorkingDirectory string             `json:"working_directory,omitempty"`
+	DefaultArgs      []string           `json:"default_args"`
+	Environment      *map[string]string `json:"environment"`
+}
+
+func (request runtimeRequest) entry() storage.RuntimeEntry {
+	var environment map[string]string
+	if request.Environment != nil {
+		environment = *request.Environment
+	}
+	return storage.RuntimeEntry{
+		ID:               request.ID,
+		Name:             request.Name,
+		Executable:       request.Executable,
+		WorkingDirectory: request.WorkingDirectory,
+		DefaultArgs:      append([]string(nil), request.DefaultArgs...),
+		Environment:      environment,
+	}
+}
+
+// runtimeResponse is the public representation of a runtime. Environment
+// values are write-only and must never be serialized back to API clients.
+type runtimeResponse struct {
+	ID               string    `json:"id"`
+	Name             string    `json:"name"`
+	Executable       string    `json:"executable"`
+	WorkingDirectory string    `json:"working_directory,omitempty"`
+	DefaultArgs      []string  `json:"default_args"`
+	EnvironmentKeys  []string  `json:"environment_keys"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
+}
+
+func newRuntimeResponse(entry *storage.RuntimeEntry) runtimeResponse {
+	keys := make([]string, 0, len(entry.Environment))
+	for key := range entry.Environment {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	return runtimeResponse{
+		ID:               entry.ID,
+		Name:             entry.Name,
+		Executable:       entry.Executable,
+		WorkingDirectory: entry.WorkingDirectory,
+		DefaultArgs:      append([]string(nil), entry.DefaultArgs...),
+		EnvironmentKeys:  keys,
+		CreatedAt:        entry.CreatedAt,
+		UpdatedAt:        entry.UpdatedAt,
+	}
+}
 
 // RuntimesHandler handles runtime-related HTTP requests.
 type RuntimesHandler struct {
@@ -40,7 +100,11 @@ func (h *RuntimesHandler) List(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, runtimes)
+	response := make([]runtimeResponse, 0, len(runtimes))
+	for _, runtime := range runtimes {
+		response = append(response, newRuntimeResponse(runtime))
+	}
+	writeJSON(w, http.StatusOK, response)
 }
 
 // Get handles GET /api/v1/runtimes/{id}
@@ -55,16 +119,17 @@ func (h *RuntimesHandler) Get(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 404, "runtime not found")
 		return
 	}
-	writeJSON(w, http.StatusOK, rt)
+	writeJSON(w, http.StatusOK, newRuntimeResponse(rt))
 }
 
 // Create handles POST /api/v1/runtimes
 func (h *RuntimesHandler) Create(w http.ResponseWriter, r *http.Request) {
-	var entry storage.RuntimeEntry
-	if err := json.NewDecoder(r.Body).Decode(&entry); err != nil {
+	var request runtimeRequest
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 		writeError(w, 400, "invalid JSON")
 		return
 	}
+	entry := request.entry()
 	if err := h.runtimeSvc.CreateRuntime(r.Context(), &entry); err != nil {
 		if errors.Is(err, apierrors.ErrValidation) {
 			writeError(w, 400, "validation failed")
@@ -73,7 +138,7 @@ func (h *RuntimesHandler) Create(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusCreated, entry)
+	writeJSON(w, http.StatusCreated, newRuntimeResponse(&entry))
 }
 
 // Update handles PUT /api/v1/runtimes/{id}
@@ -83,17 +148,18 @@ func (h *RuntimesHandler) Update(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "runtime ID is required")
 		return
 	}
-	var entry storage.RuntimeEntry
-	if err := json.NewDecoder(r.Body).Decode(&entry); err != nil {
+	var request runtimeRequest
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 		writeError(w, 400, "invalid JSON")
 		return
 	}
+	entry := request.entry()
 	entry.ID = id
 	if err := h.runtimeSvc.UpdateRuntime(r.Context(), &entry); err != nil {
 		writeError(w, 500, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, entry)
+	writeJSON(w, http.StatusOK, newRuntimeResponse(&entry))
 }
 
 // Delete handles DELETE /api/v1/runtimes/{id}

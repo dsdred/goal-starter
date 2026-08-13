@@ -99,6 +99,12 @@ the stored map. Redaction strings are never accepted or stored implicitly.
 
 ## Runtimes
 
+Runtime `environment` values are write-only. Runtime read and mutation
+responses never return the values; they return sorted `environment_keys`
+instead. On `PUT`, omitting `environment` preserves the stored map, an explicit
+empty object clears it, and a non-empty object replaces it. Runtime environment
+values remain available internally for process launch.
+
 | Method | Path | Auth | CSRF | Description |
 |--------|------|------|------|-------------|
 | `GET` | `/api/v1/runtimes` | Yes | — | List runtimes. |

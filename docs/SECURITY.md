@@ -62,13 +62,24 @@ GoAl has a single admin user. There are no roles or permissions — if the user 
 | Session tokens | In-memory store | Yes (expiry-based) |
 | CSRF tokens | Cookie + header | Rotated on login |
 
-Environment variables are not used for secret injection. The `AdminPassword` can be set via `goal.json` or via the Web UI.
+Runtime and profile process environment values can contain sensitive
+configuration. They are stored in the local `goal_repo.json` without encryption
+and must be protected through filesystem permissions. They are write-only over
+the HTTP API: responses expose sorted environment variable names, never values.
+GoAl is not a secret vault.
+
+For runtime and profile updates, omitting `environment` preserves stored values,
+an explicit empty object clears them, and an explicit map replaces them. The
+`AdminPassword` remains configured separately through `goal.json` or the Web UI.
 
 Profile environment values are treated as write-only API data. They remain in
 the authoritative local repository so the runtime can receive them, but profile
 responses and browser previews expose only environment variable names. An
 unrelated profile update preserves existing values when `environment` is
 omitted; callers must send an explicit map to replace or clear them.
+
+Runtime environment values follow the same write-only response contract and
+remain available internally for process launch.
 
 ## Network security
 

@@ -37,6 +37,14 @@ func (s *RuntimeService) CreateRuntime(ctx context.Context, entry *storage.Runti
 
 // UpdateRuntime updates an existing runtime.
 func (s *RuntimeService) UpdateRuntime(ctx context.Context, entry *storage.RuntimeEntry) error {
+	existing, err := s.repo.GetRuntime(entry.ID)
+	if err != nil {
+		return err
+	}
+	entry.CreatedAt = existing.CreatedAt
+	if entry.Environment == nil {
+		entry.Environment = existing.Environment
+	}
 	return s.repo.UpdateRuntime(entry)
 }
 

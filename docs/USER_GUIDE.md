@@ -319,6 +319,13 @@ environment, or `{}` to remove all profile environment entries.
 
 ### Runtimes
 
+Runtime environment values are write-only through the HTTP API. Runtime reads
+and mutation responses show sorted variable names in `environment_keys`, never
+their values. Editing other runtime fields preserves the stored environment
+when `environment` is omitted. Send `{}` to clear it or an explicit map to
+replace it. Values remain stored locally in `goal_repo.json` for process launch;
+this file is not an encrypted secret vault.
+
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/api/v1/runtimes` | List runtimes |
