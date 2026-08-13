@@ -1,6 +1,7 @@
 package store
 
 import (
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -136,7 +137,7 @@ func (s *Store) save() error {
 // --- Profile operations ---
 
 func generateID() string {
-	return fmt.Sprintf("id_%d", time.Now().UnixNano())
+	return "id_" + rand.Text()
 }
 
 // ListProfiles returns all profiles.

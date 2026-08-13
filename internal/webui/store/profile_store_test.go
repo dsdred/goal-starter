@@ -141,6 +141,31 @@ func TestProfileList_AfterActivate(t *testing.T) {
 	}
 }
 
+func TestGenerateIDUniqueConcurrently(t *testing.T) {
+	const count = 1000
+
+	ids := make(chan string, count)
+	var wg sync.WaitGroup
+	for range count {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ids <- generateID()
+		}()
+	}
+
+	wg.Wait()
+	close(ids)
+
+	seen := make(map[string]struct{}, count)
+	for id := range ids {
+		if _, exists := seen[id]; exists {
+			t.Fatalf("duplicate generated ID: %q", id)
+		}
+		seen[id] = struct{}{}
+	}
+}
+
 func TestConcurrentActivateDeactivate(t *testing.T) {
 	dir := t.TempDir()
 	s, err := NewStore(dir)
