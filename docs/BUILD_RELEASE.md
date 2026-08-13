@@ -15,21 +15,24 @@ This document describes the release process for GoAl.
 
 ## Windows Authenticode signing
 
-Release Windows binaries are signed with Authenticode + trusted timestamp.
+Windows release binaries are signed only when a signing certificate is configured. Unsigned local release builds are supported and are explicitly identified as unsigned in the generated Windows archive metadata.
 
 - **Signing certificate** stored in GitHub Secrets (`GOAL_SIGN_CERT`, `GOAL_SIGN_CERT_PASSWORD`)
 - **Timestamp server** configured via `GOAL_SIGN_TIMESTAMP_SERVER` (default: DigiCert)
 - **Checksums** generated AFTER signing (signing modifies the PE binary)
-- **Signature verification** gate runs after signing, release fails if invalid
+- **Signature verification** always inspects the final binary; a requested signing operation fails unless the final status is `Valid`
+- **Archive metadata** records the actual Authenticode, publisher, and timestamp state of the included binary
 
 ### How signing works in the pipeline
 
 1. Windows binary is built with embedded PE metadata (ProductName, FileDescription, etc.)
-2. Binary is signed with `signtool.exe` using the production certificate
-3. Trusted timestamp is added (signature remains valid after certificate expiry)
-4. Signature is verified (`Get-AuthenticodeSignature` → `Status = Valid`)
-5. SHA256 checksums are generated (post-signing)
-6. Checksums are included in the release
+2. If a certificate is configured, the binary is signed with `signtool.exe`
+3. A trusted timestamp is requested for signed builds
+4. The final binary is inspected with `Get-AuthenticodeSignature`
+5. Requested signing must produce `Status = Valid`; otherwise packaging fails
+6. Without a certificate, the expected state is `NotSigned`
+7. SHA256 checksums are generated from the final binary bytes
+8. `RELEASE.txt` is generated from the actual signature result and validated against the archived binary
 
 ### SmartScreen note
 
@@ -136,13 +139,19 @@ Get-FileHash bin/goal-windows-amd64.exe -Algorithm SHA256
 Get-AuthenticodeSignature .\goal-windows-amd64.exe
 ```
 
-Expected signature output:
+Expected output for a signed build:
 
 ```
 SignerCertificate : ...
 Status            : Valid
 StatusMessage     : Signature verified successfully.
 Path              : goal-windows-amd64.exe
+```
+
+Expected status for an unsigned build:
+
+```text
+Status            : NotSigned
 ```
 
 ```bash

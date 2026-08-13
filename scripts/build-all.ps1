@@ -16,6 +16,8 @@ $ErrorActionPreference = "Stop"
 
 $OUTPUT_DIR = "bin"
 $SOURCE = "./cmd/goal"
+$UTF8_NO_BOM = New-Object System.Text.UTF8Encoding($false)
+$UTF8_STRICT = New-Object System.Text.UTF8Encoding($false, $true)
 
 # Get version info and build time
 $VERSION = $ReleaseVersion
@@ -85,8 +87,7 @@ function Invoke-SignBinary {
         [string]$TimestampServer
     )
     if (-not (Test-Path $CertPath)) {
-        Write-Host "    ! Signing certificate not found at $CertPath, skipping" -ForegroundColor Yellow
-        return
+        throw "Signing was requested, but the certificate was not found at $CertPath"
     }
     Write-Host "+ Signing $FilePath with Authenticode..." -ForegroundColor Yellow
     $signtoolPaths = @(
@@ -102,8 +103,7 @@ function Invoke-SignBinary {
         }
     }
     if (-not $signtool) {
-        Write-Host "    [!] signtool.exe not found, skipping signing" -ForegroundColor Yellow
-        return
+        throw "Signing was requested, but signtool.exe was not found"
     }
     $timestampUrl = $TimestampServer
     if (-not $timestampUrl) {
@@ -123,21 +123,164 @@ function Invoke-SignBinary {
     if ($LASTEXITCODE -eq 0) {
         Write-Host "    OK Signed with Authenticode + trusted timestamp" -ForegroundColor Green
     } else {
-        Write-Host "    ! Signing failed with exit code $LASTEXITCODE" -ForegroundColor Red
+        throw "Signing failed with exit code $LASTEXITCODE"
     }
 }
 
-# --- Signature verification ---
-function Test-BinarySignature {
-    param([string]$FilePath)
+# --- Signature inspection and release metadata ---
+function Get-BinarySignatureMetadata {
+    param(
+        [string]$FilePath,
+        [bool]$SigningRequested
+    )
+
     Write-Host "+ Verifying signature of $FilePath..." -ForegroundColor Yellow
     $sig = Get-AuthenticodeSignature -FilePath $FilePath -ErrorAction SilentlyContinue
-    if ($sig.Status -ne 'Valid') {
-        Write-Host "    ! Signature status: $($sig.Status) ($($sig.StatusMessage))" -ForegroundColor Red
-        return $false
+
+    if ($SigningRequested -and $sig.Status -ne 'Valid') {
+        throw "Signing was requested, but signature verification returned $($sig.Status): $($sig.StatusMessage)"
     }
-    Write-Host "    OK Signature valid - Publisher: $($sig.SignerCertificate.Subject)" -ForegroundColor Green
-    return $true
+
+    if ($sig.Status -eq 'Valid') {
+        $publisher = if ($sig.SignerCertificate) { $sig.SignerCertificate.Subject } else { "unknown" }
+        $timestamp = if ($sig.TimeStamperCertificate) { "present" } else { "none" }
+        Write-Host "    OK Signature valid - Publisher: $publisher" -ForegroundColor Green
+        return [pscustomobject]@{
+            Status    = "Valid"
+            Publisher = $publisher
+            Timestamp = $timestamp
+            Signed    = $true
+        }
+    }
+
+    if ($sig.Status -eq 'NotSigned') {
+        Write-Host "    Signature status: NotSigned" -ForegroundColor Gray
+        return [pscustomobject]@{
+            Status    = "NotSigned"
+            Publisher = "none"
+            Timestamp = "none"
+            Signed    = $false
+        }
+    }
+
+    throw "Windows binary has an unacceptable signature state: $($sig.Status): $($sig.StatusMessage)"
+}
+
+function New-WindowsReleaseText {
+    param([pscustomobject]$Signature)
+
+    $trustStatement = if ($Signature.Signed) {
+        "Windows binary is Authenticode-signed and signature validation passed."
+    } else {
+        "Windows binary is unsigned."
+    }
+
+    return @"
+# GoAl Windows Release
+
+## Installation
+
+1. Extract this archive to a desired directory
+2. Copy or rename ``goal.example.json`` to ``goal.json``
+3. Edit ``goal.json`` with your runtime and model configuration
+
+## Quick Start
+
+``````powershell
+.\goal.exe
+``````
+
+## Install as Windows Service
+
+``````powershell
+.\install-service.ps1
+``````
+
+## Windows Trust
+
+Authenticode: $($Signature.Status)
+Publisher: $($Signature.Publisher)
+Timestamp: $($Signature.Timestamp)
+
+$trustStatement
+
+Verify the artifact state with:
+
+``````powershell
+Get-AuthenticodeSignature .\goal.exe
+``````
+
+## Files
+
+- ``goal.exe`` - GoAl binary
+- ``goal.example.json`` - Example configuration; copy or rename it to ``goal.json``
+- ``install-service.ps1`` - Install as Windows Service
+- ``uninstall-service.ps1`` - Uninstall Windows Service
+- ``README.md`` - English documentation
+- ``README_RU.md`` - Russian documentation
+"@
+}
+
+function Test-WindowsReleaseArchive {
+    param([string]$ArchivePath)
+
+    $validationDir = Join-Path ([System.IO.Path]::GetTempPath()) ("goal-release-validate-" + [guid]::NewGuid().ToString("N"))
+    New-Item -ItemType Directory -Path $validationDir | Out-Null
+
+    try {
+        [System.IO.Compression.ZipFile]::ExtractToDirectory((Resolve-Path $ArchivePath), $validationDir)
+        $releasePath = Join-Path $validationDir "goal\RELEASE.txt"
+        $binaryPath = Join-Path $validationDir "goal\goal.exe"
+        if (-not (Test-Path $releasePath) -or -not (Test-Path $binaryPath)) {
+            throw "Windows archive is missing RELEASE.txt or goal.exe"
+        }
+
+        $releaseBytes = [System.IO.File]::ReadAllBytes($releasePath)
+        if ($releaseBytes.Length -ge 3 -and $releaseBytes[0] -eq 0xEF -and $releaseBytes[1] -eq 0xBB -and $releaseBytes[2] -eq 0xBF) {
+            throw "Windows archive RELEASE.txt must be UTF-8 without BOM"
+        }
+        try {
+            $releaseText = $UTF8_STRICT.GetString($releaseBytes)
+        } catch {
+            throw "Windows archive RELEASE.txt is not valid UTF-8"
+        }
+        if ($releaseText -match '[^\x00-\x7F]') {
+            throw "Windows archive RELEASE.txt contains unexpected non-ASCII text"
+        }
+
+        $actual = Get-BinarySignatureMetadata -FilePath $binaryPath -SigningRequested $false
+        foreach ($expectedLine in @(
+            "Authenticode: $($actual.Status)",
+            "Publisher: $($actual.Publisher)",
+            "Timestamp: $($actual.Timestamp)"
+        )) {
+            if (-not $releaseText.Contains($expectedLine)) {
+                throw "Windows archive RELEASE.txt does not match the included binary: missing '$expectedLine'"
+            }
+        }
+
+        if ($actual.Signed) {
+            if (-not $releaseText.Contains("Windows binary is Authenticode-signed and signature validation passed.")) {
+                throw "Signed Windows archive does not state that signature validation passed"
+            }
+            if ($releaseText.Contains("Windows binary is unsigned.")) {
+                throw "Signed Windows archive is incorrectly identified as unsigned"
+            }
+        } else {
+            foreach ($falseClaim in @("Authenticode: Valid", "Authenticode-signed", "Expected signature: Valid")) {
+                if ($releaseText.Contains($falseClaim)) {
+                    throw "Unsigned Windows archive contains a false signing claim: '$falseClaim'"
+                }
+            }
+            if (-not $releaseText.Contains("Windows binary is unsigned.")) {
+                throw "Unsigned Windows archive does not explicitly identify the binary as unsigned"
+            }
+        }
+
+        Write-Host "+ Windows archive trust metadata and UTF-8 validation: PASS" -ForegroundColor Green
+    } finally {
+        Remove-Item $validationDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
 }
 
 # Create output directory
@@ -204,16 +347,16 @@ if (Invoke-GoBuild "windows" "amd64" $WIN_OUTPUT) {
 }
 
 # Authenticode signing (conditional)
-if ($env:SIGN_CERT) {
+$SIGNING_REQUESTED = -not [string]::IsNullOrWhiteSpace($env:SIGN_CERT)
+if ($SIGNING_REQUESTED) {
     Write-Host ""
     Invoke-SignBinary -FilePath $WIN_OUTPUT -CertPath $env:SIGN_CERT -CertPassword $env:SIGN_PASSWORD -TimestampServer $env:SIGN_TIMESTAMP
 } else {
     Write-Host ""
-    Write-Host "i No SIGN_CERT set Р В Р’В Р вЂ™Р’В Р В Р’В Р Р†Р вЂљР’В Р В Р’В Р вЂ™Р’В Р В Р вЂ Р В РІР‚С™Р РЋРІвЂћСћР В Р’В Р В РІР‚В Р В Р’В Р Р†Р вЂљРЎв„ўР В Р Р‹Р РЋРЎв„ў Windows binary will be unsigned (normal for dev builds)" -ForegroundColor Gray
+    Write-Host "i No SIGN_CERT set - Windows binary will be unsigned" -ForegroundColor Gray
 }
 
-# Sign Windows archive if binary was signed
-$WIN_ARCHIVE_PATH = $null
+$WINDOWS_SIGNATURE = Get-BinarySignatureMetadata -FilePath $WIN_OUTPUT -SigningRequested $SIGNING_REQUESTED
 
 # Build for Linux amd64
 Write-Host ""
@@ -318,21 +461,11 @@ Write-Host "+ Generating SHA256 checksums..." -ForegroundColor Yellow
 $CHECKSUM_FILE = "$OUTPUT_DIR\checksums.txt"
 $windowsHash = (Get-FileHash "$OUTPUT_DIR\goal-windows-amd64.exe" -Algorithm SHA256).Hash.ToLower()
 $linuxHash = (Get-FileHash "$OUTPUT_DIR\goal-linux-amd64" -Algorithm SHA256).Hash.ToLower()
-"$windowsHash  goal-windows-amd64.exe`n$linuxHash  goal-linux-amd64" | Out-File -FilePath $CHECKSUM_FILE -Encoding utf8
+$binaryChecksums = "$windowsHash  goal-windows-amd64.exe`n$linuxHash  goal-linux-amd64`n"
+[System.IO.File]::WriteAllText($CHECKSUM_FILE, $binaryChecksums, $UTF8_NO_BOM)
 Write-Host "    Windows (post-sign): $windowsHash" -ForegroundColor Gray
 Write-Host "    Linux: $linuxHash" -ForegroundColor Gray
 Write-Host "+ Checksums: $CHECKSUM_FILE" -ForegroundColor Green
-
-# Verify Windows signature if signed
-if ($env:SIGN_CERT) {
-    Write-Host ""
-    $sigValid = Test-BinarySignature -FilePath $WIN_OUTPUT
-    if (-not $sigValid) {
-        Write-Host "- Binary signature verification FAILED" -ForegroundColor Red
-    } else {
-        Write-Host "OK Binary signature verified successfully" -ForegroundColor Green
-    }
-}
 
 # Create release archives
 Write-Host ""
@@ -359,52 +492,17 @@ Copy-Item "README_RU.md" "$WIN_STAGING\goal\README_RU.md"
 Copy-Item "deploy\windows\install-service.ps1" "$WIN_STAGING\goal\install-service.ps1"
 Copy-Item "deploy\windows\uninstall-service.ps1" "$WIN_STAGING\goal\uninstall-service.ps1"
 
-# Create Windows README for archive
-$WIN_README = @'
-# GoAl Windows Release
-
-## Installation
-
-1. Extract this archive to a desired directory
-2. Copy or rename `goal.example.json` to `goal.json`
-3. Edit `goal.json` with your runtime and model configuration
-
-## Quick Start
-
-```powershell
-.\goal.exe
-```
-
-## Install as Windows Service
-
-```powershell
-.\install-service.ps1
-```
-
-## Verify Signature (PowerShell)
-
-```powershell
-Get-AuthenticodeSignature .\goal.exe
-```
-
-Expected: `Status : Valid`
-
-## Files
-
-- `goal.exe` Р В Р’В Р вЂ™Р’В Р В Р’В Р Р†Р вЂљР’В Р В Р’В Р вЂ™Р’В Р В Р вЂ Р В РІР‚С™Р РЋРІвЂћСћР В Р’В Р В РІР‚В Р В Р’В Р Р†Р вЂљРЎв„ўР В Р Р‹Р РЋРЎв„ў GoAl binary (Authenticode signed on release builds)
-- `goal.json` Р В Р’В Р вЂ™Р’В Р В Р’В Р Р†Р вЂљР’В Р В Р’В Р вЂ™Р’В Р В Р вЂ Р В РІР‚С™Р РЋРІвЂћСћР В Р’В Р В РІР‚В Р В Р’В Р Р†Р вЂљРЎв„ўР В Р Р‹Р РЋРЎв„ў Configuration file (rename from example)
-- `goal.example.json` Р В Р’В Р вЂ™Р’В Р В Р’В Р Р†Р вЂљР’В Р В Р’В Р вЂ™Р’В Р В Р вЂ Р В РІР‚С™Р РЋРІвЂћСћР В Р’В Р В РІР‚В Р В Р’В Р Р†Р вЂљРЎв„ўР В Р Р‹Р РЋРЎв„ў Example configuration
-- `install-service.ps1` Р В Р’В Р вЂ™Р’В Р В Р’В Р Р†Р вЂљР’В Р В Р’В Р вЂ™Р’В Р В Р вЂ Р В РІР‚С™Р РЋРІвЂћСћР В Р’В Р В РІР‚В Р В Р’В Р Р†Р вЂљРЎв„ўР В Р Р‹Р РЋРЎв„ў Install as Windows Service
-- `uninstall-service.ps1` Р В Р’В Р вЂ™Р’В Р В Р’В Р Р†Р вЂљР’В Р В Р’В Р вЂ™Р’В Р В Р вЂ Р В РІР‚С™Р РЋРІвЂћСћР В Р’В Р В РІР‚В Р В Р’В Р Р†Р вЂљРЎв„ўР В Р Р‹Р РЋРЎв„ў Uninstall Windows Service
-- `README.md` Р В Р’В Р вЂ™Р’В Р В Р’В Р Р†Р вЂљР’В Р В Р’В Р вЂ™Р’В Р В Р вЂ Р В РІР‚С™Р РЋРІвЂћСћР В Р’В Р В РІР‚В Р В Р’В Р Р†Р вЂљРЎв„ўР В Р Р‹Р РЋРЎв„ў Full documentation
-'@
-Set-Content -Path "$WIN_STAGING\goal\RELEASE.txt" -Value $WIN_README -Encoding UTF8
+# Create Windows release metadata from the verified artifact state.
+$WIN_README = New-WindowsReleaseText -Signature $WINDOWS_SIGNATURE
+[System.IO.File]::WriteAllText("$WIN_STAGING\goal\RELEASE.txt", $WIN_README, $UTF8_NO_BOM)
 
 # Create zip archive
 if (Test-Path $WIN_ARCHIVE_PATH) { Remove-Item $WIN_ARCHIVE_PATH }
 Add-Type -AssemblyName "System.IO.Compression.FileSystem"
 [System.IO.Compression.ZipFile]::CreateFromDirectory($WIN_STAGING, $WIN_ARCHIVE_PATH)
 Write-Host "+ Windows archive: $WIN_ARCHIVE_PATH" -ForegroundColor Green
+
+Test-WindowsReleaseArchive -ArchivePath $WIN_ARCHIVE_PATH
 
 # --- Linux archive ---
 $LINUX_ARCHIVE_NAME = "goal-${ARCHIVE_VERSION}-linux-amd64.tar.gz"
@@ -450,12 +548,13 @@ sudo systemctl start goal
 
 ## Files
 
-- `goal` Р В Р’В Р вЂ™Р’В Р В Р’В Р Р†Р вЂљР’В Р В Р’В Р вЂ™Р’В Р В Р вЂ Р В РІР‚С™Р РЋРІвЂћСћР В Р’В Р В РІР‚В Р В Р’В Р Р†Р вЂљРЎв„ўР В Р Р‹Р РЋРЎв„ў GoAl binary
-- `etc/goal/goal.example.json` Р В Р’В Р вЂ™Р’В Р В Р’В Р Р†Р вЂљР’В Р В Р’В Р вЂ™Р’В Р В Р вЂ Р В РІР‚С™Р РЋРІвЂћСћР В Р’В Р В РІР‚В Р В Р’В Р Р†Р вЂљРЎв„ўР В Р Р‹Р РЋРЎв„ў Example configuration
-- `deploy/goal.service` Р В Р’В Р вЂ™Р’В Р В Р’В Р Р†Р вЂљР’В Р В Р’В Р вЂ™Р’В Р В Р вЂ Р В РІР‚С™Р РЋРІвЂћСћР В Р’В Р В РІР‚В Р В Р’В Р Р†Р вЂљРЎв„ўР В Р Р‹Р РЋРЎв„ў systemd service file
-- `README.md` Р В Р’В Р вЂ™Р’В Р В Р’В Р Р†Р вЂљР’В Р В Р’В Р вЂ™Р’В Р В Р вЂ Р В РІР‚С™Р РЋРІвЂћСћР В Р’В Р В РІР‚В Р В Р’В Р Р†Р вЂљРЎв„ўР В Р Р‹Р РЋРЎв„ў Full documentation
+- `goal` - GoAl binary
+- `etc/goal/goal.example.json` - Example configuration
+- `deploy/goal.service` - systemd service file
+- `README.md` - English documentation
+- `README_RU.md` - Russian documentation
 '@
-Set-Content -Path "$LINUX_STAGING\goal\RELEASE.txt" -Value $LINUX_README -Encoding UTF8
+[System.IO.File]::WriteAllText("$LINUX_STAGING\goal\RELEASE.txt", $LINUX_README, $UTF8_NO_BOM)
 
 # Create tar.gz archive
 $tarArgs = @('czf', $LINUX_ARCHIVE_PATH, '-C', $LINUX_STAGING, 'goal')
@@ -472,7 +571,8 @@ Write-Host "+ Generating release archive checksums..." -ForegroundColor Yellow
 $RELEASE_CHECKSUM_FILE = "$RELEASE_DIR\checksums.txt"
 $winReleaseHash = (Get-FileHash $WIN_ARCHIVE_PATH -Algorithm SHA256).Hash.ToLower()
 $LINUXReleaseHash = (Get-FileHash $LINUX_ARCHIVE_PATH -Algorithm SHA256).Hash.ToLower()
-"$winReleaseHash  $WIN_ARCHIVE_NAME`n$LINUXReleaseHash  $LINUX_ARCHIVE_NAME" | Out-File -FilePath $RELEASE_CHECKSUM_FILE -Encoding utf8
+$releaseChecksums = "$winReleaseHash  $WIN_ARCHIVE_NAME`n$LINUXReleaseHash  $LINUX_ARCHIVE_NAME`n"
+[System.IO.File]::WriteAllText($RELEASE_CHECKSUM_FILE, $releaseChecksums, $UTF8_NO_BOM)
 Write-Host "+ Release checksums: $RELEASE_CHECKSUM_FILE" -ForegroundColor Green
 
 # Also create GPG signature placeholder (requires gpg to be installed)
