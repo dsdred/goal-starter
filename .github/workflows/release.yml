@@ -10,15 +10,13 @@ permissions:
 
 jobs:
   release:
-    name: Release (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os: [windows-latest, ubuntu-latest]
-      fail-fast: false
+    name: Build and publish exact release assets
+    runs-on: windows-latest
+    env:
+      RELEASE_VERSION: ${{ github.ref_name }}
 
     steps:
-      - name: Checkout
+      - name: Checkout exact tag
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -29,268 +27,103 @@ jobs:
         with:
           go-version: "1.25"
 
+      - name: Validate release identity
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          if ($env:RELEASE_VERSION -notmatch '^v(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?$') {
+            throw "Invalid release tag '$env:RELEASE_VERSION'"
+          }
+          if ("${{ github.ref }}" -ne "refs/tags/$env:RELEASE_VERSION") {
+            throw "Release ref and version disagree"
+          }
+
       - name: Run tests
         run: go test ./...
 
       - name: Run go vet
         run: go vet ./...
 
-      - name: Install signtool (Windows only)
-        if: matrix.os == 'windows-latest'
-        run: |
-          $sdkPath = "${env:ProgramFiles(x86)}\Windows Kits\10\bin\10.0.26100.0\x64"
-          if (Test-Path "$sdkPath\signtool.exe") {
-            Write-Host "signtool found at $sdkPath"
-          } else {
-            Write-Host "signtool not at expected path, searching..."
-            $found = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits" -Filter "signtool.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty DirectoryName
-            if ($found) {
-              Write-Host "signtool found at $found"
-            }
-          }
-
-      - name: Build
-        id: build
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-
-          $VERSION = "${{ github.ref_name }}"
-          $GIT_HASH = git rev-parse --short HEAD
-          $BUILD_TIME = (Get-Date -UFormat "%Y-%m-%dT%H:%M:%SZ")
-          $LDFLAGS = "-ldflags=-s -w -X github.com/dsdred/goal/internal/version.Version=$VERSION -X github.com/dsdred/goal/internal/version.GitCommit=$GIT_HASH -X github.com/dsdred/goal/internal/version.BuildTime=$BUILD_TIME"
-
-          Write-Host "Building $VERSION ($GIT_HASH)"
-
-          # Install go-winres
-          go install github.com/tc-hib/go-winres@latest 2>&1 | Out-Null
-
-          # Build Windows
-          $env:GOOS = "windows"
-          $env:GOARCH = "amd64"
-          $env:CGO_ENABLED = "0"
-          go build $LDFLAGS -o bin/goal-windows-amd64.exe ./cmd/goal
-
-          # Build Linux
-          $env:GOOS = "linux"
-          $env:GOARCH = "amd64"
-          go build $LDFLAGS -o bin/goal-linux-amd64 ./cmd/goal
-
-          Write-Host "build_complete=true" >> $env:GITHUB_OUTPUT
-
-      - name: Embed Windows resource metadata (Windows)
-        if: matrix.os == 'windows-latest'
-        shell: pwsh
-        run: |
-          if (Test-Path winres\winres.json) {
-            $VERSION = "${{ github.ref_name }}"
-            $productVersion = $VERSION -replace '^v', ''
-            if ($productVersion -notmatch '^\d+\.\d+\.\d+$') {
-              throw "release version must be MAJOR.MINOR.PATCH: $VERSION"
-            }
-            $fileVersion = "$productVersion.0"
-            $generatedWinresPath = "winres\winres.generated.json"
-            $winresContent = Get-Content winres\winres.json -Raw
-            $winresContent = $winresContent -replace '"file_version":\s*"[^"]*"', "`"file_version`": `"$fileVersion`""
-            $winresContent = $winresContent -replace '"product_version":\s*"[^"]*"', "`"product_version`": `"$productVersion`""
-            $winresContent = $winresContent -replace '"FileVersion":\s*"[^"]*"', "`"FileVersion`": `"$fileVersion`""
-            $winresContent = $winresContent -replace '"ProductVersion":\s*"[^"]*"', "`"ProductVersion`": `"$productVersion`""
-            [System.IO.File]::WriteAllText($generatedWinresPath, $winresContent, (New-Object System.Text.UTF8Encoding $false))
-            try {
-              go-winres make --in $generatedWinresPath --arch amd64 2>&1 | Out-Null
-            } finally {
-              Remove-Item $generatedWinresPath -ErrorAction SilentlyContinue
-            }
-            $syso = Get-ChildItem rsrc_windows_amd64.syso -ErrorAction SilentlyContinue
-            if ($syso) {
-              Copy-Item $syso cmd\goal\rsrc.syso
-              Write-Host "Resource metadata embedded"
-            }
-          }
-
-      - name: Rebuild Windows with metadata (Windows)
-        if: matrix.os == 'windows-latest'
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          $VERSION = "${{ github.ref_name }}"
-          $GIT_HASH = git rev-parse --short HEAD
-          $BUILD_TIME = (Get-Date -UFormat "%Y-%m-%dT%H:%M:%SZ")
-          $LDFLAGS = "-ldflags=-s -w -X github.com/dsdred/goal/internal/version.Version=$VERSION -X github.com/dsdred/goal/internal/version.GitCommit=$GIT_HASH -X github.com/dsdred/goal/internal/version.BuildTime=$BUILD_TIME"
-          
-          $env:GOOS = "windows"
-          $env:GOARCH = "amd64"
-          $env:CGO_ENABLED = "0"
-          go build $LDFLAGS -o bin/goal-windows-amd64.exe ./cmd/goal
-          
-          # Clean up syso
-          Remove-Item cmd\goal\rsrc.syso -ErrorAction SilentlyContinue
-          Remove-Item rsrc_windows_amd64.syso -ErrorAction SilentlyContinue
-
-      - name: Sign Windows binary (Windows)
-        if: matrix.os == 'windows-latest' && env.SIGN_CERT
-        shell: pwsh
+      - name: Build canonical release set
+        shell: powershell
         env:
           SIGN_CERT: ${{ secrets.GOAL_SIGN_CERT }}
           SIGN_PASSWORD: ${{ secrets.GOAL_SIGN_CERT_PASSWORD }}
           SIGN_TIMESTAMP: ${{ secrets.GOAL_SIGN_TIMESTAMP_SERVER }}
         run: |
-          $ErrorActionPreference = "Stop"
-          
-          $CERT_PATH = $env:SIGN_CERT
-          $CERT_PASS = $env:SIGN_PASSWORD
-          $TIMESTAMP_URL = $env:SIGN_TIMESTAMP
+          .\scripts\build-all.ps1 -ReleaseVersion $env:RELEASE_VERSION
 
-          if (-not (Test-Path $CERT_PATH)) {
-            # Try to export from certificate store
-            $certs = Get-ChildItem Cert:\CurrentUser\My | Where-Object { $_.Subject -match "GoAl" }
-            if ($certs) {
-              $CERT_PATH = "C:\temp\temp-sign.pfx"
-              $securePass = ConvertTo-SecureString -String $CERT_PASS -Force -AsPlainText
-              Export-PfxCertificate -Cert $certs[0] -FilePath $CERT_PATH -Password $securePass
-              Write-Host "Exported cert from store to $CERT_PATH"
-            } else {
-              Write-Host "[!] No signing certificate found, skipping"
-              exit 0
+      - name: Verify exact upload allowlist and checksums
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $version = $env:RELEASE_VERSION
+          $expectedBin = @(
+            "goal-windows-amd64.exe",
+            "goal-linux-amd64",
+            "checksums.txt"
+          ) | Sort-Object
+          $expectedRelease = @(
+            "goal-$version-windows-amd64.zip",
+            "goal-$version-linux-amd64.tar.gz",
+            "checksums.txt"
+          ) | Sort-Object
+          $expectedChecksumAssets = @(
+            "goal-$version-windows-amd64.zip",
+            "goal-$version-linux-amd64.tar.gz"
+          ) | Sort-Object
+
+          function Assert-ExactFileSet([string]$directory, [string[]]$expected) {
+            $actual = @(Get-ChildItem -LiteralPath $directory -File | ForEach-Object Name | Sort-Object)
+            $difference = @(Compare-Object -ReferenceObject $expected -DifferenceObject $actual)
+            if ($difference.Count -ne 0) {
+              throw "Unexpected artifact set in '$directory': $($difference | Out-String)"
             }
           }
 
-          if (-not $TIMESTAMP_URL) {
-            $TIMESTAMP_URL = "http://timestamp.digicert.com"
+          Assert-ExactFileSet "bin" $expectedBin
+          Assert-ExactFileSet "releases" $expectedRelease
+
+          foreach ($forbidden in @("goal--windows-amd64.zip", "goal--linux-amd64.tar.gz")) {
+            if (Test-Path -LiteralPath "releases/$forbidden") {
+              throw "Forbidden empty-version artifact exists: $forbidden"
+            }
           }
 
-          # Find signtool
-          $signtoolPaths = @(
-            "${env:ProgramFiles(x86)}\Windows Kits\10\bin\10.0.22621.0\x64\signtool.exe",
-            "${env:ProgramFiles(x86)}\Windows Kits\10\bin\x64\signtool.exe"
-          )
-          $signtool = $null
-          foreach ($p in $signtoolPaths) {
-            if ($p -and (Test-Path $p)) { $signtool = $p; break }
+          $checksumLines = @(Get-Content -LiteralPath "releases/checksums.txt")
+          if ($checksumLines.Count -ne 2) {
+            throw "Release checksums must list exactly two canonical archives"
           }
-          
-          if (-not $signtool) {
-            Write-Host "[!] signtool.exe not found"
-            exit 0
+          $listedChecksumAssets = @()
+          foreach ($line in $checksumLines) {
+            if ($line -notmatch '^([0-9a-f]{64})  (.+)$') {
+              throw "Malformed checksum line: $line"
+            }
+            $expectedHash = $Matches[1]
+            $assetName = $Matches[2]
+            if ($assetName -notin $expectedChecksumAssets) {
+              throw "Unexpected asset in checksums: $assetName"
+            }
+            $listedChecksumAssets += $assetName
+            $actualHash = (Get-FileHash -Algorithm SHA256 -LiteralPath "releases/$assetName").Hash.ToLowerInvariant()
+            if ($actualHash -ne $expectedHash) {
+              throw "Checksum mismatch for $assetName"
+            }
           }
-
-          Write-Host "Signing with signtool..."
-          
-          $signArgs = @(
-            "sign",
-            "/f", $CERT_PATH,
-            "/p", $CERT_PASS,
-            "/tr", $TIMESTAMP_URL,
-            "/td", "sha256",
-            "/fd", "sha256",
-            "/as",
-            "bin/goal-windows-amd64.exe"
-          )
-          
-          & $signtool $signArgs
-          
-          if ($LASTEXITCODE -ne 0) {
-            Write-Host "[-] Signing failed"
-            exit 1
+          if (@(Compare-Object -ReferenceObject $expectedChecksumAssets -DifferenceObject @($listedChecksumAssets | Sort-Object)).Count -ne 0) {
+            throw "Release checksums do not list the exact canonical archive set"
           }
 
-          Write-Host "Signing complete"
-
-      - name: Verify Windows signature (Windows)
-        if: matrix.os == 'windows-latest' && env.SIGN_CERT
-        shell: pwsh
-        run: |
-          $sig = Get-AuthenticodeSignature -FilePath "bin/goal-windows-amd64.exe"
-          
-          if ($sig.Status -ne 'Valid') {
-            Write-Host "[-] Signature invalid: $($sig.Status)"
-            Write-Host "    StatusMessage: $($sig.StatusMessage)"
-            exit 1
-          }
-          
-          $issuer = $sig.SignerCertificate.Extensions | Where-Object { $_.Oid.FriendlyName -eq "Issuer" }
-          Write-Host "[OK] Signature valid - Issuer: $($sig.SignerCertificate.Issuer)"
-          Write-Host "[OK] Subject: $($sig.SignerCertificate.Subject)"
-          Write-Host "[OK] Timestamp: Valid (via trusted timestamp server)"
-
-      - name: Generate checksums (Windows)
-        if: matrix.os == 'windows-latest'
-        shell: pwsh
-        run: |
-          $windowsHash = (Get-FileHash bin/goal-windows-amd64.exe -Algorithm SHA256).Hash.ToLower()
-          $linuxHash = (Get-FileHash bin/goal-linux-amd64 -Algorithm SHA256).Hash.ToLower()
-          "$windowsHash  goal-windows-amd64.exe`n$linuxHash  goal-linux-amd64" | Out-File bin/checksums.txt -Encoding utf8
-          Write-Host "checksums=$(Get-Content bin/checksums.txt)" >> $env:GITHUB_OUTPUT
-
-      - name: Generate checksums (Linux)
-        if: matrix.os == 'ubuntu-latest'
-        shell: bash
-        run: |
-          WINDOWS_HASH=$(sha256sum bin/goal-windows-amd64.exe | awk '{print $1}')
-          LINUX_HASH=$(sha256sum bin/goal-linux-amd64 | awk '{print $1}')
-          echo "$WINDOWS_HASH  goal-windows-amd64.exe" > bin/checksums.txt
-          echo "$LINUX_HASH  goal-linux-amd64" >> bin/checksums.txt
-          echo "checksums=$(cat bin/checksums.txt)" >> $GITHUB_OUTPUT
-
-      - name: Create release archives
-        if: matrix.os == 'windows-latest'
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          $VERSION = git describe --tags --abbrev=0 -replace "^v", ""
-          $VERSION_SANITIZED = $VERSION -replace "[^0-9a-zA-Z\.\-]", "_"
-
-          $WIN_ARCHIVE = "releases/goal-${VERSION_SANITIZED}-windows-amd64.zip"
-          $LINUX_ARCHIVE = "releases/goal-${VERSION_SANITIZED}-linux-amd64.tar.gz"
-
-          New-Item -ItemType Directory -Path "releases" -Force | Out-Null
-          $WIN_STAGING = "releases/staging-windows"
-          if (Test-Path $WIN_STAGING) { Remove-Item $WIN_STAGING -Recurse -Force }
-          New-Item -ItemType Directory -Path "$WIN_STAGING\goal" | Out-Null
-
-          Copy-Item bin/goal-windows-amd64.exe "$WIN_STAGING\goal\goal.exe"
-          Copy-Item goal.example.json "$WIN_STAGING\goal\goal.example.json"
-          Copy-Item README.md "$WIN_STAGING\goal\README.md"
-          Copy-Item README_RU.md "$WIN_STAGING\goal\README_RU.md"
-          
-          if (Test-Path deploy\windows\install-service.ps1) {
-            Copy-Item deploy\windows\install-service.ps1 "$WIN_STAGING\goal\"
-          }
-          if (Test-Path deploy\windows\uninstall-service.ps1) {
-            Copy-Item deploy\windows\uninstall-service.ps1 "$WIN_STAGING\goal\"
-          }
-
-          Add-Type -AssemblyName "System.IO.Compression.FileSystem"
-          [System.IO.Compression.ZipFile]::CreateFromDirectory($WIN_STAGING, $WIN_ARCHIVE)
-          Write-Host "[+] Windows archive: $WIN_ARCHIVE"
-
-          $LINUX_STAGING = "releases/staging-linux"
-          if (Test-Path $LINUX_STAGING) { Remove-Item $LINUX_STAGING -Recurse -Force }
-          New-Item -ItemType Directory -Path "$LINUX_STAGING\goal" | Out-Null
-          Copy-Item bin/goal-linux-amd64 "$LINUX_STAGING\goal/goal"
-          Copy-Item goal.example.json "$LINUX_STAGING\goal/goal.example.json"
-          Copy-Item README.md "$LINUX_STAGING\goal/README.md"
-          Copy-Item README_RU.md "$LINUX_STAGING\goal/README_RU.md"
-          if (Test-Path deploy\systemd\goal.service) {
-            New-Item -ItemType Directory -Path "$LINUX_STAGING\goal\deploy" -Force | Out-Null
-            Copy-Item deploy\systemd\goal.service "$LINUX_STAGING\goal\deploy/goal.service"
-          }
-
-          tar czf $LINUX_ARCHIVE -C $LINUX_STAGING goal
-          Write-Host "[+] Linux archive: $LINUX_ARCHIVE"
-
-          Remove-Item $WIN_STAGING -Recurse -Force -ErrorAction SilentlyContinue
-          Remove-Item $LINUX_STAGING -Recurse -Force -ErrorAction SilentlyContinue
-
-      - name: Upload Windows artifacts
-        if: matrix.os == 'windows-latest'
+      - name: Upload exact release assets
         uses: softprops/action-gh-release@v2
         with:
+          fail_on_unmatched_files: true
+          overwrite_files: false
           files: |
             bin/goal-windows-amd64.exe
             bin/goal-linux-amd64
-            bin/checksums.txt
-            releases/goal-*-windows-amd64.zip
-            releases/goal-*-linux-amd64.tar.gz
+            releases/goal-${{ github.ref_name }}-windows-amd64.zip
+            releases/goal-${{ github.ref_name }}-linux-amd64.tar.gz
+            releases/checksums.txt
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

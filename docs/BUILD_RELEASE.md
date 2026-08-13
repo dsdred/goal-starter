@@ -8,7 +8,11 @@ This document describes the release process for GoAl.
 |----------|----------|--------------|
 | `goal-windows-amd64.exe` | Windows | amd64 |
 | `goal-linux-amd64` | Linux | amd64 |
-| `checksums.txt` | — | SHA256 checksums for all binaries |
+| `goal-vX.Y.Z-windows-amd64.zip` | Windows | amd64 archive |
+| `goal-vX.Y.Z-linux-amd64.tar.gz` | Linux | amd64 archive |
+| `checksums.txt` | — | SHA256 checksums for the two release archives |
+
+The GitHub Release asset set is exactly these five files. Empty-version names such as `goal--windows-amd64.zip` are invalid and must never be published.
 
 **Latest published tag:** `v1.0.0`
 **Release:** [GitHub Releases](https://github.com/dsdred/goal-starter/releases/tag/v1.0.0)
@@ -57,8 +61,10 @@ Generated `.syso` files are embedded into the Windows binary during `go build`.
 `scripts/build-all.ps1` produces all artifacts:
 
 ```powershell
-.\scripts\build-all.ps1
+.\scripts\build-all.ps1 -ReleaseVersion vX.Y.Z
 ```
+
+`ReleaseVersion` is required and must use the `vMAJOR.MINOR.PATCH` format (an optional prerelease suffix is supported). Empty, whitespace-only, or malformed versions fail before build or packaging.
 
 For a signed build:
 
@@ -75,8 +81,9 @@ Output:
 - `bin/checksums.txt`
 
 The script also creates release archives:
-- `releases/goal-<version>-windows-amd64.zip`
-- `releases/goal-<version>-linux-amd64.tar.gz`
+- `releases/goal-vX.Y.Z-windows-amd64.zip`
+- `releases/goal-vX.Y.Z-linux-amd64.tar.gz`
+- `releases/checksums.txt`
 
 ## Developer build
 

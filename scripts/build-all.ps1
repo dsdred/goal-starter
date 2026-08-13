@@ -1,5 +1,5 @@
 ﻿# Build script for GoAl - cross-compile for Windows and Linux
-# Usage: .\scripts\build-all.ps1
+# Usage: .\scripts\build-all.ps1 -ReleaseVersion vX.Y.Z
 #
 # Optional environment variables:
 #   SIGN_CERT       - Path to PFX signing certificate (e.g., C:\certs\goal.pfx)
@@ -9,10 +9,18 @@
 # If SIGN_CERT is set, Windows binary will be Authenticode-signed with trusted timestamp.
 
 param(
-    [string]$ReleaseVersion = "dev"
+    [AllowEmptyString()]
+    [string]$ReleaseVersion
 )
 
 $ErrorActionPreference = "Stop"
+
+if ([string]::IsNullOrWhiteSpace($ReleaseVersion)) {
+    throw "ReleaseVersion is required and must use the vMAJOR.MINOR.PATCH format"
+}
+if ($ReleaseVersion -notmatch '^v(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?$') {
+    throw "Invalid ReleaseVersion '$ReleaseVersion'; expected vMAJOR.MINOR.PATCH with an optional prerelease suffix"
+}
 
 $OUTPUT_DIR = "bin"
 $SOURCE = "./cmd/goal"
@@ -370,11 +378,8 @@ if (Invoke-GoBuild "linux" "amd64" $LINUX_OUTPUT) {
     exit 1
 }
 
-# Version for archive naming
-$ARCHIVE_VERSION = $VERSION -replace "[^0-9a-zA-Z\.\-]", "_"
-if ($ARCHIVE_VERSION -eq "" -or $ARCHIVE_VERSION -eq "dev") {
-    $ARCHIVE_VERSION = "dev-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
-}
+# Version for archive naming. Validation above makes this a lossless operation.
+$ARCHIVE_VERSION = $VERSION
 
 # Build MSI installer (Windows only)
 if ($env:GOOS -eq "windows" -or $IsWindows) {
@@ -575,18 +580,33 @@ $releaseChecksums = "$winReleaseHash  $WIN_ARCHIVE_NAME`n$LINUXReleaseHash  $LIN
 [System.IO.File]::WriteAllText($RELEASE_CHECKSUM_FILE, $releaseChecksums, $UTF8_NO_BOM)
 Write-Host "+ Release checksums: $RELEASE_CHECKSUM_FILE" -ForegroundColor Green
 
-# Also create GPG signature placeholder (requires gpg to be installed)
-$GPG_SIG_PATH = "$RELEASE_DIR\checksums.txt.sig"
-if (Get-Command gpg -ErrorAction SilentlyContinue) {
-    gpg --detach-sign --armor "$RELEASE_CHECKSUM_FILE" -o "$GPG_SIG_PATH" 2>$null
-    if ($LASTEXITCODE -eq 0) {
-        Write-Host "+ GPG signature: $GPG_SIG_PATH" -ForegroundColor Green
-    } else {
-        Write-Host "! GPG signing failed (no key?)" -ForegroundColor Yellow
+function Assert-ExactFileSet {
+    param(
+        [string]$Directory,
+        [string[]]$ExpectedNames
+    )
+
+    $actualNames = @(Get-ChildItem -LiteralPath $Directory -File | ForEach-Object { $_.Name } | Sort-Object)
+    $expected = @($ExpectedNames | Sort-Object)
+    $difference = @(Compare-Object -ReferenceObject $expected -DifferenceObject $actualNames)
+    if ($difference.Count -ne 0) {
+        $details = $difference | ForEach-Object { "$($_.SideIndicator) $($_.InputObject)" }
+        throw "Unexpected artifact set in '$Directory': $($details -join ', ')"
     }
-} else {
-    Write-Host "! GPG not found, skipping signature (install gnupg for signatures)" -ForegroundColor Yellow
 }
+
+# Guard the canonical release contract against empty-version and stale artifacts.
+Assert-ExactFileSet -Directory $OUTPUT_DIR -ExpectedNames @(
+    "goal-windows-amd64.exe",
+    "goal-linux-amd64",
+    "checksums.txt"
+)
+Assert-ExactFileSet -Directory $RELEASE_DIR -ExpectedNames @(
+    $WIN_ARCHIVE_NAME,
+    $LINUX_ARCHIVE_NAME,
+    "checksums.txt"
+)
+Write-Host "+ Exact release asset set: PASS" -ForegroundColor Green
 
 # Cleanup temp files
 Remove-Item "$OUTPUT_DIR\build.log" -ErrorAction SilentlyContinue
