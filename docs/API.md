@@ -75,6 +75,12 @@ Instances are running processes created from profiles.
 
 Profiles are static configuration. Instances are created from profiles.
 
+Profile `environment` values are write-only. Profile read and mutation
+responses omit the values and return sorted `environment_keys` instead.
+On `PUT`, omitting `environment` preserves the stored map, an explicit empty
+object removes all profile environment entries, and a non-empty object replaces
+the stored map. Redaction strings are never accepted or stored implicitly.
+
 | Method | Path | Auth | CSRF | Description |
 |--------|------|------|------|-------------|
 | `GET` | `/api/v1/profiles` | Yes | — | List profiles. |

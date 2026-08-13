@@ -34,6 +34,10 @@ Migration runs via `config.MigrateConfig()` during `config.Load()`. No separate 
 | `goal.json` | Startup seed | Read once at startup; subsequent edits do not update existing entities. New entities (by ID) are added. |
 | `goal_repo.json` | Authoritative store | Written by API/UI; survives restarts; contains runtimes, models, profiles, and instances. |
 
+`goal_repo.json` can contain profile environment values and must be protected as
+sensitive local data. Profile API responses omit those values and expose only
+their keys; the values remain available internally when GoAl launches a runtime.
+
 After the first startup, `goal_repo.json` is the source of truth. To modify existing entities after the first run, use the API or Web UI.
 
 ## Runtime configuration

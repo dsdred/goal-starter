@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"sort"
 	"strings"
+	"time"
 
 	"github.com/dsdred/goal/internal/application"
 	"github.com/dsdred/goal/internal/process"
@@ -12,6 +14,44 @@ import (
 	apierrors "github.com/dsdred/goal/internal/webui/errors"
 	"github.com/dsdred/goal/internal/webui/security"
 )
+
+// profileResponse is the public representation of a profile. Environment
+// values are write-only and must never be serialized back to API clients.
+type profileResponse struct {
+	ID              string    `json:"id"`
+	Name            string    `json:"name"`
+	RuntimeID       string    `json:"runtime_id"`
+	ModelID         string    `json:"model_id,omitempty"`
+	Host            string    `json:"host"`
+	Port            int       `json:"port"`
+	Args            []string  `json:"args,omitempty"`
+	EnvironmentKeys []string  `json:"environment_keys,omitempty"`
+	Active          bool      `json:"active"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
+}
+
+func newProfileResponse(entry *storage.ProfileEntry) profileResponse {
+	keys := make([]string, 0, len(entry.Environment))
+	for key := range entry.Environment {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	return profileResponse{
+		ID:              entry.ID,
+		Name:            entry.Name,
+		RuntimeID:       entry.RuntimeID,
+		ModelID:         entry.ModelID,
+		Host:            entry.Host,
+		Port:            entry.Port,
+		Args:            append([]string(nil), entry.Args...),
+		EnvironmentKeys: keys,
+		Active:          entry.Active,
+		CreatedAt:       entry.CreatedAt,
+		UpdatedAt:       entry.UpdatedAt,
+	}
+}
 
 // ProfilesHandler handles profile-related HTTP requests.
 type ProfilesHandler struct {
@@ -38,7 +78,11 @@ func (h *ProfilesHandler) List(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, profiles)
+	response := make([]profileResponse, 0, len(profiles))
+	for _, profile := range profiles {
+		response = append(response, newProfileResponse(profile))
+	}
+	writeJSON(w, http.StatusOK, response)
 }
 
 // Get handles GET /api/v1/profiles/{id}
@@ -53,7 +97,7 @@ func (h *ProfilesHandler) Get(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 404, "profile not found")
 		return
 	}
-	writeJSON(w, http.StatusOK, p)
+	writeJSON(w, http.StatusOK, newProfileResponse(p))
 }
 
 // Create handles POST /api/v1/profiles
@@ -71,7 +115,7 @@ func (h *ProfilesHandler) Create(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusCreated, entry)
+	writeJSON(w, http.StatusCreated, newProfileResponse(&entry))
 }
 
 // Update handles PUT /api/v1/profiles/{id}
@@ -91,7 +135,7 @@ func (h *ProfilesHandler) Update(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, entry)
+	writeJSON(w, http.StatusOK, newProfileResponse(&entry))
 }
 
 // Delete handles DELETE /api/v1/profiles/{id}

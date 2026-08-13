@@ -64,6 +64,12 @@ GoAl has a single admin user. There are no roles or permissions — if the user 
 
 Environment variables are not used for secret injection. The `AdminPassword` can be set via `goal.json` or via the Web UI.
 
+Profile environment values are treated as write-only API data. They remain in
+the authoritative local repository so the runtime can receive them, but profile
+responses and browser previews expose only environment variable names. An
+unrelated profile update preserves existing values when `environment` is
+omitted; callers must send an explicit map to replace or clear them.
+
 ## Network security
 
 | Feature | Status |

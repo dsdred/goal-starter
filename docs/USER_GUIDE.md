@@ -312,6 +312,11 @@ All API calls start with: `http://127.0.0.1:9090`
 | POST | `/api/v1/profiles/{id}/activate` | Activate |
 | POST | `/api/v1/profiles/{id}/deactivate` | Deactivate |
 
+Profile environment values are write-only. The API and Web UI show only their
+keys. Editing other profile fields preserves the stored environment when the
+`environment` field is omitted. Send an explicit replacement map to change the
+environment, or `{}` to remove all profile environment entries.
+
 ### Runtimes
 
 | Method | Path | Description |

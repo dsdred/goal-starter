@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/dsdred/goal/internal/application"
+	"github.com/dsdred/goal/internal/domain"
 	"github.com/dsdred/goal/internal/process"
 	"github.com/dsdred/goal/internal/storage"
 	apierrors "github.com/dsdred/goal/internal/webui/errors"
@@ -173,16 +174,20 @@ func (h *RuntimesHandler) Action(w http.ResponseWriter, r *http.Request) {
 func (h *RuntimesHandler) HealthCheck(w http.ResponseWriter, r *http.Request) {
 	instances, _ := h.instances.ListInstances(r.Context())
 	active := 0
+	redactedInstances := make([]*domain.LaunchInstance, 0, len(instances))
 	for _, inst := range instances {
 		if inst.IsActive() {
 			active++
 		}
+		redacted := *inst
+		redacted.Environment = nil
+		redactedInstances = append(redactedInstances, &redacted)
 	}
 
 	health := map[string]any{
 		"active_instances":  active,
 		"running_instances": active,
-		"instances":         instances,
+		"instances":         redactedInstances,
 	}
 	writeJSON(w, http.StatusOK, health)
 }

@@ -24,8 +24,68 @@ if ($ReleaseVersion -notmatch '^v(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(
 
 $OUTPUT_DIR = "bin"
 $SOURCE = "./cmd/goal"
+$GO_WINRES_MODULE = "github.com/tc-hib/go-winres"
+$GO_WINRES_VERSION = "v0.3.3"
 $UTF8_NO_BOM = New-Object System.Text.UTF8Encoding($false)
 $UTF8_STRICT = New-Object System.Text.UTF8Encoding($false, $true)
+
+function Invoke-NativeCommand {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$FilePath,
+        [string[]]$ArgumentList = @()
+    )
+
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        # Windows PowerShell 5.1 wraps native stderr as non-terminating error
+        # records. Keep that output visible, then use the process exit code as
+        # the authoritative success signal.
+        $ErrorActionPreference = "Continue"
+        & $FilePath @ArgumentList 2>&1 | ForEach-Object { Write-Host "    $_" }
+        $exitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+
+    if ($exitCode -ne 0) {
+        throw "Native command failed with exit code ${exitCode}: $FilePath $($ArgumentList -join ' ')"
+    }
+}
+
+function Install-GoWinres {
+    $toolDirectory = Join-Path ([System.IO.Path]::GetTempPath()) ("goal-go-winres-" + [guid]::NewGuid().ToString("N"))
+    New-Item -ItemType Directory -Path $toolDirectory | Out-Null
+    $toolPath = Join-Path $toolDirectory "go-winres.exe"
+    $previousGoBin = $env:GOBIN
+    try {
+        $env:GOBIN = $toolDirectory
+        Write-Host "    Installing pinned go-winres $GO_WINRES_VERSION..." -ForegroundColor Gray
+        Invoke-NativeCommand -FilePath "go" -ArgumentList @("install", "$GO_WINRES_MODULE@$GO_WINRES_VERSION")
+    } catch {
+        Remove-Item $toolDirectory -Recurse -Force -ErrorAction SilentlyContinue
+        throw
+    } finally {
+        $env:GOBIN = $previousGoBin
+    }
+
+    if (-not (Test-Path -LiteralPath $toolPath -PathType Leaf)) {
+        Remove-Item $toolDirectory -Recurse -Force -ErrorAction SilentlyContinue
+        throw "go-winres installation succeeded but executable was not found at $toolPath"
+    }
+
+    $moduleInfo = & go version -m $toolPath 2>$null
+    if ($LASTEXITCODE -ne 0 -or ($moduleInfo -join "`n") -notmatch "(?m)^\s*mod\s+$([regex]::Escape($GO_WINRES_MODULE))\s+$([regex]::Escape($GO_WINRES_VERSION))(?:\s|$)") {
+        Remove-Item $toolDirectory -Recurse -Force -ErrorAction SilentlyContinue
+        throw "Installed go-winres does not match required version $GO_WINRES_VERSION"
+    }
+    Write-Host "    go-winres version: $GO_WINRES_VERSION" -ForegroundColor Gray
+
+    return [pscustomobject]@{
+        Path      = $toolPath
+        Directory = $toolDirectory
+    }
+}
 
 # Get version info and build time
 $VERSION = $ReleaseVersion
@@ -44,45 +104,44 @@ try {
 # --- Windows resource generation ---
 function Invoke-GenResources {
     Write-Host "+ Generating Windows resource metadata..." -ForegroundColor Yellow
-    if (-not (Get-Command go-winres -ErrorAction SilentlyContinue)) {
-        Write-Host "    go-winres not found, installing..." -ForegroundColor Gray
-        go install github.com/tc-hib/go-winres@latest 2>&1 | Out-Null
-    }
-    # Clean old syso files to force regeneration
-    Remove-Item "$SOURCE\rsrc.syso" -ErrorAction SilentlyContinue
-    Remove-Item "rsrc_*.syso" -ErrorAction SilentlyContinue
+    $goWinres = Install-GoWinres
+    try {
+        # Clean old syso files to force regeneration
+        Remove-Item "$SOURCE\rsrc.syso" -ErrorAction SilentlyContinue
+        Remove-Item "rsrc_*.syso" -ErrorAction SilentlyContinue
 
-    # Check if winres.json exists
-    if (Test-Path "winres\winres.json") {
-        # Generate a temporary resource definition without modifying tracked files.
-        $versionForPE = $VERSION -replace '^v', ''
-        $numericVersion = if ($versionForPE -match '^\d+\.\d+\.\d+$') { $versionForPE } else { '0.0.0' }
-        $fileVersion = $numericVersion + '.0'
-        $productVersion = $versionForPE
-        $winresPath = "winres\winres.json"
-        $generatedWinresPath = "winres\winres.generated.json"
-        $winresContent = Get-Content $winresPath -Raw
-        $winresContent = $winresContent -replace '"file_version":\s*"[^"]*"', "`"file_version`": `"$fileVersion`""
-        $winresContent = $winresContent -replace '"product_version":\s*"[^"]*"', "`"product_version`": `"$productVersion`""
-        $winresContent = $winresContent -replace '"FileVersion":\s*"[^"]*"', "`"FileVersion`": `"$fileVersion`""
-        $winresContent = $winresContent -replace '"ProductVersion":\s*"[^"]*"', "`"ProductVersion`": `"$productVersion`""
-        [System.IO.File]::WriteAllText($generatedWinresPath, $winresContent, (New-Object System.Text.UTF8Encoding $false))
-        Write-Host "    Injected PE version: $productVersion (file: $fileVersion)" -ForegroundColor Gray
+        # Check if winres.json exists
+        if (Test-Path "winres\winres.json") {
+            # Generate a temporary resource definition without modifying tracked files.
+            $versionForPE = $VERSION -replace '^v', ''
+            $numericVersion = if ($versionForPE -match '^\d+\.\d+\.\d+$') { $versionForPE } else { '0.0.0' }
+            $fileVersion = $numericVersion + '.0'
+            $productVersion = $versionForPE
+            $winresPath = "winres\winres.json"
+            $generatedWinresPath = "winres\winres.generated.json"
+            $winresContent = Get-Content $winresPath -Raw
+            $winresContent = $winresContent -replace '"file_version":\s*"[^"]*"', "`"file_version`": `"$fileVersion`""
+            $winresContent = $winresContent -replace '"product_version":\s*"[^"]*"', "`"product_version`": `"$productVersion`""
+            $winresContent = $winresContent -replace '"FileVersion":\s*"[^"]*"', "`"FileVersion`": `"$fileVersion`""
+            $winresContent = $winresContent -replace '"ProductVersion":\s*"[^"]*"', "`"ProductVersion`": `"$productVersion`""
+            [System.IO.File]::WriteAllText($generatedWinresPath, $winresContent, (New-Object System.Text.UTF8Encoding $false))
+            Write-Host "    Injected PE version: $productVersion (file: $fileVersion)" -ForegroundColor Gray
 
-        try {
-            go-winres make --in $generatedWinresPath --arch amd64 2>&1 | Out-Null
-        } finally {
+            Invoke-NativeCommand -FilePath $goWinres.Path -ArgumentList @("make", "--in", $generatedWinresPath, "--arch", "amd64")
             Remove-Item $generatedWinresPath -ErrorAction SilentlyContinue
-        }
-        $sysoFile = Get-ChildItem rsrc_windows_amd64.syso -ErrorAction SilentlyContinue
-        if ($sysoFile) {
-            Copy-Item $sysoFile "$SOURCE\rsrc.syso"
-            Write-Host "    OK Windows resource metadata embedded" -ForegroundColor Green
+            $sysoFile = Get-ChildItem rsrc_windows_amd64.syso -ErrorAction SilentlyContinue
+            if ($sysoFile) {
+                Copy-Item $sysoFile "$SOURCE\rsrc.syso"
+                Write-Host "    OK Windows resource metadata embedded" -ForegroundColor Green
+            } else {
+                Write-Host "    ! No syso file generated, continuing without resources" -ForegroundColor Yellow
+            }
         } else {
-            Write-Host "    ! No syso file generated, continuing without resources" -ForegroundColor Yellow
+            Write-Host "    ! winres/winres.json not found, continuing without resource metadata" -ForegroundColor Yellow
         }
-    } else {
-        Write-Host "    ! winres/winres.json not found, continuing without resource metadata" -ForegroundColor Yellow
+    } finally {
+        Remove-Item "winres\winres.generated.json" -ErrorAction SilentlyContinue
+        Remove-Item $goWinres.Directory -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
 
