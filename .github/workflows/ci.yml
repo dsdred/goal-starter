@@ -6,9 +6,6 @@ on:
   pull_request:
     branches: [main]
 
-env:
-  GO_VERSION: "1.25"
-
 jobs:
   lint:
     name: Lint
@@ -18,9 +15,9 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
-          go-version: ${{ env.GO_VERSION }}
+          go-version-file: .go-version
 
       - name: Run gofmt check
         run: |
@@ -66,9 +63,9 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
-          go-version: ${{ env.GO_VERSION }}
+          go-version-file: .go-version
 
       - name: Build
         run: go build ./...
@@ -81,9 +78,9 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
-          go-version: ${{ env.GO_VERSION }}
+          go-version-file: .go-version
 
       - name: Run tests
         run: go test ./...
@@ -102,9 +99,9 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
-          go-version: ${{ env.GO_VERSION }}
+          go-version-file: .go-version
 
       - name: Run tests
         run: go test ./...
@@ -120,9 +117,9 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
-          go-version: ${{ env.GO_VERSION }}
+          go-version-file: .go-version
 
       - name: Install govulncheck
         run: go install golang.org/x/vuln/cmd/govulncheck@latest
