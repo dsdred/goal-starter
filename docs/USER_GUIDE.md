@@ -34,6 +34,8 @@ GoAl is a lightweight cross-platform manager for local AI runtimes, models, and 
 2. Extract to any directory (e.g., `C:\goal-starter\`)
 3. Open PowerShell and navigate to that folder
 
+> **SmartScreen:** The released binary is not code-signed. Windows may show a SmartScreen warning ("Unknown Publisher") on first run. If you downloaded from the official [GitHub Releases](https://github.com/dsdred/goal-starter/releases) and verified SHA-256 against `checksums.txt`, click "More info" → "Run anyway".
+
 **Option B — Build from source:**
 
 ```powershell

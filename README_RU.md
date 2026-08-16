@@ -2,7 +2,7 @@
 
 GoAl — лёгкий однофайловый менеджер для локальных AI-рантаймов, моделей и профилей запуска. Один бинарник для Windows amd64 и Linux amd64.
 
-**Последняя стабильная версия: v1.0.0** — [GitHub Releases](https://github.com/dsdred/goal-starter/releases/tag/v1.0.0)
+**Последняя стабильная версия: v1.0.3** — [GitHub Releases](https://github.com/dsdred/goal-starter/releases/tag/v1.0.3)
 
 ## Ключевые возможности
 
@@ -47,7 +47,11 @@ go run .\cmd\goal
 |-----------|-------------|--------|
 | Windows   | amd64       | Production |
 | Linux     | amd64       | Production |
-| Linux     | arm64       | Planned |
+| Linux    | arm64       | Planned |
+
+## Примечание о Windows SmartScreen
+
+GoAl Windows-релизы на данный момент **не подписаны**. Publisher может отображаться как "Unknown Publisher", и Windows SmartScreen или Microsoft Defender могут показать предупреждение при первом запуске скачанного релиза. Это ожидаемое ограничение текущего способа распространения, а не ошибка GoAl. Если вы скачали релиз с официальной страницы [GitHub Releases](https://github.com/dsdred/goal-starter/releases) и проверили SHA-256 по `checksums.txt` из этого релиза, вы можете выбрать запуск приложения (например, через "Подробнее" → "Запуск в любом случае"). Code signing — возможное будущее улучшение.
 
 ## Безопасность
 

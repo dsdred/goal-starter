@@ -113,46 +113,27 @@ For maximum security:
 4. Run behind a reverse proxy with TLS
 5. Use `deploy/systemd/goal.service` (Linux) or `deploy/windows/install-service.ps1` (Windows) for managed process lifecycle
 
-## Code signing (Windows)
+## Windows code signing
 
-Release Windows binaries are Authenticode-signed with trusted timestamp.
+Windows release binaries are currently **not Authenticode-signed**. No signing certificate is configured in the release pipeline.
 
-### Threat model
+### What this means for users
 
-| Threat | Mitigation |
-|--------|------------|
-| Key theft | Certificate stored in GitHub Secrets, not in repository |
-| Malicious PR signing | Signing runs only on tag push (`push: tags: v*`), not on PRs |
-| Compromised workflow | Signing job requires `GOAL_SIGN_CERT` secret |
-| Secret exposure | PFX password never printed in logs; certificate used with `/as` flag |
-| Unauthorized release signing | Only `main` branch tag pushes trigger release workflow |
+- The publisher may appear as "Unknown Publisher" in Windows security dialogs.
+- Windows SmartScreen or Microsoft Defender may show a warning when first running a downloaded release.
+- This is expected for the current distribution method, not a GoAl bug.
 
-### Key security
+### User verification
 
-- Private signing key stored in GitHub Secrets (`GOAL_SIGN_CERT`, `GOAL_SIGN_CERT_PASSWORD`)
-- Never committed to repository
-- Never embedded in release artifacts
-- Never printed in CI logs
-- PFX file optionally exported from Windows Certificate Store
-
-### Signature verification
-
-Users can verify the Windows binary signature:
+Users should verify the SHA-256 hash of downloaded binaries against the `checksums.txt` published in the official [GitHub Release](https://github.com/dsdred/goal-starter/releases):
 
 ```powershell
-Get-AuthenticodeSignature .\goal-windows-amd64.exe
+Get-FileHash .\goal-windows-amd64.exe -Algorithm SHA256
 ```
 
-Expected: `Status: Valid`
+### Future
 
-### SmartScreen reputation
-
-SmartScreen reputation is independent of Authenticode signing:
-
-- **Unknown Publisher** → Fixed by valid Authenticode signature (shows publisher name)
-- **SmartScreen warning** → May still appear for new certificates or low-download-count binaries
-- **Reputation build** → Requires downloads, opens, and network signals over time
-- **EV certificate** → Faster reputation but not guaranteed instant SmartScreen clearance
+Authenticode code signing is a possible future improvement. It is not currently planned or implemented.
 
 ## Security notes
 

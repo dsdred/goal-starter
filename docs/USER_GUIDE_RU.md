@@ -34,6 +34,8 @@ GoAl — лёгкий кроссплатформенный менеджер дл
 2. Распакуйте в любую директорию (например `C:\goal-starter\`)
 3. Перейдите в папку через PowerShell
 
+> **SmartScreen:** Выпущенный бинарник не подписан. Windows может показать предупреждение SmartScreen ("Unknown Publisher") при первом запуске. Если вы скачали с официальной страницы [GitHub Releases](https://github.com/dsdred/goal-starter/releases) и проверили SHA-256 по `checksums.txt`, нажмите "Подробнее" → "Запуск в любом случае".
+
 **Вариант B — собрать из исходников:**
 
 ```powershell

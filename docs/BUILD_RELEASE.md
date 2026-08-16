@@ -14,39 +14,36 @@ This document describes the release process for GoAl.
 
 The GitHub Release asset set is exactly these five files. Empty-version names such as `goal--windows-amd64.zip` are invalid and must never be published.
 
-**Latest published tag:** `v1.0.0`
-**Release:** [GitHub Releases](https://github.com/dsdred/goal-starter/releases/tag/v1.0.0)
+**Latest published tag:** `v1.0.3`
+**Release:** [GitHub Releases](https://github.com/dsdred/goal-starter/releases/tag/v1.0.3)
 
-## Windows Authenticode signing
+## Windows Authenticode signing (capability, not currently active)
 
-Windows release binaries are signed only when a signing certificate is configured. Unsigned local release builds are supported and are explicitly identified as unsigned in the generated Windows archive metadata.
+Windows release binaries are currently **unsigned**. No signing certificate is configured in the release pipeline. All published releases (v1.0.0–v1.0.3) shipped with `Status: NotSigned`.
 
-- **Signing certificate** stored in GitHub Secrets (`GOAL_SIGN_CERT`, `GOAL_SIGN_CERT_PASSWORD`)
-- **Timestamp server** configured via `GOAL_SIGN_TIMESTAMP_SERVER` (default: DigiCert)
+The build script (`scripts/build-all.ps1`) includes a signing code path that activates when `SIGN_CERT` and `SIGN_PASSWORD` environment variables are set. This capability exists for when a certificate becomes available, but is not currently in use.
+
+When a certificate IS configured:
+- **Signing certificate** loaded from `SIGN_CERT` (base64 PFX) and `SIGN_PASSWORD`
+- **Timestamp server** configured via `SIGN_TIMESTAMP` (default: DigiCert)
 - **Checksums** generated AFTER signing (signing modifies the PE binary)
 - **Signature verification** always inspects the final binary; a requested signing operation fails unless the final status is `Valid`
 - **Archive metadata** records the actual Authenticode, publisher, and timestamp state of the included binary
 
-### How signing works in the pipeline
+### How the signing code path works
 
 1. Windows binary is built with embedded PE metadata (ProductName, FileDescription, etc.)
-2. If a certificate is configured, the binary is signed with `signtool.exe`
+2. If `SIGN_CERT` is set, the binary is signed with `signtool.exe`
 3. A trusted timestamp is requested for signed builds
 4. The final binary is inspected with `Get-AuthenticodeSignature`
 5. Requested signing must produce `Status = Valid`; otherwise packaging fails
-6. Without a certificate, the expected state is `NotSigned`
+6. Without a certificate (current state), the expected state is `NotSigned`
 7. SHA256 checksums are generated from the final binary bytes
 8. `RELEASE.txt` is generated from the actual signature result and validated against the archived binary
 
 ### SmartScreen note
 
-Valid Authenticode signature ≠ guaranteed immediate SmartScreen reputation.
-
-After a new certificate is issued:
-- Windows will show the publisher name (no longer "Unknown Publisher")
-- SmartScreen may still show "Unknown app" or "Downloaded from Internet" for the first few thousand downloads
-- Reputation builds over time (downloads, opens, network signals)
-- An EV certificate accelerates reputation but does not guarantee instant SmartScreen clearance
+Because releases are currently unsigned, Windows SmartScreen may show a warning ("Unknown Publisher") when users first run a downloaded binary. This is expected. Users should verify SHA-256 against `checksums.txt` from the official GitHub Release before running. Authenticode signing is a possible future improvement.
 
 ## Windows resource metadata
 
@@ -142,11 +139,17 @@ Semantic versioning: `vMAJOR.MINOR.PATCH`
 Get-FileHash bin/goal-windows-amd64.exe -Algorithm SHA256
 # Compare with checksums.txt from release
 
-# Verify Authenticode signature (Windows release only)
+# Check Authenticode status (Windows release only)
 Get-AuthenticodeSignature .\goal-windows-amd64.exe
 ```
 
-Expected output for a signed build:
+Expected status for the current unsigned release:
+
+```text
+Status            : NotSigned
+```
+
+If a future release is signed, the expected output would be:
 
 ```
 SignerCertificate : ...
@@ -155,22 +158,16 @@ StatusMessage     : Signature verified successfully.
 Path              : goal-windows-amd64.exe
 ```
 
-Expected status for an unsigned build:
-
-```text
-Status            : NotSigned
-```
-
 ```bash
 sha256sum -c checksums.txt
 ```
 
 ## GitHub Secrets
 
-Required secrets for release (configured in repository Settings → Secrets):
+Optional secrets for the (currently unused) signing code path. None are currently configured:
 
-| Secret | Description |
-|--------|-------------|
-| `GOAL_SIGN_CERT` | Base64-encoded PFX certificate or path to cert in CI |
-| `GOAL_SIGN_CERT_PASSWORD` | PFX password |
-| `GOAL_SIGN_TIMESTAMP_SERVER` | Timestamp server URL (optional, defaults to DigiCert) |
+| Secret | Description | Status |
+|--------|-------------|--------|
+| `GOAL_SIGN_CERT` | Base64-encoded PFX certificate | Not set |
+| `GOAL_SIGN_CERT_PASSWORD` | PFX password | Not set |
+| `GOAL_SIGN_TIMESTAMP_SERVER` | Timestamp server URL | Not set (defaults to DigiCert if used) |

@@ -2,7 +2,7 @@
 
 GoAl is a lightweight, single-binary manager for local AI runtimes, models, and launch profiles. One executable for Windows amd64 and Linux amd64.
 
-**Latest stable: v1.0.0** — [GitHub Releases](https://github.com/dsdred/goal-starter/releases/tag/v1.0.0)
+**Latest stable: v1.0.3** — [GitHub Releases](https://github.com/dsdred/goal-starter/releases/tag/v1.0.3)
 
 ## Key features
 
@@ -48,6 +48,10 @@ No runtimes, models, or profiles are required to start. The Web UI lets you conf
 | Windows  | amd64       | Production |
 | Linux    | amd64       | Production |
 | Linux    | arm64       | Planned |
+
+## Windows SmartScreen note
+
+GoAl Windows releases are currently **not code-signed**. The publisher may appear as "Unknown Publisher", and Windows SmartScreen or Microsoft Defender may show a warning when you first run a downloaded release. This is expected for the current distribution method, not a GoAl bug. If you downloaded a release from the official [GitHub Releases](https://github.com/dsdred/goal-starter/releases) page and verify its SHA-256 against the `checksums.txt` in that release, you can choose to run the app (for example via "More info" → "Run anyway"). Code signing is a possible future improvement.
 
 ## Security
 

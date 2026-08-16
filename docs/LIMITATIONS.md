@@ -74,9 +74,9 @@ Only one migration step exists: `1 -> 2` (add default health check config). Futu
 
 No third-party security audit has been performed.
 
-### No GPG signatures
+### No GPG or Authenticode signatures
 
-Release binaries are not GPG-signed. Verification is via SHA256 checksums in `checksums.txt`.
+Release binaries are not GPG-signed, and Windows binaries are not Authenticode-signed. Verification is via SHA256 checksums in `checksums.txt`.
 
 ## Storage
 
