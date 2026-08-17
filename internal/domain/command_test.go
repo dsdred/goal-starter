@@ -3,31 +3,52 @@ package domain
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
+func absToolPath(t *testing.T) string {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		return `E:\tools\llama10444`
+	}
+	return "/opt/tools/llama10444"
+}
+
+func absOtherPath(t *testing.T) string {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		return `E:\other\llama-server.exe`
+	}
+	return "/opt/other/llama-server"
+}
+
 func TestResolveExecutablePath_RelativeWithWorkDir(t *testing.T) {
-	got := resolveExecutablePath("llama-server.exe", `E:\tools\llama10444`)
-	want := filepath.Join(`E:\tools\llama10444`, "llama-server.exe")
+	wd := absToolPath(t)
+	name := filepath.Base(absOtherPath(t))
+	got := resolveExecutablePath(name, wd)
+	want := filepath.Join(wd, name)
 	if got != want {
 		t.Errorf("resolveExecutablePath = %q, want %q", got, want)
 	}
 }
 
 func TestResolveExecutablePath_RelativeWithDotPrefix(t *testing.T) {
-	got := resolveExecutablePath(`.\llama-server.exe`, `E:\tools\llama10444`)
-	want := filepath.Join(`E:\tools\llama10444`, `.\llama-server.exe`)
-	// filepath.Join normalizes .\ prefix
-	want = filepath.Clean(want)
-	got = filepath.Clean(got)
+	wd := absToolPath(t)
+	got := resolveExecutablePath(filepath.Join(".", "llama-server"), wd)
+	want := filepath.Join(wd, "llama-server")
 	if got != want {
 		t.Errorf("resolveExecutablePath = %q, want %q", got, want)
 	}
 }
 
 func TestResolveExecutablePath_Absolute(t *testing.T) {
-	abs := `E:\other\llama-server.exe`
-	got := resolveExecutablePath(abs, `E:\tools\llama10444`)
+	abs := absOtherPath(t)
+	if !filepath.IsAbs(abs) {
+		t.Fatalf("test path %q is not absolute on %s", abs, runtime.GOOS)
+	}
+	wd := absToolPath(t)
+	got := resolveExecutablePath(abs, wd)
 	if got != abs {
 		t.Errorf("absolute path should remain unchanged, got %q", got)
 	}
@@ -36,29 +57,9 @@ func TestResolveExecutablePath_Absolute(t *testing.T) {
 func TestResolveExecutablePath_EmptyWorkDir(t *testing.T) {
 	// With empty WorkingDirectory, relative path is returned as-is
 	// (will be resolved by the OS against the process CWD)
-	got := resolveExecutablePath("llama-server.exe", "")
-	if got != "llama-server.exe" {
+	got := resolveExecutablePath("llama-server", "")
+	if got != "llama-server" {
 		t.Errorf("expected unchanged relative path with empty workdir, got %q", got)
-	}
-}
-
-func TestResolveExecutablePath_UnixAbsolute(t *testing.T) {
-	abs := filepath.Join("usr", "bin", "llama-server")
-	if !filepath.IsAbs(abs) {
-		t.Skip("not a meaningful test on this platform")
-	}
-	got := resolveExecutablePath(abs, "/opt/tools")
-	if got != abs {
-		t.Errorf("unix absolute path should remain unchanged, got %q", got)
-	}
-}
-
-func TestResolveExecutablePath_UnixRelative(t *testing.T) {
-	wd := filepath.Join("opt", "tools", "llama10444")
-	got := resolveExecutablePath("llama-server", wd)
-	want := filepath.Join(wd, "llama-server")
-	if got != want {
-		t.Errorf("resolveExecutablePath = %q, want %q", got, want)
 	}
 }
 
