@@ -42,7 +42,7 @@ jobs:
       - name: Check no binaries in repo
         run: |
           found=false
-          for f in $(find . -maxdepth 1 -type f \( -name "*.exe" -o -name "goal" -o -name "goal-linux-*" \)); do
+          for f in $(find . -maxdepth 2 -path ./testdata -prune -o -path ./node_modules -prune -o -type f \( -name "*.exe" -o -name "goal" -o -name "goal-linux-*" \) -print); do
             if git ls-files --error-unmatch "$f" >/dev/null 2>&1; then
               echo "Binary tracked in git: $f"
               found=true
