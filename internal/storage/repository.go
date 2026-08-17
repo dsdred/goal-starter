@@ -45,17 +45,18 @@ type ModelEntry struct {
 
 // ProfileEntry represents a profile definition.
 type ProfileEntry struct {
-	ID          string            `json:"id"`
-	Name        string            `json:"name"`
-	RuntimeID   string            `json:"runtime_id"`
-	ModelID     string            `json:"model_id,omitempty"`
-	Host        string            `json:"host"`
-	Port        int               `json:"port"`
-	Args        []string          `json:"args,omitempty"`
-	Environment map[string]string `json:"environment,omitempty"`
-	Active      bool              `json:"active"`
-	CreatedAt   time.Time         `json:"created_at"`
-	UpdatedAt   time.Time         `json:"updated_at"`
+	ID             string            `json:"id"`
+	Name           string            `json:"name"`
+	RuntimeID      string            `json:"runtime_id"`
+	ModelID        string            `json:"model_id,omitempty"`
+	Host           string            `json:"host"`
+	Port           int               `json:"port"`
+	Args           []string          `json:"args,omitempty"`
+	Environment    map[string]string `json:"environment,omitempty"`
+	Active         bool              `json:"active"`
+	AutostartDelay int               `json:"autostart_delay,omitempty"`
+	CreatedAt      time.Time         `json:"created_at"`
+	UpdatedAt      time.Time         `json:"updated_at"`
 }
 
 // InstanceStore is a minimal interface for instance operations needed by supervisor.
@@ -229,7 +230,7 @@ func (r *JSONRepository) tryBackup() ([]byte, error) {
 // 6. Sync parent directory (where supported)
 func (r *JSONRepository) saveLocked() error {
 	unified := map[string]interface{}{
-		"schema_version": 4,
+		"schema_version": 5,
 		"runtimes":       r.runtimes,
 		"models":         r.models,
 		"profiles":       r.profiles,
@@ -316,10 +317,12 @@ func (r *JSONRepository) save() error {
 
 // SchemaVersion returns the current schema version.
 func (r *JSONRepository) SchemaVersion() int {
-	return 4
+	return 5
 }
 
-// Upgrade migrates from older schema versions.
+// Upgrade migrates from older schema versions to the current version.
+// v4 → v5: adds autostart_delay field to profiles (backward compatible;
+// existing profiles without the field default to 0).
 func (r *JSONRepository) Upgrade() error {
 	return r.save()
 }
@@ -327,7 +330,7 @@ func (r *JSONRepository) Upgrade() error {
 // SaveUnified writes the data to the specified path atomically.
 func (r *JSONRepository) SaveUnified(path string) error {
 	data, err := json.MarshalIndent(map[string]interface{}{
-		"schema_version": 4,
+		"schema_version": 5,
 		"runtimes":       r.runtimes,
 		"models":         r.models,
 		"profiles":       r.profiles,

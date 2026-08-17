@@ -113,10 +113,12 @@ func (m *Manager) Start(ctx context.Context, spec CommandSpec) error {
 	}
 
 	// Validate executable exists.
-	if abs, err := filepath.Abs(spec.Executable); err != nil {
-		return fmt.Errorf("cannot resolve executable path: %w", err)
-	} else if _, err := os.Stat(abs); err != nil {
-		return fmt.Errorf("executable does not exist: %s: %w", spec.Executable, err)
+	exePath := spec.Executable
+	if !filepath.IsAbs(exePath) && spec.WorkingDirectory != "" {
+		exePath = filepath.Join(spec.WorkingDirectory, exePath)
+	}
+	if _, err := os.Stat(exePath); err != nil {
+		return fmt.Errorf("executable does not exist: %s: %w", exePath, err)
 	}
 
 	// Validate working directory.

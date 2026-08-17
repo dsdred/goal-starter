@@ -39,7 +39,15 @@ desktop.ini
 
 # Compiled binaries
 *.exe
-goal
+/goal
 
 # Generated Linux binary
 goal-linux-amd64
+
+# Node.js (browser test tooling)
+node_modules/
+package.json
+package-lock.json
+
+# Browser acceptance scripts
+browser_acceptance.cjs

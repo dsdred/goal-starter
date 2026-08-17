@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/dsdred/goal/internal/config"
+	"github.com/dsdred/goal/internal/domain"
 	"github.com/dsdred/goal/internal/process"
 	"github.com/dsdred/goal/internal/storage"
 	"github.com/dsdred/goal/internal/version"
@@ -90,6 +91,9 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Autostart: launch active profiles after recovery.
+	autostartProfiles(appCtx, repo, supervisor)
+
 	// Create and initialize the web UI app.
 	app, err := webui.NewApp(&cfg, repo, supervisor)
 	if err != nil {
@@ -120,5 +124,106 @@ func main() {
 
 	if runErr != nil || shutdownErr != nil {
 		os.Exit(1)
+	}
+}
+
+// autostartProfiles starts all profiles marked as Active after recovery.
+// Order is deterministic (repository order). A failure in one profile does not
+// block the rest. Each profile may have an optional AutostartDelay in seconds.
+func autostartProfiles(ctx context.Context, repo storage.Repository, supervisor *process.Supervisor) {
+	profiles, err := repo.ListProfiles()
+	if err != nil {
+		slog.Warn("autostart: list profiles", "error", err)
+		return
+	}
+
+	for _, p := range profiles {
+		if !p.Active {
+			continue
+		}
+		if ctx.Err() != nil {
+			return
+		}
+		// Duplicate guard: if a non-terminal instance already exists for this
+		// profile (e.g., started earlier in this session), skip.
+		if hasActiveInstance(repo, p.ID) {
+			slog.Info("autostart: skipping (active instance exists)", "profile", p.Name)
+			continue
+		}
+		if p.AutostartDelay > 0 {
+			select {
+			case <-time.After(time.Duration(p.AutostartDelay) * time.Second):
+			case <-ctx.Done():
+				return
+			}
+		}
+		slog.Info("autostart: starting profile", "name", p.Name, "id", p.ID)
+		if _, err := supervisor.Start(ctx, profileToDomain(p), runtimeFromRepo(repo, p.RuntimeID), modelFromRepo(repo, p.ModelID), nil, nil); err != nil {
+			slog.Error("autostart: start failed", "profile", p.Name, "error", err)
+		}
+	}
+}
+
+// hasActiveInstance returns true if the profile has any instance in a
+// non-terminal state (running, starting, stopping, pending) in the repository.
+func hasActiveInstance(repo storage.Repository, profileID string) bool {
+	instances, err := repo.ListByProfileID(profileID)
+	if err != nil {
+		return false
+	}
+	for _, inst := range instances {
+		switch inst.State {
+		case "running", "starting", "stopping", "pending":
+			return true
+		}
+	}
+	return false
+}
+
+func profileToDomain(p *storage.ProfileEntry) *domain.Profile {
+	return &domain.Profile{
+		ID:          p.ID,
+		Name:        p.Name,
+		RuntimeID:   p.RuntimeID,
+		ModelID:     p.ModelID,
+		Host:        p.Host,
+		Port:        p.Port,
+		Args:        p.Args,
+		Environment: p.Environment,
+		Active:      p.Active,
+	}
+}
+
+func runtimeFromRepo(repo storage.Repository, id string) *domain.Runtime {
+	rte, err := repo.GetRuntime(id)
+	if err != nil {
+		return nil
+	}
+	return &domain.Runtime{
+		ID:               rte.ID,
+		Name:             rte.Name,
+		Executable:       rte.Executable,
+		WorkingDirectory: rte.WorkingDirectory,
+		DefaultArgs:      rte.DefaultArgs,
+		Environment:      rte.Environment,
+	}
+}
+
+func modelFromRepo(repo storage.Repository, id string) *domain.Model {
+	if id == "" {
+		return nil
+	}
+	mde, err := repo.GetModel(id)
+	if err != nil {
+		return nil
+	}
+	return &domain.Model{
+		ID:        mde.ID,
+		Name:      mde.Name,
+		Path:      mde.Path,
+		MMProj:    mde.MMProj,
+		Format:    mde.Format,
+		Arguments: mde.Arguments,
+		RuntimeID: mde.RuntimeID,
 	}
 }

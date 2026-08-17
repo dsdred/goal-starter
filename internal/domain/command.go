@@ -52,10 +52,9 @@ func (r *LaunchResolver) Resolve(
 	if runtime.Executable == "" {
 		return nil, fmt.Errorf("runtime executable is empty")
 	}
-	if abs, err := filepath.Abs(runtime.Executable); err != nil {
-		return nil, fmt.Errorf("cannot resolve executable path: %w", err)
-	} else if _, err := os.Stat(abs); err != nil {
-		return nil, fmt.Errorf("runtime executable does not exist: %s: %w", runtime.Executable, err)
+	exePath := resolveExecutablePath(runtime.Executable, runtime.WorkingDirectory)
+	if _, err := os.Stat(exePath); err != nil {
+		return nil, fmt.Errorf("runtime executable does not exist: %s: %w", exePath, err)
 	}
 
 	// Build args: runtime default args + model-specific args + profile args + custom args.
@@ -122,13 +121,27 @@ func (r *LaunchResolver) Resolve(
 	}
 
 	spec := &CommandSpec{
-		Executable:       runtime.Executable,
+		Executable:       exePath,
 		Args:             args,
 		WorkingDirectory: runtime.WorkingDirectory,
 		Environment:      env,
 	}
 
 	return spec, nil
+}
+
+// resolveExecutablePath resolves a relative executable path against the
+// runtime's WorkingDirectory. If the path is already absolute, it is returned
+// unchanged. If WorkingDirectory is empty, the path is resolved against the
+// current working directory.
+func resolveExecutablePath(executable, workingDir string) string {
+	if filepath.IsAbs(executable) {
+		return executable
+	}
+	if workingDir != "" {
+		return filepath.Join(workingDir, executable)
+	}
+	return executable
 }
 
 // resolveModelArgs adds model-specific arguments to the spec.
@@ -237,6 +250,8 @@ func (r *LaunchResolver) Preview(
 		return nil, fmt.Errorf("runtime executable is empty")
 	}
 
+	exePath := resolveExecutablePath(runtime.Executable, runtime.WorkingDirectory)
+
 	// Build args: runtime default args + model args + profile args + custom args.
 	args := make([]string, 0, len(runtime.DefaultArgs)+len(profile.Args)+len(customArgs))
 	args = append(args, runtime.DefaultArgs...)
@@ -274,7 +289,7 @@ func (r *LaunchResolver) Preview(
 	}
 
 	return &CommandSpec{
-		Executable:       runtime.Executable,
+		Executable:       exePath,
 		Args:             args,
 		WorkingDirectory: runtime.WorkingDirectory,
 		Environment:      env,

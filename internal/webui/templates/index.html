@@ -1,475 +1,437 @@
 {{define "index.html"}}<!DOCTYPE html>
-<html lang="en">
+<html lang="ru">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>GoAl - Process Manager</title>
+    <title>GoAl</title>
     <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
     <!-- Login Modal -->
-    <div id="login-modal" class="modal" style="display:none;">
-        <div class="modal-content">
-            <h2>Authentication Required</h2>
+    <div id="login-modal" class="modal-overlay" style="display:none;">
+        <div class="modal-box">
+            <div class="logo">
+                <svg width="32" height="32" viewBox="0 0 32 32" fill="none"><path d="M6 4L28 16L6 28V4Z" fill="currentColor" opacity="0.9"/><path d="M10 8L22 16L10 24V8Z" fill="var(--bg-primary)" opacity="0.5"/></svg>
+                <span>GoAl</span>
+            </div>
+            <h2>Вход</h2>
             <form id="login-form" onsubmit="return handleLogin(event)">
                 <div class="form-group">
-                    <label for="username">Username</label>
-                    <input type="text" id="username" name="username" required autofocus>
+                    <label for="username">Пользователь</label>
+                    <input type="text" id="username" name="username" required autofocus autocomplete="username">
                 </div>
                 <div class="form-group">
-                    <label for="password">Password</label>
-                    <input type="password" id="password" name="password" required>
+                    <label for="password">Пароль</label>
+                    <input type="password" id="password" name="password" required autocomplete="current-password">
                 </div>
-                <div id="login-error" class="error-message" style="display:none;"></div>
-                <button type="submit" class="btn btn-primary">Login</button>
+                <div id="login-error" class="error-msg" style="display:none;"></div>
+                <button type="submit" class="btn btn-primary btn-block">Войти</button>
             </form>
         </div>
     </div>
 
-    <!-- Toast notifications -->
-    <div id="toast-container" style="position:fixed;top:1rem;right:1rem;z-index:9999;display:flex;flex-direction:column;gap:0.5rem;pointer-events:none;"></div>
+    <!-- Toast container -->
+    <div id="toast-container"></div>
 
-    <!-- Confirmation Modal -->
-    <div id="confirm-modal" class="modal" style="display:none;">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h2>Confirm</h2>
-                <button class="modal-close" onclick="closeConfirmModal()">×</button>
-            </div>
-            <p id="confirm-message" style="margin: 1rem 0; color: var(--text-secondary);"></p>
-            <div class="form-actions">
-                <button id="confirm-modal-yes" class="btn btn-danger">Confirm</button>
-                <button class="btn btn-secondary" onclick="closeConfirmModal()">Cancel</button>
+    <!-- Confirm Modal -->
+    <div id="confirm-modal" class="modal-overlay" style="display:none;">
+        <div class="modal-box">
+            <h2>Подтверждение</h2>
+            <p id="confirm-message" class="confirm-text"></p>
+            <div class="modal-actions">
+                <button id="confirm-yes" class="btn btn-danger">Подтвердить</button>
+                <button class="btn btn-ghost" onclick="closeConfirm()">Отмена</button>
             </div>
         </div>
     </div>
 
-    <!-- Create Runtime Modal -->
-    <div id="create-runtime-modal" class="modal" style="display:none;">
-        <div class="modal-content modal-lg">
+    <!-- Add Model Wizard -->
+    <div id="wizard-modal" class="modal-overlay" style="display:none;">
+        <div class="modal-box modal-wide">
             <div class="modal-header">
-                <h2>Create New Runtime</h2>
-                <button class="modal-close" onclick="closeCreateRuntimeModal()">×</button>
+                <h2>Добавить модель</h2>
+                <button class="modal-close" onclick="closeWizard()">&times;</button>
             </div>
-            <form id="create-runtime-form" onsubmit="return handleCreateRuntime(event)">
-                <div class="form-group">
-                    <label for="runtime-name">Runtime Name *</label>
-                    <input type="text" id="runtime-name" name="name" required placeholder="e.g., llama.cpp">
-                </div>
-                <div class="form-group">
-                    <label for="runtime-executable">Executable Path *</label>
-                    <input type="text" id="runtime-executable" name="executable" required placeholder="C:\path\to\llama-server.exe or /usr/bin/llama-server">
-                </div>
-                <div class="form-group">
-                    <label for="runtime-workdir">Working Directory</label>
-                    <input type="text" id="runtime-workdir" name="working_directory" placeholder="Directory where the runtime will be started">
-                </div>
-                <div class="form-group">
-                    <label for="runtime-args">Default Arguments (space-separated)</label>
-                    <textarea id="runtime-args" name="default_args" rows="2" placeholder="--host 127.0.0.1 --port 8080"></textarea>
-                </div>
-                <div id="create-runtime-error" class="error-message" style="display:none;"></div>
-                <div class="form-actions">
-                    <button type="submit" class="btn btn-primary">Create Runtime</button>
-                    <button type="button" class="btn btn-secondary" onclick="closeCreateRuntimeModal()">Cancel</button>
-                </div>
-            </form>
-        </div>
-    </div>
-
-    <!-- Create Profile Modal -->
-    <div id="create-profile-modal" class="modal" style="display:none;">
-        <div class="modal-content modal-lg">
-            <div class="modal-header">
-                <h2>Create New Profile</h2>
-                <button class="modal-close" onclick="closeCreateProfileModal()">×</button>
+            <div class="wizard-steps">
+                <div class="wizard-step active" data-step="1"><span>1</span> Название</div>
+                <div class="wizard-step" data-step="2"><span>2</span> Runtime</div>
+                <div class="wizard-step" data-step="3"><span>3</span> Модель</div>
+                <div class="wizard-step" data-step="4"><span>4</span> Запуск</div>
             </div>
-            <form id="create-profile-form" onsubmit="return handleCreateProfile(event)">
-                <div class="form-group">
-                    <label for="profile-name">Profile Name *</label>
-                    <input type="text" id="profile-name" name="name" required placeholder="e.g., My AI Model">
-                </div>
-                <div class="form-group">
-                    <label for="profile-runtime">Runtime *</label>
-                    <select id="profile-runtime" name="runtime_id" required onchange="updateProfileModelSelect()">
-                        <option value="">Select a runtime...</option>
-                    </select>
-                </div>
-                <div class="form-group">
-                    <label for="profile-model">Model *</label>
-                    <select id="profile-model" name="model_id" required>
-                        <option value="">Select a model...</option>
-                    </select>
-                </div>
-                <div class="form-row">
+            <form id="wizard-form">
+                <!-- Step 1: Name -->
+                <div class="wizard-panel active" data-panel="1">
                     <div class="form-group">
-                        <label for="profile-host">Host</label>
-                        <input type="text" id="profile-host" name="host" placeholder="e.g., 127.0.0.1" value="127.0.0.1">
+                        <label>Название модели *</label>
+                        <input type="text" id="wiz-name" placeholder="Например: Qwen3.8-27B-Q4_K_M" required>
+                    </div>
+                </div>
+                <!-- Step 2: Runtime -->
+                <div class="wizard-panel" data-panel="2">
+                    <div class="form-group">
+                        <label>Существующий Runtime</label>
+                        <select id="wiz-runtime-existing" onchange="onWizRuntimeChange()">
+                            <option value="">— выбрать —</option>
+                        </select>
+                    </div>
+                    <hr class="form-divider">
+                    <details id="wiz-runtime-new" class="form-accordion">
+                        <summary>Или создать новый Runtime</summary>
+                        <div class="form-group">
+                            <label>Имя Runtime *</label>
+                            <input type="text" id="wiz-rt-name" placeholder="llama.cpp 10444">
+                        </div>
+                        <div class="form-group">
+                            <label>Executable *</label>
+                            <input type="text" id="wiz-rt-executable" placeholder="llama-server.exe">
+                            <small class="hint">Имя файла (относительно Working Directory) или абсолютный путь</small>
+                        </div>
+                        <div class="form-group">
+                            <label>Working Directory</label>
+                            <input type="text" id="wiz-rt-workdir" placeholder="E:\tools\llama10444">
+                        </div>
+                    </details>
+                </div>
+                <!-- Step 3: Model -->
+                <div class="wizard-panel" data-panel="3">
+                    <div class="form-group">
+                        <label>GGUF файл</label>
+                        <input type="text" id="wiz-model-path" placeholder="E:\models\qwen\Qwen3.8-27B-Q4_K_M.gguf">
                     </div>
                     <div class="form-group">
-                        <label for="profile-port">Port</label>
-                        <input type="number" id="profile-port" name="port" placeholder="e.g., 8080" min="1" max="65535">
+                        <label>MMProj (опционально)</label>
+                        <input type="text" id="wiz-model-mmproj" placeholder="E:\models\qwen\mmproj-F16.gguf">
+                    </div>
+                    <div class="form-group">
+                        <label>Параметры модели</label>
+                        <textarea id="wiz-model-args" rows="4" placeholder="-ngl 999&#10;-c 200000&#10;-np 1&#10;-ctk q8_0&#10;-ctv q8_0&#10;-fa on&#10;--jinja"></textarea>
+                        <small class="hint">По одному параметру в строке</small>
                     </div>
                 </div>
-                <div class="form-group">
-                    <label for="profile-args">Arguments (space-separated)</label>
-                    <textarea id="profile-args" name="args" rows="2" placeholder="--model-path /path/to/model --gpu-layers 30"></textarea>
-                </div>
-                <div class="form-group">
-                    <label>Environment Variables</label>
-                    <div id="env-variables-container">
-                        <div class="env-row">
-                            <input type="text" placeholder="VAR_NAME" class="env-key">
-                            <input type="text" placeholder="value" class="env-value">
-                            <button type="button" class="btn btn-danger btn-sm" onclick="removeEnvRow(this)">×</button>
+                <!-- Step 4: Launch config -->
+                <div class="wizard-panel" data-panel="4">
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Host</label>
+                            <input type="text" id="wiz-host" value="127.0.0.1">
+                        </div>
+                        <div class="form-group">
+                            <label>Port</label>
+                            <input type="number" id="wiz-port" value="8085" min="1" max="65535">
                         </div>
                     </div>
-                    <button type="button" class="btn btn-sm" onclick="addEnvRow()">+ Add Variable</button>
+                    <div class="form-group">
+                        <label>Дополнительные аргументы запуска</label>
+                        <textarea id="wiz-profile-args" rows="2" placeholder="Дополнительные args для этого запуска (опционально)"></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label>Environment (опционально)</label>
+                        <div id="wiz-env-container"></div>
+                        <button type="button" class="btn btn-ghost btn-sm" onclick="addWizEnvRow()">+ Переменная</button>
+                    </div>
+                    <div class="form-group form-checkbox">
+                        <label><input type="checkbox" id="wiz-autostart"> Автозапуск при старте GoAl</label>
+                    </div>
+                    <div class="form-group" id="wiz-delay-group" style="display:none;">
+                        <label>Задержка запуска (сек)</label>
+                        <input type="number" id="wiz-autostart-delay" value="0" min="0" max="300">
+                    </div>
                 </div>
-                <div id="create-profile-error" class="error-message" style="display:none;"></div>
-                <div class="form-actions">
-                    <button type="submit" class="btn btn-primary">Create Profile</button>
-                    <button type="button" class="btn btn-secondary" onclick="closeCreateProfileModal()">Cancel</button>
+                <div id="wizard-error" class="error-msg" style="display:none;"></div>
+                <div class="modal-actions">
+                    <button type="button" class="btn btn-ghost" id="wiz-prev" onclick="wizPrev()" style="display:none;">Назад</button>
+                    <button type="submit" class="btn btn-primary" id="wiz-next">Далее</button>
+                    <button type="button" class="btn btn-ghost" onclick="closeWizard()">Отмена</button>
                 </div>
             </form>
         </div>
     </div>
 
-    <!-- Create Model Modal -->
-    <div id="create-model-modal" class="modal" style="display:none;">
-        <div class="modal-content modal-lg">
+    <!-- Model Details Modal -->
+    <div id="details-modal" class="modal-overlay" style="display:none;">
+        <div class="modal-box modal-wide">
             <div class="modal-header">
-                <h2>Create New Model</h2>
-                <button class="modal-close" onclick="closeCreateModelModal()">×</button>
+                <h2 id="details-title">Детали</h2>
+                <button class="modal-close" onclick="closeDetails()">&times;</button>
             </div>
-            <form id="create-model-form" onsubmit="return handleCreateModel(event)">
-                <div class="form-group">
-                    <label for="model-name">Model Name *</label>
-                    <input type="text" id="model-name" name="name" required placeholder="e.g., Qwen 3.6 35B">
-                </div>
-                <div class="form-group">
-                    <label for="model-runtime">Runtime *</label>
-                    <select id="model-runtime" name="runtime_id" required>
-                        <option value="">Select a runtime...</option>
-                    </select>
-                </div>
-                <div class="form-group">
-                    <label for="model-kind">Model Type *</label>
-                    <select id="model-kind" name="kind" required onchange="updateModelKindVisibility()">
-                        <option value="">Select...</option>
-                        <option value="path">Path (GGUF file)</option>
-                        <option value="arguments">Arguments (inline args)</option>
-                    </select>
-                </div>
-                <div class="form-group" id="model-path-group">
-                    <label for="model-path">Path *</label>
-                    <input type="text" id="model-path" name="path" placeholder="Path to .gguf file">
-                    <div id="model-path-error" class="error-message" style="display:none;"></div>
-                </div>
-                <div class="form-group" id="model-args-group" style="display:none;">
-                    <label for="model-arguments">Arguments (space-separated)</label>
-                    <textarea id="model-arguments" name="arguments" rows="2" placeholder="-m model.gguf --mmproj mmproj.gguf --port 8085"></textarea>
-                    <div id="model-args-error" class="error-message" style="display:none;"></div>
-                </div>
-                <div id="create-model-error" class="error-message" style="display:none;"></div>
-                <div class="form-actions">
-                    <button type="submit" class="btn btn-primary">Create Model</button>
-                    <button type="button" class="btn btn-secondary" onclick="closeCreateModelModal()">Cancel</button>
-                </div>
-            </form>
+            <div class="details-tabs">
+                <button class="tab active" data-tab="overview" onclick="switchDetailTab('overview')">Обзор</button>
+                <button class="tab" data-tab="launch" onclick="switchDetailTab('launch')">Параметры</button>
+                <button class="tab" data-tab="instances" onclick="switchDetailTab('instances')">Экземпляры</button>
+            </div>
+            <div class="details-content">
+                <div class="tab-panel active" id="detail-overview"></div>
+                <div class="tab-panel" id="detail-launch"></div>
+                <div class="tab-panel" id="detail-instances"></div>
+            </div>
         </div>
     </div>
 
-    <header>
-        <div class="header-content">
-            <h1>GoAl Process Manager</h1>
-            <div class="header-right">
-                <div id="status-indicator" class="status-badge status-{{.Status.State}}">
-                    <span class="status-dot"></span>
-                    {{.Status.State}}
+    <!-- App Shell -->
+    <div class="app-shell" id="app-shell" style="display:none;">
+        <!-- Sidebar -->
+        <aside class="sidebar" id="sidebar">
+            <div class="sidebar-logo">
+                <svg width="28" height="28" viewBox="0 0 32 32" fill="none"><path d="M6 4L28 16L6 28V4Z" fill="currentColor" opacity="0.9"/><path d="M10 8L22 16L10 24V8Z" fill="var(--bg-primary)" opacity="0.5"/></svg>
+                <span>GoAl</span>
+            </div>
+            <nav class="sidebar-nav">
+                <button class="nav-item active" data-view="models" onclick="navigate('models')">
+                    <svg class="nav-icon" viewBox="0 0 20 20" fill="currentColor"><path d="M3 4h14a1 1 0 011 1v10a1 1 0 01-1 1H3a1 1 0 01-1-1V5a1 1 0 011-1zm2 2v8h10V6H5z"/></svg>
+                    Мои модели
+                </button>
+                <button class="nav-item" data-view="logs" onclick="navigate('logs')">
+                    <svg class="nav-icon" viewBox="0 0 20 20" fill="currentColor"><path d="M4 4h12v2H4V4zm0 4h12v2H4V8zm0 4h8v2H4v-2zm0 4h5v2H4v-2z"/></svg>
+                    Логи
+                </button>
+                <button class="nav-item" data-view="history" onclick="navigate('history')">
+                    <svg class="nav-icon" viewBox="0 0 20 20" fill="currentColor"><path d="M10 2a8 8 0 100 16 8 8 0 000-16zm1 4H9v5l4 2 .75-1.5L11 10.5V6z"/></svg>
+                    История
+                </button>
+            </nav>
+            <div class="sidebar-divider"></div>
+            <div class="sidebar-label">ADVANCED</div>
+            <nav class="sidebar-nav">
+                <button class="nav-item nav-adv" data-view="adv-runtimes" onclick="navigate('adv-runtimes')">Runtimes</button>
+                <button class="nav-item nav-adv" data-view="adv-models" onclick="navigate('adv-models')">Models</button>
+                <button class="nav-item nav-adv" data-view="adv-profiles" onclick="navigate('adv-profiles')">Profiles</button>
+                <button class="nav-item nav-adv" data-view="adv-instances" onclick="navigate('adv-instances')">Instances</button>
+                <button class="nav-item nav-adv" data-view="adv-autostart" onclick="navigate('adv-autostart')">Автозапуск</button>
+                <button class="nav-item nav-adv" data-view="adv-settings" onclick="navigate('adv-settings')">Настройки</button>
+            </nav>
+            <div class="sidebar-footer">
+                <div class="server-status">
+                    <span class="status-dot online"></span>
+                    <span>Сервер GoAl</span>
                 </div>
-                <div id="user-info" class="user-info" style="display:none;">
-                    <span id="username-display"></span>
-                    <button onclick="handleLogout()" class="btn btn-sm">Logout</button>
+                <div class="server-version" id="server-version"></div>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="main-content" id="main-content">
+            <!-- View: My Models -->
+            <section class="view active" id="view-models">
+                <div class="view-header">
+                    <h1>Мои модели</h1>
+                    <button class="btn btn-primary" onclick="openWizard()">+ Добавить модель</button>
                 </div>
-            </div>
-        </div>
-    </header>
-
-    <main>
-        <!-- Status Overview -->
-        <section id="status-overview" class="dashboard">
-            <div class="dashboard-grid">
-                <div class="dashboard-card">
-                    <h3>Instances</h3>
-                    <div class="status-info">
-                        <div class="status-row">
-                            <span class="label">Running:</span>
-                            <span id="dashboard-running">-</span>
-                        </div>
-                        <div class="status-row">
-                            <span class="label">Total:</span>
-                            <span id="dashboard-total">-</span>
-                        </div>
-                    </div>
+                <div class="model-grid" id="model-grid"></div>
+                <div class="empty-state" id="models-empty" style="display:none;">
+                    <p>Модели не добавлены.</p>
+                    <button class="btn btn-primary" onclick="openWizard()">Добавить первую модель</button>
                 </div>
-                <div class="dashboard-card">
-                    <h3>Runtimes</h3>
-                    <div class="status-info">
-                        <div class="status-row">
-                            <span class="label">Configured:</span>
-                            <span id="dashboard-runtimes">-</span>
-                        </div>
-                    </div>
+            </section>
+
+            <!-- View: Logs -->
+            <section class="view" id="view-logs">
+                <div class="view-header">
+                    <h1>Логи</h1>
                 </div>
-                <div class="dashboard-card">
-                    <h3>System</h3>
-                    <div class="status-info">
-                        <div class="status-row">
-                            <span class="label">Version:</span>
-                            <span id="dashboard-version">-</span>
-                        </div>
-                        <div class="status-row">
-                            <span class="label">Listen:</span>
-                            <span>{{.Config.ListenAddress}}:{{.Config.WebPort}}</span>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </section>
-
-        <!-- Instances -->
-        <section id="instances">
-            <div class="section-header">
-                <h2>Instances</h2>
-            </div>
-            <table class="data-table" id="instances-table">
-                <thead>
-                    <tr><th>ID</th><th>Profile</th><th>State</th><th>PID</th><th>Started</th><th>Stopped</th><th>Exit</th><th>Actions</th></tr>
-                </thead>
-                <tbody id="instances-body"></tbody>
-            </table>
-            <p class="empty" id="instances-empty">No instances yet.</p>
-        </section>
-
-        <!-- Runtimes -->
-        <section id="runtimes">
-            <div class="section-header">
-                <h2>Runtimes <span class="count">({{len .Runtimes}})</span></h2>
-                <button class="btn btn-primary" onclick="showCreateRuntimeModal()">+ Add Runtime</button>
-            </div>
-            <table class="data-table">
-                <thead>
-                    <tr><th>Name</th><th>Executable</th><th>Working Dir</th><th>Default Args</th><th>ID</th><th>Actions</th></tr>
-                </thead>
-                <tbody>
-                </tbody>
-            </table>
-            <p class="empty">No runtimes configured. Add one via API or UI.</p>
-        </section>
-
-        <!-- Models -->
-        <section id="models">
-            <div class="section-header">
-                <h2>Models <span class="count">({{len .Models}})</span></h2>
-                <button class="btn btn-primary" onclick="showCreateModelModal()">+ Add Model</button>
-            </div>
-            <table class="data-table">
-                <thead>
-                    <tr><th>Name</th><th>Runtime</th><th>Path</th><th>MMProj</th><th>Format</th><th>ID</th><th>Actions</th></tr>
-                </thead>
-                <tbody>
-                </tbody>
-            </table>
-            <p class="empty">No models configured. Add one via API or UI.</p>
-        </section>
-
-        <!-- Profiles -->
-        <section id="profiles">
-            <div class="section-header">
-                <h2>Profiles <span class="count">({{len .Profiles}})</span></h2>
-                <button class="btn btn-primary" onclick="openCreateProfileModal()">+ Create Profile</button>
-            </div>
-            <table class="data-table">
-                <thead>
-                    <tr><th>Name</th><th>Runtime</th><th>Model</th><th>Host:Port</th><th>Args</th><th>Status</th><th>Actions</th></tr>
-                </thead>
-                <tbody id="profiles-body">
-                </tbody>
-            </table>
-            <p class="empty">No profiles configured. Create one to get started.</p>
-        </section>
-
-        <!-- Logs -->
-        <section id="logs">
-            <div class="section-header">
-                <h2>Live Logs</h2>
-                <div class="log-controls">
-                    <select id="log-filter-stream" onchange="updateLogFilter()">
-                        <option value="">All Streams</option>
+                <div class="logs-toolbar">
+                    <select id="log-instance-select" onchange="switchLogInstance()">
+                        <option value="">Все экземпляры</option>
+                    </select>
+                    <select id="log-stream-filter">
+                        <option value="">Все</option>
                         <option value="stdout">stdout</option>
                         <option value="stderr">stderr</option>
                         <option value="system">system</option>
                     </select>
-                    <input type="text" id="log-search" placeholder="Search..." oninput="filterLogs()">
-                    <select id="log-mode" onchange="updateLogMode()">
-                        <option value="live">Live</option>
-                        <option value="history">History</option>
-                    </select>
-                    <button onclick="clearLogs()" class="btn btn-sm">Clear</button>
+                    <input type="text" id="log-search" placeholder="Поиск..." oninput="applyLogSearch()">
+                    <label class="toggle-label">
+                        <input type="checkbox" id="log-autoscroll" checked>
+                        <span>Автопрокрутка</span>
+                    </label>
+                    <button class="btn btn-ghost btn-sm" onclick="toggleLogPause()" id="log-pause-btn">Пауза</button>
+                    <button class="btn btn-ghost btn-sm" onclick="clearLogView()">Очистить</button>
                 </div>
-            </div>
+                <div class="log-view" id="log-view"></div>
+            </section>
 
-            <!-- Live logs container -->
-            <div id="log-container" class="log-container"></div>
-
-            <!-- Historical logs panel (hidden until toggled) -->
-            <div id="history-panel" class="log-container" style="display:none;">
-                <div id="history-empty" class="empty" style="display:none;">— No logs match the filters —</div>
-            </div>
-        </section>
-    <!-- Profile Preview Modal -->
-    <div id="profile-preview-modal" class="modal" style="display:none;">
-        <div class="modal-content modal-lg">
-            <div class="modal-header">
-                <h2>Profile Launch Preview</h2>
-                <button class="modal-close" onclick="closeProfilePreviewModal()">×</button>
-            </div>
-            <div class="modal-body">
-                <table class="data-table preview-table">
-                    <tr><td><strong>Executable</strong></td><td><code id="preview-executable"></code></td></tr>
-                    <tr><td><strong>Args</strong></td><td><code id="preview-args"></code></td></tr>
-                    <tr><td><strong>Working Directory</strong></td><td><code id="preview-workdir"></code></td></tr>
-                    <tr><td><strong>Environment Keys</strong></td><td><span id="preview-env" class="env-list"></span></td></tr>
+            <!-- View: History -->
+            <section class="view" id="view-history">
+                <div class="view-header">
+                    <h1>История</h1>
+                </div>
+                <table class="data-table">
+                    <thead><tr><th>Модель</th><th>Состояние</th><th>Запущен</th><th>Остановлен</th><th>Exit</th><th></th></tr></thead>
+                    <tbody id="history-body"></tbody>
                 </table>
-            </div>
-            <div class="form-actions">
-                <button class="btn btn-secondary" onclick="closeProfilePreviewModal()">Close</button>
-            </div>
-        </div>
+            </section>
+
+            <!-- View: Advanced - Runtimes -->
+            <section class="view" id="view-adv-runtimes">
+                <div class="view-header">
+                    <h1>Runtimes</h1>
+                    <button class="btn btn-primary" onclick="showCreateRuntimeModal()">+ Add</button>
+                </div>
+                <table class="data-table">
+                    <thead><tr><th>Name</th><th>Executable</th><th>Working Dir</th><th>Default Args</th><th></th></tr></thead>
+                    <tbody id="adv-runtimes-body"></tbody>
+                </table>
+            </section>
+
+            <!-- View: Advanced - Models -->
+            <section class="view" id="view-adv-models">
+                <div class="view-header">
+                    <h1>Models</h1>
+                    <button class="btn btn-primary" onclick="showCreateModelModal()">+ Add</button>
+                </div>
+                <table class="data-table">
+                    <thead><tr><th>Name</th><th>Runtime</th><th>Path</th><th>MMProj</th><th>Format</th><th></th></tr></thead>
+                    <tbody id="adv-models-body"></tbody>
+                </table>
+            </section>
+
+            <!-- View: Advanced - Profiles -->
+            <section class="view" id="view-adv-profiles">
+                <div class="view-header">
+                    <h1>Profiles</h1>
+                    <button class="btn btn-primary" onclick="showCreateProfileModal()">+ Add</button>
+                </div>
+                <table class="data-table">
+                    <thead><tr><th>Name</th><th>Runtime</th><th>Model</th><th>Host:Port</th><th>Args</th><th></th></tr></thead>
+                    <tbody id="adv-profiles-body"></tbody>
+                </table>
+            </section>
+
+            <!-- View: Advanced - Instances -->
+            <section class="view" id="view-adv-instances">
+                <div class="view-header">
+                    <h1>Instances</h1>
+                </div>
+                <table class="data-table">
+                    <thead><tr><th>ID</th><th>Profile</th><th>State</th><th>PID</th><th>Started</th><th>Stopped</th><th>Exit</th><th></th></tr></thead>
+                    <tbody id="adv-instances-body"></tbody>
+                </table>
+            </section>
+
+            <!-- View: Advanced - Autostart -->
+            <section class="view" id="view-adv-autostart">
+                <div class="view-header">
+                    <h1>Автозапуск</h1>
+                </div>
+                <p class="hint-text">Модели с включённым автозапуском стартуют при запуске GoAl.</p>
+                <table class="data-table">
+                    <thead><tr><th>Модель</th><th>Host:Port</th><th>Задержка</th><th>Enabled</th><th></th></tr></thead>
+                    <tbody id="autostart-body"></tbody>
+                </table>
+            </section>
+
+            <!-- View: Advanced - Settings -->
+            <section class="view" id="view-adv-settings">
+                <div class="view-header">
+                    <h1>Настройки</h1>
+                </div>
+                <div class="settings-grid">
+                    <div class="settings-card">
+                        <h3>Сервер</h3>
+                        <div class="setting-row"><span>Версия</span><span id="set-version">-</span></div>
+                        <div class="setting-row"><span>Адрес</span><span id="set-listen">-</span></div>
+                        <div class="setting-row"><span>Авторизация</span><span id="set-auth">-</span></div>
+                    </div>
+                    <div class="settings-card">
+                        <h3>Пользователь</h3>
+                        <div class="setting-row"><span>Логин</span><span id="set-user">-</span></div>
+                        <button class="btn btn-ghost btn-sm" onclick="handleLogout()" style="margin-top:1rem;">Выйти</button>
+                    </div>
+                </div>
+            </section>
+        </main>
     </div>
 
-    <!-- Edit Runtime Modal -->
-    <div id="edit-runtime-modal" class="modal" style="display:none;">
-        <div class="modal-content modal-lg">
-            <div class="modal-header">
-                <h2>Edit Runtime</h2>
-                <button class="modal-close" onclick="closeEditRuntimeModal()">×</button>
-            </div>
-            <form id="edit-runtime-form" onsubmit="return handleEditRuntime(event)">
-                <input type="hidden" id="edit-runtime-id">
-                <div class="form-group">
-                    <label for="edit-runtime-name">Name *</label>
-                    <input type="text" id="edit-runtime-name" name="name" required>
-                </div>
-                <div class="form-group">
-                    <label for="edit-runtime-executable">Executable *</label>
-                    <input type="text" id="edit-runtime-executable" name="executable" required>
-                </div>
-                <div class="form-group">
-                    <label for="edit-runtime-workdir">Working Directory</label>
-                    <input type="text" id="edit-runtime-workdir" name="working_directory">
-                </div>
-                <div class="form-group">
-                    <label for="edit-runtime-args">Default Args (space-separated)</label>
-                    <textarea id="edit-runtime-args" name="default_args" rows="2"></textarea>
-                </div>
-                <div id="edit-runtime-error" class="error-message" style="display:none;"></div>
-                <div class="form-actions">
-                    <button type="submit" class="btn btn-primary">Save</button>
-                    <button type="button" class="btn btn-secondary" onclick="closeEditRuntimeModal()">Cancel</button>
-                </div>
+    <!-- Legacy modals (kept for Advanced CRUD) -->
+    <div id="create-runtime-modal" class="modal-overlay" style="display:none;">
+        <div class="modal-box">
+            <div class="modal-header"><h2>Создать Runtime</h2><button class="modal-close" onclick="closeModal('create-runtime-modal')">&times;</button></div>
+            <form onsubmit="return handleCreateRuntime(event)">
+                <div class="form-group"><label>Имя *</label><input type="text" name="name" required></div>
+                <div class="form-group"><label>Executable *</label><input type="text" name="executable" required></div>
+                <div class="form-group"><label>Working Directory</label><input type="text" name="working_directory"></div>
+                <div class="form-group"><label>Default Args (space-separated)</label><textarea name="default_args" rows="2"></textarea></div>
+                <div class="modal-actions"><button type="submit" class="btn btn-primary">Создать</button><button type="button" class="btn btn-ghost" onclick="closeModal('create-runtime-modal')">Отмена</button></div>
             </form>
         </div>
     </div>
 
-    <!-- Edit Model Modal -->
-    <div id="edit-model-modal" class="modal" style="display:none;">
-        <div class="modal-content modal-lg">
-            <div class="modal-header">
-                <h2>Edit Model</h2>
-                <button class="modal-close" onclick="closeEditModelModal()">×</button>
-            </div>
-            <form id="edit-model-form" onsubmit="return handleEditModel(event)">
-                <input type="hidden" id="edit-model-id">
-                <div class="form-group">
-                    <label for="edit-model-name">Name *</label>
-                    <input type="text" id="edit-model-name" name="name" required>
-                </div>
-                <div class="form-group">
-                    <label for="edit-model-runtime">Runtime *</label>
-                    <select id="edit-model-runtime" name="runtime_id" required></select>
-                </div>
-                <div class="form-group">
-                    <label for="edit-model-kind">Model Type *</label>
-                    <select id="edit-model-kind" name="kind" required onchange="updateEditModelKindVisibility()">
-                        <option value="">Select...</option>
-                        <option value="path">Path (GGUF file)</option>
-                        <option value="arguments">Arguments (inline args)</option>
-                    </select>
-                </div>
-                <div class="form-group" id="edit-model-path-group">
-                    <label for="edit-model-path">Path *</label>
-                    <input type="text" id="edit-model-path" name="path">
-                </div>
-                <div class="form-group" id="edit-model-args-group" style="display:none;">
-                    <label for="edit-model-arguments">Arguments</label>
-                    <textarea id="edit-model-arguments" name="arguments" rows="2"></textarea>
-                </div>
-                <div id="edit-model-error" class="error-message" style="display:none;"></div>
-                <div class="form-actions">
-                    <button type="submit" class="btn btn-primary">Save</button>
-                    <button type="button" class="btn btn-secondary" onclick="closeEditModelModal()">Cancel</button>
-                </div>
+    <div id="create-model-modal" class="modal-overlay" style="display:none;">
+        <div class="modal-box">
+            <div class="modal-header"><h2>Создать Model</h2><button class="modal-close" onclick="closeModal('create-model-modal')">&times;</button></div>
+            <form onsubmit="return handleCreateModel(event)">
+                <div class="form-group"><label>Имя *</label><input type="text" name="name" required></div>
+                <div class="form-group"><label>Runtime *</label><select name="runtime_id" required><option value="">—</option></select></div>
+                <div class="form-group"><label>Тип *</label><select name="kind" required onchange="toggleModelKind(this)"><option value="">—</option><option value="path">Path (GGUF)</option><option value="arguments">Arguments</option></select></div>
+                <div class="form-group" data-kind="path"><label>Path *</label><input type="text" name="path"></div>
+                <div class="form-group" data-kind="arguments" style="display:none;"><label>Arguments</label><textarea name="arguments" rows="3"></textarea></div>
+                <div class="modal-actions"><button type="submit" class="btn btn-primary">Создать</button><button type="button" class="btn btn-ghost" onclick="closeModal('create-model-modal')">Отмена</button></div>
             </form>
         </div>
     </div>
 
-    <!-- Edit Profile Modal -->
-    <div id="edit-profile-modal" class="modal" style="display:none;">
-        <div class="modal-content modal-lg">
-            <div class="modal-header">
-                <h2>Edit Profile</h2>
-                <button class="modal-close" onclick="closeEditProfileModal()">×</button>
-            </div>
-            <form id="edit-profile-form" onsubmit="return handleEditProfile(event)">
-                <input type="hidden" id="edit-profile-id">
-                <div class="form-group">
-                    <label for="edit-profile-name">Name *</label>
-                    <input type="text" id="edit-profile-name" name="name" required>
-                </div>
-                <div class="form-group">
-                    <label for="edit-profile-runtime">Runtime *</label>
-                    <select id="edit-profile-runtime" name="runtime_id" required></select>
-                </div>
-                <div class="form-group">
-                    <label for="edit-profile-model">Model</label>
-                    <select id="edit-profile-model" name="model_id"></select>
-                </div>
+    <div id="create-profile-modal" class="modal-overlay" style="display:none;">
+        <div class="modal-box">
+            <div class="modal-header"><h2>Создать Profile</h2><button class="modal-close" onclick="closeModal('create-profile-modal')">&times;</button></div>
+            <form onsubmit="return handleCreateProfile(event)">
+                <div class="form-group"><label>Имя *</label><input type="text" name="name" required></div>
+                <div class="form-group"><label>Runtime *</label><select name="runtime_id" required></select></div>
+                <div class="form-group"><label>Model</label><select name="model_id"></select></div>
                 <div class="form-row">
-                    <div class="form-group">
-                        <label for="edit-profile-host">Host</label>
-                        <input type="text" id="edit-profile-host" name="host" value="127.0.0.1">
-                    </div>
-                    <div class="form-group">
-                        <label for="edit-profile-port">Port</label>
-                        <input type="number" id="edit-profile-port" name="port" min="1" max="65535">
-                    </div>
+                    <div class="form-group"><label>Host</label><input type="text" name="host" value="127.0.0.1"></div>
+                    <div class="form-group"><label>Port</label><input type="number" name="port" min="1" max="65535"></div>
                 </div>
-                <div class="form-group">
-                    <label for="edit-profile-args">Arguments (space-separated)</label>
-                    <textarea id="edit-profile-args" name="args" rows="2"></textarea>
-                </div>
-                <div id="edit-profile-error" class="error-message" style="display:none;"></div>
-                <div class="form-actions">
-                    <button type="submit" class="btn btn-primary">Save</button>
-                    <button type="button" class="btn btn-secondary" onclick="closeEditProfileModal()">Cancel</button>
-                </div>
+                <div class="form-group"><label>Args (space-separated)</label><textarea name="args" rows="2"></textarea></div>
+                <div class="modal-actions"><button type="submit" class="btn btn-primary">Создать</button><button type="button" class="btn btn-ghost" onclick="closeModal('create-profile-modal')">Отмена</button></div>
             </form>
         </div>
     </div>
 
-    </main>
+    <div id="edit-runtime-modal" class="modal-overlay" style="display:none;">
+        <div class="modal-box">
+            <div class="modal-header"><h2>Редактировать Runtime</h2><button class="modal-close" onclick="closeModal('edit-runtime-modal')">&times;</button></div>
+            <form onsubmit="return handleEditRuntime(event)">
+                <input type="hidden" name="id">
+                <div class="form-group"><label>Имя *</label><input type="text" name="name" required></div>
+                <div class="form-group"><label>Executable *</label><input type="text" name="executable" required></div>
+                <div class="form-group"><label>Working Directory</label><input type="text" name="working_directory"></div>
+                <div class="form-group"><label>Default Args</label><textarea name="default_args" rows="2"></textarea></div>
+                <div class="modal-actions"><button type="submit" class="btn btn-primary">Сохранить</button><button type="button" class="btn btn-ghost" onclick="closeModal('edit-runtime-modal')">Отмена</button></div>
+            </form>
+        </div>
+    </div>
+
+    <div id="edit-model-modal" class="modal-overlay" style="display:none;">
+        <div class="modal-box">
+            <div class="modal-header"><h2>Редактировать Model</h2><button class="modal-close" onclick="closeModal('edit-model-modal')">&times;</button></div>
+            <form onsubmit="return handleEditModel(event)">
+                <input type="hidden" name="id">
+                <div class="form-group"><label>Имя *</label><input type="text" name="name" required></div>
+                <div class="form-group"><label>Runtime *</label><select name="runtime_id" required></select></div>
+                <div class="form-group"><label>Тип *</label><select name="kind" required onchange="toggleModelKind(this)"><option value="path">Path</option><option value="arguments">Arguments</option></select></div>
+                <div class="form-group" data-kind="path"><label>Path *</label><input type="text" name="path"></div>
+                <div class="form-group" data-kind="arguments" style="display:none;"><label>Arguments</label><textarea name="arguments" rows="3"></textarea></div>
+                <div class="modal-actions"><button type="submit" class="btn btn-primary">Сохранить</button><button type="button" class="btn btn-ghost" onclick="closeModal('edit-model-modal')">Отмена</button></div>
+            </form>
+        </div>
+    </div>
+
+    <div id="edit-profile-modal" class="modal-overlay" style="display:none;">
+        <div class="modal-box">
+            <div class="modal-header"><h2>Редактировать Profile</h2><button class="modal-close" onclick="closeModal('edit-profile-modal')">&times;</button></div>
+            <form onsubmit="return handleEditProfile(event)">
+                <input type="hidden" name="id">
+                <div class="form-group"><label>Имя *</label><input type="text" name="name" required></div>
+                <div class="form-group"><label>Runtime *</label><select name="runtime_id" required></select></div>
+                <div class="form-group"><label>Model</label><select name="model_id"></select></div>
+                <div class="form-row">
+                    <div class="form-group"><label>Host</label><input type="text" name="host"></div>
+                    <div class="form-group"><label>Port</label><input type="number" name="port" min="1" max="65535"></div>
+                </div>
+                <div class="form-group"><label>Args</label><textarea name="args" rows="2"></textarea></div>
+                <div class="modal-actions"><button type="submit" class="btn btn-primary">Сохранить</button><button type="button" class="btn btn-ghost" onclick="closeModal('edit-profile-modal')">Отмена</button></div>
+            </form>
+        </div>
+    </div>
 
     <script src="/static/app.js"></script>
 </body>
