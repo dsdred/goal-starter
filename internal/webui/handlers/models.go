@@ -97,6 +97,18 @@ func (h *ModelsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.modelSvc.DeleteModel(r.Context(), id); err != nil {
+		var apiErr *apierrors.APIError
+		if errors.As(err, &apiErr) {
+			status := http.StatusInternalServerError
+			switch apiErr.Code {
+			case apierrors.CodeConflict:
+				status = http.StatusConflict
+			case apierrors.CodeNotFound, apierrors.CodeInvalidModel:
+				status = http.StatusNotFound
+			}
+			writeAPIError(w, status, apiErr)
+			return
+		}
 		writeError(w, 500, err.Error())
 		return
 	}

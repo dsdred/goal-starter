@@ -686,13 +686,21 @@ function deleteRuntime(id) {
     const name = rt ? rt.name : id;
     const depModels = modelsData.filter(m => m.runtime_id === id);
     const depProfiles = profilesData.filter(p => p.runtime_id === id);
-    let msg = `Удалить runtime "${name}"?`;
-    if (depModels.length > 0) msg += `\nЗависимые модели: ${depModels.map(m => m.name).join(', ')}`;
-    if (depProfiles.length > 0) msg += `\nЗависимые профили: ${depProfiles.map(p => p.name).join(', ')}`;
-    if (depModels.length > 0 || depProfiles.length > 0) msg += '\nОни станут недоступны для запуска.';
-    showConfirm(msg, async function () {
-        try { await api('/runtimes/' + id, { method: 'DELETE' }); await reloadAllData(); renderAll(); }
-        catch (err) { showToast(friendlyError(err), 'error'); }
+    const dependents = [];
+    depModels.forEach(m => dependents.push('Модель: ' + m.name));
+    depProfiles.forEach(p => dependents.push('Профиль: ' + p.name));
+    if (dependents.length > 0) {
+        showBlockedModal('Runtime', name, dependents);
+        return;
+    }
+    showConfirm(`Удалить runtime "${name}"?`, async function () {
+        try {
+            await api('/runtimes/' + id, { method: 'DELETE' });
+            closeConfirm();
+            await reloadAllData(); renderAll();
+        } catch (err) {
+            showToast(friendlyError(err), 'error');
+        }
     });
 }
 
@@ -787,11 +795,18 @@ function deleteModel(id) {
     const m = modelsData.find(x => x.id === id);
     const name = m ? m.name : id;
     const depProfiles = profilesData.filter(p => p.model_id === id);
-    let msg = `Удалить модель "${name}"?`;
-    if (depProfiles.length > 0) msg += `\nИспользуется в профилях: ${depProfiles.map(p => p.name).join(', ')}\nЭти профили не смогут запускаться.`;
-    showConfirm(msg, async function () {
-        try { await api('/models/' + id, { method: 'DELETE' }); await reloadAllData(); renderAll(); }
-        catch (err) { showToast(friendlyError(err), 'error'); }
+    if (depProfiles.length > 0) {
+        showBlockedModal('Модель', name, depProfiles.map(p => 'Профиль: ' + p.name));
+        return;
+    }
+    showConfirm(`Удалить модель "${name}"?`, async function () {
+        try {
+            await api('/models/' + id, { method: 'DELETE' });
+            closeConfirm();
+            await reloadAllData(); renderAll();
+        } catch (err) {
+            showToast(friendlyError(err), 'error');
+        }
     });
 }
 
@@ -883,8 +898,13 @@ function deleteProfile(id) {
     let msg = `Удалить профиль "${name}"?`;
     if (activeInsts.length > 0) msg += `\nАктивные экземпляры (${activeInsts.length}) будут остановлены.`;
     showConfirm(msg, async function () {
-        try { await api('/profiles/' + id, { method: 'DELETE' }); await reloadAllData(); renderAll(); }
-        catch (err) { showToast(friendlyError(err), 'error'); }
+        try {
+            await api('/profiles/' + id, { method: 'DELETE' });
+            closeConfirm();
+            await reloadAllData(); renderAll();
+        } catch (err) {
+            showToast(friendlyError(err), 'error');
+        }
     });
 }
 
@@ -1011,12 +1031,29 @@ function showConfirm(msg, onYes) {
     btn.onclick = async function () {
         btn.disabled = true;
         btn.textContent = 'Выполняется...';
-        await onYes();
+        try {
+            await onYes();
+        } finally {
+            btn.disabled = false;
+            btn.textContent = 'Подтвердить';
+        }
     };
     document.getElementById('confirm-modal').style.display = 'flex';
 }
 
 function closeConfirm() { document.getElementById('confirm-modal').style.display = 'none'; }
+
+function showBlockedModal(entityType, entityName, dependents) {
+    const content = document.getElementById('blocked-content');
+    let html = `<p><strong>${esc(entityType)}</strong>: ${esc(entityName)}</p>`;
+    html += '<p class="hint-text" style="margin-top:0.8rem;">Используется:</p><ul style="margin:0.5rem 0 0.5rem 1.2rem;font-size:0.88rem;color:var(--text-secondary);">';
+    dependents.forEach(d => { html += `<li>${esc(d)}</li>`; });
+    html += '</ul><p class="hint-text" style="margin-top:0.8rem;">Сначала удалите или измените связанные записи.</p>';
+    content.innerHTML = html;
+    document.getElementById('blocked-modal').style.display = 'flex';
+}
+
+function closeBlocked() { document.getElementById('blocked-modal').style.display = 'none'; }
 
 // ─── Toast ──────────────────────────────────────────────────────────────────
 
@@ -1083,6 +1120,8 @@ window.toggleLogPause = toggleLogPause;
 window.clearLogView = clearLogView;
 window.closeModal = closeModal;
 window.closeConfirm = closeConfirm;
+window.closeBlocked = closeBlocked;
+window.reloadAllData = reloadAllData;
 window.addWizEnvRow = addWizEnvRow;
 window.toggleModelKind = toggleModelKind;
 window.onWizRtModeChange = onWizRtModeChange;

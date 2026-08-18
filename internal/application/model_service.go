@@ -40,7 +40,22 @@ func (s *ModelService) UpdateModel(ctx context.Context, entry *storage.ModelEntr
 	return s.repo.UpdateModel(entry)
 }
 
-// DeleteModel deletes a model by ID.
+// DeleteModel deletes a model by ID. Returns a conflict error if any profile
+// references this model.
 func (s *ModelService) DeleteModel(ctx context.Context, id string) error {
+	profiles, err := s.repo.ListProfiles()
+	if err != nil {
+		return err
+	}
+	var dependents []string
+	for _, p := range profiles {
+		if p.ModelID == id {
+			dependents = append(dependents, p.Name)
+		}
+	}
+	if len(dependents) > 0 {
+		return errors.NewAPIError(errors.CodeConflict,
+			"model is in use by profiles", dependents...)
+	}
 	return s.repo.DeleteModel(id)
 }

@@ -45,6 +45,17 @@
         </div>
     </div>
 
+    <!-- Blocked Delete Modal (no confirm button) -->
+    <div id="blocked-modal" class="modal-overlay" style="display:none;">
+        <div class="modal-box">
+            <h2>Невозможно удалить</h2>
+            <div id="blocked-content" class="confirm-text"></div>
+            <div class="modal-actions">
+                <button class="btn btn-ghost" onclick="closeBlocked()">Закрыть</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Add Model Wizard -->
     <div id="wizard-modal" class="modal-overlay" style="display:none;">
         <div class="modal-box modal-wide">
