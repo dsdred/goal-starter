@@ -69,14 +69,26 @@
                 <!-- Step 2: Runtime -->
                 <div class="wizard-panel" data-panel="2">
                     <div class="form-group">
-                        <label>Существующий Runtime</label>
-                        <select id="wiz-runtime-existing" onchange="onWizRuntimeChange()">
+                        <label>Runtime</label>
+                        <div class="radio-group">
+                            <label class="radio-option">
+                                <input type="radio" name="wiz-rt-mode" value="existing" checked onchange="onWizRtModeChange()">
+                                <span>Использовать существующий</span>
+                            </label>
+                            <label class="radio-option">
+                                <input type="radio" name="wiz-rt-mode" value="new" onchange="onWizRtModeChange()">
+                                <span>Создать новый Runtime</span>
+                            </label>
+                        </div>
+                    </div>
+                    <div id="wiz-rt-existing-section" class="form-group">
+                        <label>Выберите Runtime</label>
+                        <select id="wiz-runtime-existing">
                             <option value="">— выбрать —</option>
                         </select>
                     </div>
-                    <hr class="form-divider">
-                    <details id="wiz-runtime-new" class="form-accordion">
-                        <summary>Или создать новый Runtime</summary>
+                    <div id="wiz-rt-new-section" class="form-group" style="display:none;">
+                        <small class="hint" style="margin-bottom:8px;display:block;">Runtime будет создан автоматически при нажатии «Создать» на последнем шаге.</small>
                         <div class="form-group">
                             <label>Имя Runtime *</label>
                             <input type="text" id="wiz-rt-name" placeholder="llama.cpp 10444">
@@ -90,7 +102,7 @@
                             <label>Working Directory</label>
                             <input type="text" id="wiz-rt-workdir" placeholder="E:\tools\llama10444">
                         </div>
-                    </details>
+                    </div>
                 </div>
                 <!-- Step 3: Model -->
                 <div class="wizard-panel" data-panel="3">
@@ -125,12 +137,17 @@
                         <textarea id="wiz-profile-args" rows="2" placeholder="Дополнительные args для этого запуска (опционально)"></textarea>
                     </div>
                     <div class="form-group">
-                        <label>Environment (опционально)</label>
+                        <label>Переменные окружения</label>
+                        <small class="hint">Дополнительные env-переменные, передаваемые процессу (например, CUDA_VISIBLE_DEVICES). Не показываются при чтении.</small>
                         <div id="wiz-env-container"></div>
                         <button type="button" class="btn btn-ghost btn-sm" onclick="addWizEnvRow()">+ Переменная</button>
                     </div>
-                    <div class="form-group form-checkbox">
-                        <label><input type="checkbox" id="wiz-autostart"> Автозапуск при старте GoAl</label>
+                    <div class="form-group form-autostart">
+                        <div>
+                            <span class="autostart-label">Автозапуск при старте GoAl</span>
+                            <small class="hint">Модель будет запущена автоматически при каждом старте GoAl</small>
+                        </div>
+                        <label class="toggle-switch"><input type="checkbox" id="wiz-autostart"><span class="toggle-slider"></span></label>
                     </div>
                     <div class="form-group" id="wiz-delay-group" style="display:none;">
                         <label>Задержка запуска (сек)</label>
@@ -190,12 +207,12 @@
                 </button>
             </nav>
             <div class="sidebar-divider"></div>
-            <div class="sidebar-label">ADVANCED</div>
+            <div class="sidebar-label">РАСШИРЕННО</div>
             <nav class="sidebar-nav">
-                <button class="nav-item nav-adv" data-view="adv-runtimes" onclick="navigate('adv-runtimes')">Runtimes</button>
-                <button class="nav-item nav-adv" data-view="adv-models" onclick="navigate('adv-models')">Models</button>
-                <button class="nav-item nav-adv" data-view="adv-profiles" onclick="navigate('adv-profiles')">Profiles</button>
-                <button class="nav-item nav-adv" data-view="adv-instances" onclick="navigate('adv-instances')">Instances</button>
+                <button class="nav-item nav-adv" data-view="adv-runtimes" onclick="navigate('adv-runtimes')">Рантаймы</button>
+                <button class="nav-item nav-adv" data-view="adv-models" onclick="navigate('adv-models')">Модели (сущ.)</button>
+                <button class="nav-item nav-adv" data-view="adv-profiles" onclick="navigate('adv-profiles')">Профили</button>
+                <button class="nav-item nav-adv" data-view="adv-instances" onclick="navigate('adv-instances')">Экземпляры</button>
                 <button class="nav-item nav-adv" data-view="adv-autostart" onclick="navigate('adv-autostart')">Автозапуск</button>
                 <button class="nav-item nav-adv" data-view="adv-settings" onclick="navigate('adv-settings')">Настройки</button>
             </nav>
@@ -228,6 +245,10 @@
                 <div class="view-header">
                     <h1>Логи</h1>
                 </div>
+                <div class="empty-state" id="logs-empty" style="display:none;">
+                    <p>Нет активных экземпляров для логирования.</p>
+                    <small class="hint-text">Запустите модель, чтобы увидеть логи в реальном времени.</small>
+                </div>
                 <div class="logs-toolbar">
                     <select id="log-instance-select" onchange="switchLogInstance()">
                         <option value="">Все экземпляры</option>
@@ -246,6 +267,7 @@
                     <button class="btn btn-ghost btn-sm" onclick="toggleLogPause()" id="log-pause-btn">Пауза</button>
                     <button class="btn btn-ghost btn-sm" onclick="clearLogView()">Очистить</button>
                 </div>
+                <div class="log-instance-bar" id="log-instance-bar" style="display:none;"></div>
                 <div class="log-view" id="log-view"></div>
             </section>
 
@@ -253,6 +275,10 @@
             <section class="view" id="view-history">
                 <div class="view-header">
                     <h1>История</h1>
+                </div>
+                <div class="empty-state" id="history-empty" style="display:none;">
+                    <p>История пуста.</p>
+                    <small class="hint-text">Завершённые экземпляры появятся здесь.</small>
                 </div>
                 <table class="data-table">
                     <thead><tr><th>Модель</th><th>Состояние</th><th>Запущен</th><th>Остановлен</th><th>Exit</th><th></th></tr></thead>
@@ -263,11 +289,14 @@
             <!-- View: Advanced - Runtimes -->
             <section class="view" id="view-adv-runtimes">
                 <div class="view-header">
-                    <h1>Runtimes</h1>
-                    <button class="btn btn-primary" onclick="showCreateRuntimeModal()">+ Add</button>
+                    <h1>Рантаймы</h1>
+                    <button class="btn btn-primary" onclick="showCreateRuntimeModal()">+ Добавить</button>
+                </div>
+                <div class="empty-state" id="runtimes-empty" style="display:none;">
+                    <p>Рантаймы не добавлены.</p>
                 </div>
                 <table class="data-table">
-                    <thead><tr><th>Name</th><th>Executable</th><th>Working Dir</th><th>Default Args</th><th></th></tr></thead>
+                    <thead><tr><th>Имя</th><th>Executable</th><th>Рабочий каталог</th><th>Аргументы по умолчанию</th><th></th></tr></thead>
                     <tbody id="adv-runtimes-body"></tbody>
                 </table>
             </section>
@@ -275,11 +304,14 @@
             <!-- View: Advanced - Models -->
             <section class="view" id="view-adv-models">
                 <div class="view-header">
-                    <h1>Models</h1>
-                    <button class="btn btn-primary" onclick="showCreateModelModal()">+ Add</button>
+                    <h1>Модели (сущ.)</h1>
+                    <button class="btn btn-primary" onclick="showCreateModelModal()">+ Добавить</button>
+                </div>
+                <div class="empty-state" id="models-adv-empty" style="display:none;">
+                    <p>Модели не добавлены.</p>
                 </div>
                 <table class="data-table">
-                    <thead><tr><th>Name</th><th>Runtime</th><th>Path</th><th>MMProj</th><th>Format</th><th></th></tr></thead>
+                    <thead><tr><th>Имя</th><th>Runtime</th><th>Путь</th><th>MMProj</th><th>Формат</th><th></th></tr></thead>
                     <tbody id="adv-models-body"></tbody>
                 </table>
             </section>
@@ -287,11 +319,14 @@
             <!-- View: Advanced - Profiles -->
             <section class="view" id="view-adv-profiles">
                 <div class="view-header">
-                    <h1>Profiles</h1>
-                    <button class="btn btn-primary" onclick="showCreateProfileModal()">+ Add</button>
+                    <h1>Профили</h1>
+                    <button class="btn btn-primary" onclick="showCreateProfileModal()">+ Добавить</button>
+                </div>
+                <div class="empty-state" id="profiles-adv-empty" style="display:none;">
+                    <p>Профили не добавлены.</p>
                 </div>
                 <table class="data-table">
-                    <thead><tr><th>Name</th><th>Runtime</th><th>Model</th><th>Host:Port</th><th>Args</th><th></th></tr></thead>
+                    <thead><tr><th>Имя</th><th>Runtime</th><th>Модель</th><th>Адрес:Порт</th><th>Аргументы</th><th></th></tr></thead>
                     <tbody id="adv-profiles-body"></tbody>
                 </table>
             </section>
@@ -299,10 +334,14 @@
             <!-- View: Advanced - Instances -->
             <section class="view" id="view-adv-instances">
                 <div class="view-header">
-                    <h1>Instances</h1>
+                    <h1>Экземпляры</h1>
+                </div>
+                <div class="empty-state" id="instances-empty" style="display:none;">
+                    <p>Экземпляры не запущены.</p>
+                    <small class="hint-text">Запустите модель из «Мои модели», чтобы увидеть экземпляр здесь.</small>
                 </div>
                 <table class="data-table">
-                    <thead><tr><th>ID</th><th>Profile</th><th>State</th><th>PID</th><th>Started</th><th>Stopped</th><th>Exit</th><th></th></tr></thead>
+                    <thead><tr><th>ID</th><th>Профиль</th><th>Состояние</th><th>PID</th><th>Запущен</th><th>Остановлен</th><th>Exit</th><th></th></tr></thead>
                     <tbody id="adv-instances-body"></tbody>
                 </table>
             </section>
@@ -314,7 +353,7 @@
                 </div>
                 <p class="hint-text">Модели с включённым автозапуском стартуют при запуске GoAl.</p>
                 <table class="data-table">
-                    <thead><tr><th>Модель</th><th>Host:Port</th><th>Задержка</th><th>Enabled</th><th></th></tr></thead>
+                    <thead><tr><th>Модель</th><th>Адрес:Порт</th><th>Задержка</th><th>Вкл.</th><th></th></tr></thead>
                     <tbody id="autostart-body"></tbody>
                 </table>
             </section>
@@ -331,7 +370,7 @@
                         <div class="setting-row"><span>Адрес</span><span id="set-listen">-</span></div>
                         <div class="setting-row"><span>Авторизация</span><span id="set-auth">-</span></div>
                     </div>
-                    <div class="settings-card">
+                    <div class="settings-card" id="set-user-card">
                         <h3>Пользователь</h3>
                         <div class="setting-row"><span>Логин</span><span id="set-user">-</span></div>
                         <button class="btn btn-ghost btn-sm" onclick="handleLogout()" style="margin-top:1rem;">Выйти</button>

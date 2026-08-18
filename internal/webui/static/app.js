@@ -197,7 +197,9 @@ function esc(s) {
     return d.innerHTML;
 }
 
-function safeId(id) { return JSON.stringify(id).replace(/"/g, '&quot;'); }
+function safeId(id) {
+    return String(id).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
 
 // ─── Model Cards ────────────────────────────────────────────────────────────
 
@@ -262,7 +264,7 @@ function renderModelCards() {
                 ${uptime ? `<div class="info-row"><span class="label">Uptime:</span><span>${uptime}</span></div>` : ''}
             </div>
             ${tags.length ? `<div class="model-tags">${tags.map(t => `<span class="model-tag">${esc(t)}</span>`).join('')}</div>` : ''}
-            <div class="model-card-autostart ${p.active ? 'on' : ''}">Автозапуск: ${p.active ? 'ON' : 'OFF'} <button class="btn btn-ghost btn-sm" style="padding:1px 6px;font-size:0.7rem;" onclick="toggleAutostart('${safeId(p.id)}')">${p.active ? 'OFF' : 'ON'}</button></div>
+            <div class="model-card-autostart"><span class="autostart-label">Автозапуск</span><label class="toggle-switch"><input type="checkbox" ${p.active ? 'checked' : ''} onchange="toggleAutostart('${safeId(p.id)}')"><span class="toggle-slider"></span></label></div>
             ${instanceSection}
             <div class="model-card-actions">
                 ${actionBtns}
@@ -276,27 +278,33 @@ function renderModelCards() {
 // ─── Actions ────────────────────────────────────────────────────────────────
 
 async function startModel(profileId) {
+    const btns = document.querySelectorAll('.model-card-actions .btn-success');
+    btns.forEach(b => b.disabled = true);
     try {
         await api('/profiles/' + profileId + '/start', { method: 'POST' });
         showToast('Запуск...', 'success');
         await reloadAllData(); renderAll();
-    } catch (e) { showToast('Ошибка: ' + e.message, 'error'); }
+    } catch (e) { showToast('Ошибка: ' + e.message, 'error'); btns.forEach(b => b.disabled = false); }
 }
 
 async function stopModel(profileId) {
+    const btns = document.querySelectorAll('.model-card-actions .btn-danger');
+    btns.forEach(b => b.disabled = true);
     try {
         await api('/profiles/' + profileId + '/stop', { method: 'POST' });
         showToast('Остановка...', 'success');
         await reloadAllData(); renderAll();
-    } catch (e) { showToast('Ошибка: ' + e.message, 'error'); }
+    } catch (e) { showToast('Ошибка: ' + e.message, 'error'); btns.forEach(b => b.disabled = false); }
 }
 
 async function restartModel(profileId) {
+    const btns = document.querySelectorAll('.model-card-actions .btn-warning');
+    btns.forEach(b => b.disabled = true);
     try {
         await api('/profiles/' + profileId + '/restart', { method: 'POST' });
         showToast('Перезапуск...', 'success');
         await reloadAllData(); renderAll();
-    } catch (e) { showToast('Ошибка: ' + e.message, 'error'); }
+    } catch (e) { showToast('Ошибка: ' + e.message, 'error'); btns.forEach(b => b.disabled = false); }
 }
 
 // ─── Logs ───────────────────────────────────────────────────────────────────
@@ -304,9 +312,12 @@ async function restartModel(profileId) {
 function updateLogInstanceSelect() {
     const sel = document.getElementById('log-instance-select');
     const cur = sel.value;
+    const activeInsts = instancesData.filter(i => isActive(i.state));
+    const logsEmpty = document.getElementById('logs-empty');
+    if (logsEmpty) logsEmpty.style.display = activeInsts.length === 0 ? 'block' : 'none';
     sel.innerHTML = '<option value="">Все экземпляры</option>' +
-        instancesData.filter(i => isActive(i.state)).map(i =>
-            `<option value="${esc(i.id)}">${esc(getProfileName(i.profile_id))} (PID ${i.pid || '?'})</option>`
+        activeInsts.map(i =>
+            `<option value="${esc(i.id)}">${esc(getProfileName(i.profile_id))} | ${i.id.slice(0,12)}… | PID ${i.pid || '?'} | ${i.state}</option>`
         ).join('');
     sel.value = cur;
 }
@@ -318,7 +329,18 @@ function getProfileName(id) {
 
 function switchLogInstance() {
     const instId = document.getElementById('log-instance-select').value;
+    updateLogInstanceBar(instId);
     connectLogStream(instId);
+}
+
+function updateLogInstanceBar(instId) {
+    const bar = document.getElementById('log-instance-bar');
+    if (!instId) { bar.style.display = 'none'; return; }
+    const inst = instancesData.find(i => i.id === instId);
+    if (!inst) { bar.style.display = 'none'; return; }
+    const started = inst.started_at ? new Date(inst.started_at).toLocaleString() : '—';
+    bar.innerHTML = `<span class="log-bar-label">Профиль:</span> ${esc(getProfileName(inst.profile_id))} &nbsp;|&nbsp; <span class="log-bar-label">Instance:</span> <code>${esc(inst.id)}</code> &nbsp;|&nbsp; <span class="log-bar-label">PID:</span> ${inst.pid || '—'} &nbsp;|&nbsp; <span class="log-bar-label">State:</span> <span class="status-badge ${inst.state}">${inst.state}</span> &nbsp;|&nbsp; <span class="log-bar-label">Старт:</span> ${started}`;
+    bar.style.display = 'flex';
 }
 
 function connectLogStream(instanceId) {
@@ -371,7 +393,12 @@ function clearLogView() {
 function viewInstanceLogs(instanceId) {
     navigate('logs');
     const sel = document.getElementById('log-instance-select');
-    if (instanceId) sel.value = instanceId;
+    if (instanceId) {
+        sel.value = instanceId;
+        updateLogInstanceBar(instanceId);
+    } else {
+        updateLogInstanceBar('');
+    }
     connectLogStream(instanceId);
 }
 
@@ -387,6 +414,7 @@ function navigate(view) {
     if (navBtn) navBtn.classList.add('active');
 
     if (view === 'logs' && !logEs) connectLogStream('');
+    if (view === 'adv-settings') loadSettings();
     if (view !== 'logs' && logEs && currentView !== 'logs') { /* keep SSE alive */ }
 }
 
@@ -452,6 +480,8 @@ function openWizard() {
     document.getElementById('wizard-form').reset();
     document.getElementById('wizard-error').style.display = 'none';
     document.getElementById('wiz-env-container').innerHTML = '';
+    document.querySelector('input[name=wiz-rt-mode][value=existing]').checked = true;
+    onWizRtModeChange();
     loadWizardRuntimeSelect();
     updateWizardStep();
     document.getElementById('wizard-modal').style.display = 'flex';
@@ -465,9 +495,10 @@ function loadWizardRuntimeSelect() {
         runtimesData.map(r => `<option value="${esc(r.id)}">${esc(r.name)} (${esc(r.executable)})</option>`).join('');
 }
 
-function onWizRuntimeChange() {
-    const v = document.getElementById('wiz-runtime-existing').value;
-    document.getElementById('wiz-runtime-new').open = !v;
+function onWizRtModeChange() {
+    const mode = document.querySelector('input[name=wiz-rt-mode]:checked').value;
+    document.getElementById('wiz-rt-existing-section').style.display = mode === 'existing' ? '' : 'none';
+    document.getElementById('wiz-rt-new-section').style.display = mode === 'new' ? '' : 'none';
 }
 
 function wizPrev() { if (wizStep > 1) { wizStep--; updateWizardStep(); } }
@@ -490,8 +521,8 @@ document.getElementById('wizard-form').addEventListener('submit', async function
     const name = document.getElementById('wiz-name').value.trim();
     if (!name) { wizError('Укажите название'); return; }
 
-    const existingRtId = document.getElementById('wiz-runtime-existing').value;
-    let runtimeId = existingRtId;
+    const rtMode = document.querySelector('input[name=wiz-rt-mode]:checked').value;
+    let runtimeId = rtMode === 'existing' ? document.getElementById('wiz-runtime-existing').value : '';
 
     const submitBtn = document.getElementById('wiz-next');
     if (submitBtn.disabled) return;
@@ -500,7 +531,13 @@ document.getElementById('wizard-form').addEventListener('submit', async function
 
     try {
         // Create runtime if needed
-        if (!runtimeId) {
+        if (rtMode === 'existing' && !runtimeId) {
+            wizError('Выберите Runtime');
+            submitBtn.disabled = false;
+            submitBtn.textContent = 'Создать';
+            return;
+        }
+        if (rtMode === 'new' || !runtimeId) {
             const rtName = document.getElementById('wiz-rt-name').value.trim();
             const rtExe = document.getElementById('wiz-rt-executable').value.trim();
             if (!rtName || !rtExe) { wizError('Заполните Runtime поля'); return; }
@@ -584,11 +621,18 @@ function collectWizEnv() {
 // ─── Advanced: Runtimes ─────────────────────────────────────────────────────
 
 function renderAdvRuntimes() {
+    const empty = document.getElementById('runtimes-empty');
+    if (runtimesData.length === 0) {
+        document.getElementById('adv-runtimes-body').innerHTML = '';
+        if (empty) empty.style.display = 'block';
+        return;
+    }
+    if (empty) empty.style.display = 'none';
     document.getElementById('adv-runtimes-body').innerHTML = runtimesData.map(r =>
         `<tr><td>${esc(r.name)}</td><td>${esc(r.executable)}</td><td>${esc(r.working_directory || '—')}</td>
         <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;"><code>${esc((r.default_args || []).join(' '))}</code></td>
-        <td class="actions-cell"><button class="btn btn-ghost btn-sm" onclick="editRuntime('${safeId(r.id)}')">Edit</button>
-        <button class="btn btn-danger btn-sm" onclick="deleteRuntime('${safeId(r.id)}')">Del</button></td></tr>`
+        <td class="actions-cell"><button class="btn btn-ghost btn-sm" onclick="editRuntime('${safeId(r.id)}')">Изменить</button>
+        <button class="btn btn-danger btn-sm" onclick="deleteRuntime('${safeId(r.id)}')">Удалить</button></td></tr>`
     ).join('');
 }
 
@@ -637,21 +681,47 @@ async function handleEditRuntime(e) {
     return false;
 }
 
-async function deleteRuntime(id) {
-    if (!confirm('Удалить runtime?')) return;
-    try { await api('/runtimes/' + id, { method: 'DELETE' }); await reloadAllData(); renderAll(); }
-    catch (err) { showToast(err.message, 'error'); }
+function deleteRuntime(id) {
+    const rt = runtimesData.find(x => x.id === id);
+    const name = rt ? rt.name : id;
+    const depModels = modelsData.filter(m => m.runtime_id === id);
+    const depProfiles = profilesData.filter(p => p.runtime_id === id);
+    let msg = `Удалить runtime "${name}"?`;
+    if (depModels.length > 0) msg += `\nЗависимые модели: ${depModels.map(m => m.name).join(', ')}`;
+    if (depProfiles.length > 0) msg += `\nЗависимые профили: ${depProfiles.map(p => p.name).join(', ')}`;
+    if (depModels.length > 0 || depProfiles.length > 0) msg += '\nОни станут недоступны для запуска.';
+    showConfirm(msg, async function () {
+        try { await api('/runtimes/' + id, { method: 'DELETE' }); await reloadAllData(); renderAll(); }
+        catch (err) { showToast(friendlyError(err), 'error'); }
+    });
 }
 
 // ─── Advanced: Models ───────────────────────────────────────────────────────
 
 function renderAdvModels() {
-    document.getElementById('adv-models-body').innerHTML = modelsData.map(m =>
-        `<tr><td>${esc(m.name)}</td><td>${esc(getRuntimeName(m.runtime_id))}</td><td>${esc(m.path || '—')}</td>
-        <td>${esc(m.mmproj || '—')}</td><td>${esc(m.format || '—')}</td>
-        <td class="actions-cell"><button class="btn btn-ghost btn-sm" onclick="editModel('${safeId(m.id)}')">Edit</button>
-        <button class="btn btn-danger btn-sm" onclick="deleteModel('${safeId(m.id)}')">Del</button></td></tr>`
-    ).join('');
+    const empty = document.getElementById('models-adv-empty');
+    if (modelsData.length === 0) {
+        document.getElementById('adv-models-body').innerHTML = '';
+        if (empty) empty.style.display = 'block';
+        return;
+    }
+    if (empty) empty.style.display = 'none';
+    document.getElementById('adv-models-body').innerHTML = modelsData.map(m => {
+        const fmt = m.format || deriveModelFormat(m);
+        return `<tr><td>${esc(m.name)}</td><td>${esc(getRuntimeName(m.runtime_id))}</td><td>${esc(m.path || '—')}</td>
+        <td>${esc(m.mmproj || '—')}</td><td>${esc(fmt)}</td>
+        <td class="actions-cell"><button class="btn btn-ghost btn-sm" onclick="editModel('${safeId(m.id)}')">Изменить</button>
+        <button class="btn btn-danger btn-sm" onclick="deleteModel('${safeId(m.id)}')">Удалить</button></td></tr>`;
+    }).join('');
+}
+
+function deriveModelFormat(m) {
+    const hasPath = !!(m.path && m.path.toLowerCase().endsWith('.gguf'));
+    const hasArgs = (m.arguments && m.arguments.length > 0);
+    if (hasPath && hasArgs) return 'GGUF+Args';
+    if (hasPath) return 'GGUF';
+    if (hasArgs) return 'Args';
+    return '—';
 }
 
 function showCreateModelModal() {
@@ -669,7 +739,7 @@ async function handleCreateModel(e) {
     else body.arguments = f.arguments.value.trim().split(/\s+/).filter(Boolean);
     try {
         await api('/models', { method: 'POST', body: JSON.stringify(body) });
-        closeModal('create-model-modal'); showToast('Model создан', 'success');
+        closeModal('create-model-modal'); showToast('Модель создана', 'success');
         await reloadAllData(); renderAll();
     } catch (err) { showToast(err.message, 'error'); }
     return false;
@@ -713,21 +783,34 @@ async function handleEditModel(e) {
     return false;
 }
 
-async function deleteModel(id) {
-    if (!confirm('Удалить model?')) return;
-    try { await api('/models/' + id, { method: 'DELETE' }); await reloadAllData(); renderAll(); }
-    catch (err) { showToast(err.message, 'error'); }
+function deleteModel(id) {
+    const m = modelsData.find(x => x.id === id);
+    const name = m ? m.name : id;
+    const depProfiles = profilesData.filter(p => p.model_id === id);
+    let msg = `Удалить модель "${name}"?`;
+    if (depProfiles.length > 0) msg += `\nИспользуется в профилях: ${depProfiles.map(p => p.name).join(', ')}\nЭти профили не смогут запускаться.`;
+    showConfirm(msg, async function () {
+        try { await api('/models/' + id, { method: 'DELETE' }); await reloadAllData(); renderAll(); }
+        catch (err) { showToast(friendlyError(err), 'error'); }
+    });
 }
 
 // ─── Advanced: Profiles ─────────────────────────────────────────────────────
 
 function renderAdvProfiles() {
+    const empty = document.getElementById('profiles-adv-empty');
+    if (profilesData.length === 0) {
+        document.getElementById('adv-profiles-body').innerHTML = '';
+        if (empty) empty.style.display = 'block';
+        return;
+    }
+    if (empty) empty.style.display = 'none';
     document.getElementById('adv-profiles-body').innerHTML = profilesData.map(p =>
         `<tr><td>${esc(p.name)}</td><td>${esc(getRuntimeName(p.runtime_id))}</td>
         <td>${esc(getModelName(p.model_id))}</td><td>${esc(p.host)}:${p.port}</td>
         <td style="max-width:150px;overflow:hidden;text-overflow:ellipsis;"><code>${esc((p.args || []).join(' '))}</code></td>
-        <td class="actions-cell"><button class="btn btn-ghost btn-sm" onclick="editProfile('${safeId(p.id)}')">Edit</button>
-        <button class="btn btn-danger btn-sm" onclick="deleteProfile('${safeId(p.id)}')">Del</button></td></tr>`
+        <td class="actions-cell"><button class="btn btn-ghost btn-sm" onclick="editProfile('${safeId(p.id)}')">Изменить</button>
+        <button class="btn btn-danger btn-sm" onclick="deleteProfile('${safeId(p.id)}')">Удалить</button></td></tr>`
     ).join('');
 }
 
@@ -751,7 +834,7 @@ async function handleCreateProfile(e) {
     if (args) body.args = args.split(/\s+/);
     try {
         await api('/profiles', { method: 'POST', body: JSON.stringify(body) });
-        closeModal('create-profile-modal'); showToast('Profile создан', 'success');
+        closeModal('create-profile-modal'); showToast('Профиль создан', 'success');
         await reloadAllData(); renderAll();
     } catch (err) { showToast(err.message, 'error'); }
     return false;
@@ -793,15 +876,50 @@ async function handleEditProfile(e) {
     return false;
 }
 
-async function deleteProfile(id) {
-    if (!confirm('Удалить profile?')) return;
-    try { await api('/profiles/' + id, { method: 'DELETE' }); await reloadAllData(); renderAll(); }
-    catch (err) { showToast(err.message, 'error'); }
+function deleteProfile(id) {
+    const p = profilesData.find(x => x.id === id);
+    const name = p ? p.name : id;
+    const activeInsts = getActiveInstance(id);
+    let msg = `Удалить профиль "${name}"?`;
+    if (activeInsts.length > 0) msg += `\nАктивные экземпляры (${activeInsts.length}) будут остановлены.`;
+    showConfirm(msg, async function () {
+        try { await api('/profiles/' + id, { method: 'DELETE' }); await reloadAllData(); renderAll(); }
+        catch (err) { showToast(friendlyError(err), 'error'); }
+    });
+}
+
+function friendlyError(err) {
+    let msg = err.message || 'Неизвестная ошибка';
+    const patterns = [
+        [/profile not found/i, 'Профиль не найден. Возможно, он уже удалён.'],
+        [/model not found/i, 'Модель не найдена. Возможно, она уже удалена.'],
+        [/runtime not found/i, 'Runtime не найден. Возможно, он уже удалён.'],
+        [/instance not found/i, 'Экземпляр не найден.'],
+        [/in use|referenced|depend/i, 'Объект используется другими записями и не может быть удалён.'],
+        [/port.*in use|address already in use/i, 'Порт уже занят другим процессом.'],
+        [/executable.*not found|no such file/i, 'Исполняемый файл не найден. Проверьте путь.'],
+    ];
+    for (const [re, replacement] of patterns) {
+        if (re.test(msg)) return replacement;
+    }
+    if (msg.includes(': ')) {
+        const parts = msg.split(': ');
+        const unique = [...new Set(parts)];
+        msg = unique.length > 1 ? unique[unique.length - 1] : msg;
+    }
+    return msg.charAt(0).toUpperCase() + msg.slice(1);
 }
 
 // ─── Advanced: Instances ────────────────────────────────────────────────────
 
 function renderAdvInstances() {
+    const empty = document.getElementById('instances-empty');
+    if (instancesData.length === 0) {
+        document.getElementById('adv-instances-body').innerHTML = '';
+        if (empty) empty.style.display = 'block';
+        return;
+    }
+    if (empty) empty.style.display = 'none';
     document.getElementById('adv-instances-body').innerHTML = instancesData.map(i =>
         `<tr><td style="font-family:var(--font-mono);font-size:0.78rem;">${esc(i.id.slice(0, 16))}</td>
         <td>${esc(getProfileName(i.profile_id))}</td>
@@ -809,8 +927,8 @@ function renderAdvInstances() {
         <td>${i.pid || '—'}</td><td>${fmtTime(i.started_at)}</td><td>${fmtTime(i.stopped_at)}</td>
         <td>${i.exit_code != null ? i.exit_code : '—'}</td>
         <td class="actions-cell"><button class="btn btn-ghost btn-sm" onclick="viewInstanceLogs('${safeId(i.id)}')">Логи</button>
-        ${isActive(i.state) ? `<button class="btn btn-danger btn-sm" onclick="stopInstance('${safeId(i.id)}')">Stop</button>
-        <button class="btn btn-warning btn-sm" onclick="restartInstance('${safeId(i.id)}')">Restart</button>` : ''}</td></tr>`
+        ${isActive(i.state) ? `<button class="btn btn-danger btn-sm" onclick="stopInstance('${safeId(i.id)}')">Остановить</button>
+        <button class="btn btn-warning btn-sm" onclick="restartInstance('${safeId(i.id)}')">Перезапустить</button>` : ''}</td></tr>`
     ).join('');
 }
 
@@ -830,9 +948,9 @@ function renderAutostart() {
     const active = profilesData.filter(p => p.active);
     document.getElementById('autostart-body').innerHTML = active.length ? active.map(p =>
         `<tr><td>${esc(p.name)}</td><td>${esc(p.host || '127.0.0.1')}:${p.port}</td>
-        <td>${p.autostart_delay ? p.autostart_delay + 's' : '0s'}</td>
-        <td><span class="status-badge running">Enabled</span></td>
-        <td class="actions-cell"><button class="btn btn-ghost btn-sm" onclick="toggleAutostart('${safeId(p.id)}')">Выключить</button></td></tr>`
+        <td>${p.autostart_delay ? p.autostart_delay + 'с' : '0с'}</td>
+        <td><label class="toggle-switch"><input type="checkbox" checked onchange="toggleAutostart('${safeId(p.id)}')"><span class="toggle-slider"></span></label></td>
+        <td class="actions-cell"><button class="btn btn-ghost btn-sm" onclick="openDetails('${safeId(p.id)}')">Настройки</button></td></tr>`
     ).join('') : '<tr><td colspan="5" class="hint-text">Нет моделей с автозапуском.</td></tr>';
 }
 
@@ -852,7 +970,14 @@ async function toggleAutostart(id) {
 // ─── History ────────────────────────────────────────────────────────────────
 
 function renderHistory() {
+    const empty = document.getElementById('history-empty');
     const terminal = instancesData.filter(i => !isActive(i.state));
+    if (terminal.length === 0) {
+        document.getElementById('history-body').innerHTML = '';
+        if (empty) empty.style.display = 'block';
+        return;
+    }
+    if (empty) empty.style.display = 'none';
     document.getElementById('history-body').innerHTML = terminal.slice(0, 50).map(i =>
         `<tr><td>${esc(getProfileName(i.profile_id))}</td>
         <td><span class="status-badge ${i.state}">${i.state}</span></td>
@@ -867,8 +992,10 @@ function renderHistory() {
 async function loadSettings() {
     try {
         const m = await api('/metrics');
-        document.getElementById('set-listen').textContent = (m.listen_address || '') + ':' + (m.web_port || '');
-        document.getElementById('set-auth').textContent = m.auth_enabled ? 'ON' : 'OFF';
+        document.getElementById('set-listen').textContent = (m.listen_address || '127.0.0.1') + ':' + (m.web_port || '');
+        document.getElementById('set-auth').textContent = m.auth_enabled ? 'Включена' : 'Выключена';
+        const userCard = document.getElementById('set-user-card');
+        if (userCard) userCard.style.display = m.auth_enabled ? '' : 'none';
     } catch {}
 }
 
@@ -878,9 +1005,13 @@ function closeModal(id) { document.getElementById(id).style.display = 'none'; }
 
 function showConfirm(msg, onYes) {
     document.getElementById('confirm-message').textContent = msg;
-    document.getElementById('confirm-yes').onclick = function () {
-        closeConfirm();
-        onYes();
+    const btn = document.getElementById('confirm-yes');
+    btn.disabled = false;
+    btn.textContent = 'Подтвердить';
+    btn.onclick = async function () {
+        btn.disabled = true;
+        btn.textContent = 'Выполняется...';
+        await onYes();
     };
     document.getElementById('confirm-modal').style.display = 'flex';
 }
@@ -954,7 +1085,7 @@ window.closeModal = closeModal;
 window.closeConfirm = closeConfirm;
 window.addWizEnvRow = addWizEnvRow;
 window.toggleModelKind = toggleModelKind;
-window.onWizRuntimeChange = onWizRuntimeChange;
+window.onWizRtModeChange = onWizRtModeChange;
 
 // ─── Boot ───────────────────────────────────────────────────────────────────
 

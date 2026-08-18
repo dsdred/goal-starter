@@ -6,7 +6,7 @@
     --bg-input: #12132a;
     --text-primary: #e8e8f0;
     --text-secondary: #9a9ab4;
-    --text-muted: #5a5a78;
+    --text-muted: #8a8aa8;
     --accent: #7c6fff;
     --accent-hover: #6b5ef0;
     --accent-subtle: rgba(124, 111, 255, 0.12);
@@ -53,6 +53,7 @@ hr.form-divider { border: none; border-top: 1px solid var(--border); margin: 1.2
 }
 .btn:hover { text-decoration: none; transform: translateY(-1px); }
 .btn:active { transform: translateY(0); }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none !important; }
 .btn-primary { background: var(--accent); color: #fff; }
 .btn-primary:hover { background: var(--accent-hover); }
 .btn-success { background: var(--success); color: #fff; }
@@ -78,6 +79,13 @@ hr.form-divider { border: none; border-top: 1px solid var(--border); margin: 1.2
 .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
 .form-checkbox { display: flex; align-items: center; gap: 8px; }
 .form-checkbox label { margin: 0; font-size: 0.9rem; }
+.form-autostart { display: flex; align-items: center; justify-content: space-between; }
+.form-autostart .autostart-label { font-size: 0.9rem; color: var(--text-secondary); }
+.radio-group { display: flex; flex-direction: column; gap: 8px; }
+.radio-option { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); cursor: pointer; transition: all 0.15s; font-size: 0.9rem; color: var(--text-secondary); }
+.radio-option:hover { border-color: var(--accent); background: var(--accent-subtle); }
+.radio-option:has(input:checked) { border-color: var(--accent); background: var(--accent-subtle); color: var(--text-primary); }
+.radio-option input[type=radio] { accent-color: var(--accent); }
 .form-accordion { margin: 0.5rem 0; border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 8px 12px; }
 .form-accordion summary { cursor: pointer; font-size: 0.9rem; color: var(--text-secondary); }
 .form-accordion[open] summary { margin-bottom: 0.8rem; color: var(--accent); }
@@ -193,8 +201,15 @@ hr.form-divider { border: none; border-top: 1px solid var(--border); margin: 1.2
 .model-card-info .info-row .label { color: var(--text-muted); min-width: 60px; }
 .model-tags { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 0.8rem; }
 .model-tag { padding: 2px 8px; border-radius: 4px; font-size: 0.7rem; font-weight: 600; background: var(--accent-subtle); color: var(--accent); }
-.model-card-autostart { font-size: 0.78rem; color: var(--text-muted); margin-bottom: 0.8rem; }
-.model-card-autostart.on { color: var(--success); }
+.model-card-autostart { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.8rem; }
+.autostart-label { font-size: 0.82rem; color: var(--text-secondary); }
+.toggle-switch { position: relative; display: inline-block; width: 40px; height: 22px; flex-shrink: 0; }
+.toggle-switch input { opacity: 0; width: 0; height: 0; }
+.toggle-slider { position: absolute; inset: 0; background: var(--border); border-radius: 22px; cursor: pointer; transition: 0.2s; }
+.toggle-slider::before { content: ''; position: absolute; height: 16px; width: 16px; left: 3px; bottom: 3px; background: var(--text-secondary); border-radius: 50%; transition: 0.2s; }
+.toggle-switch input:checked + .toggle-slider { background: var(--success); }
+.toggle-switch input:checked + .toggle-slider::before { transform: translateX(18px); background: #fff; }
+.toggle-switch input:disabled + .toggle-slider { opacity: 0.5; cursor: not-allowed; }
 .model-card-actions { display: flex; gap: 6px; flex-wrap: wrap; }
 
 /* Instance expand */
@@ -234,6 +249,14 @@ hr.form-divider { border: none; border-top: 1px solid var(--border); margin: 1.2
 }
 .logs-toolbar input { min-width: 160px; }
 .toggle-label { display: flex; align-items: center; gap: 5px; font-size: 0.82rem; color: var(--text-secondary); cursor: pointer; }
+.log-instance-bar {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 4px;
+    padding: 8px 12px; margin-bottom: 0.8rem;
+    background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-sm);
+    font-size: 0.8rem; color: var(--text-secondary);
+}
+.log-instance-bar .log-bar-label { color: var(--text-muted); font-weight: 500; }
+.log-instance-bar code { font-size: 0.75rem; }
 .log-view {
     background: var(--bg-input); border: 1px solid var(--border); border-radius: var(--radius-sm);
     padding: 12px; height: calc(100vh - 220px); min-height: 300px; overflow-y: auto;

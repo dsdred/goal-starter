@@ -47,6 +47,16 @@ func WithWebAssets(templateFS, staticFS fs.FS) RouteRegistryOption {
 	}
 }
 
+// WithServerInfo passes the server listen address, port, and auth flag to the
+// system handler so the Metrics endpoint can expose them to the UI.
+func WithServerInfo(listenAddr string, webPort int, authEnabled bool) RouteRegistryOption {
+	return func(r *RouteRegistry) {
+		r.systemHandler.listenAddr = listenAddr
+		r.systemHandler.webPort = webPort
+		r.systemHandler.authEnabled = authEnabled
+	}
+}
+
 // NewRouteRegistry creates a new route registry.
 func NewRouteRegistry(
 	profileSvc *application.ProfileService,

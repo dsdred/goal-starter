@@ -115,6 +115,7 @@ func (a *App) InitRegistry() {
 		a.passwordStore,
 		handlers.WithAuthEnabled(a.authEnabled),
 		handlers.WithWebAssets(templateFS, staticFS),
+		handlers.WithServerInfo(a.cfg.ListenAddress, a.cfg.WebPort, a.authEnabled),
 	)
 }
 

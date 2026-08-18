@@ -44,6 +44,10 @@ type SystemHandler struct {
 	tmplErr   error
 	heartbeat time.Duration
 	startedAt time.Time
+
+	listenAddr  string
+	webPort     int
+	authEnabled bool
 }
 
 // NewSystemHandler creates a new SystemHandler.
@@ -89,11 +93,17 @@ func (h *SystemHandler) Metrics(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{
+	resp := map[string]any{
 		"total_instances": len(instances),
 		"running":         running,
 		"stopped":         stopped,
-	})
+	}
+	if h.listenAddr != "" {
+		resp["listen_address"] = h.listenAddr
+		resp["web_port"] = h.webPort
+		resp["auth_enabled"] = h.authEnabled
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // LogsStream handles GET /api/v1/logs/stream
