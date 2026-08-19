@@ -20,9 +20,9 @@ type Manager struct {
 	startTime time.Time
 
 	// Process metrics
-	profilesStarted atomic.Int64
-	profilesStopped atomic.Int64
-	profilesFailed  atomic.Int64
+	modelsStarted atomic.Int64
+	modelsStopped atomic.Int64
+	modelsFailed  atomic.Int64
 
 	// Session metrics
 	sessionsCreated atomic.Int64
@@ -46,19 +46,19 @@ func (m *Manager) RecordError() {
 	m.errorCount.Add(1)
 }
 
-// RecordProfileStart records a profile start.
-func (m *Manager) RecordProfileStart() {
-	m.profilesStarted.Add(1)
+// RecordModelStart records a model start.
+func (m *Manager) RecordModelStart() {
+	m.modelsStarted.Add(1)
 }
 
-// RecordProfileStop records a profile stop.
-func (m *Manager) RecordProfileStop() {
-	m.profilesStopped.Add(1)
+// RecordModelStop records a model stop.
+func (m *Manager) RecordModelStop() {
+	m.modelsStopped.Add(1)
 }
 
-// RecordProfileFailed records a profile start/stop failure.
-func (m *Manager) RecordProfileFailed() {
-	m.profilesFailed.Add(1)
+// RecordModelFailed records a model start/stop failure.
+func (m *Manager) RecordModelFailed() {
+	m.modelsFailed.Add(1)
 }
 
 // RecordSessionCreated records a session creation.
@@ -94,17 +94,17 @@ func (m *Manager) Handler() http.HandlerFunc {
 		fmt.Fprintln(w, `# TYPE goal_http_errors_total counter`)
 		fmt.Fprintf(w, "goal_http_errors_total %d\n", m.errorCount.Load())
 
-		fmt.Fprintln(w, `# HELP goal_profiles_started_total Total profile starts`)
-		fmt.Fprintln(w, `# TYPE goal_profiles_started_total counter`)
-		fmt.Fprintf(w, "goal_profiles_started_total %d\n", m.profilesStarted.Load())
+		fmt.Fprintln(w, `# HELP goal_models_started_total Total model starts`)
+		fmt.Fprintln(w, `# TYPE goal_models_started_total counter`)
+		fmt.Fprintf(w, "goal_models_started_total %d\n", m.modelsStarted.Load())
 
-		fmt.Fprintln(w, `# HELP goal_profiles_stopped_total Total profile stops`)
-		fmt.Fprintln(w, `# TYPE goal_profiles_stopped_total counter`)
-		fmt.Fprintf(w, "goal_profiles_stopped_total %d\n", m.profilesStopped.Load())
+		fmt.Fprintln(w, `# HELP goal_models_stopped_total Total model stops`)
+		fmt.Fprintln(w, `# TYPE goal_models_stopped_total counter`)
+		fmt.Fprintf(w, "goal_models_stopped_total %d\n", m.modelsStopped.Load())
 
-		fmt.Fprintln(w, `# HELP goal_profiles_failed_total Total profile failures`)
-		fmt.Fprintln(w, `# TYPE goal_profiles_failed_total counter`)
-		fmt.Fprintf(w, "goal_profiles_failed_total %d\n", m.profilesFailed.Load())
+		fmt.Fprintln(w, `# HELP goal_models_failed_total Total model failures`)
+		fmt.Fprintln(w, `# TYPE goal_models_failed_total counter`)
+		fmt.Fprintf(w, "goal_models_failed_total %d\n", m.modelsFailed.Load())
 
 		fmt.Fprintln(w, `# HELP goal_sessions_created_total Total sessions created`)
 		fmt.Fprintln(w, `# TYPE goal_sessions_created_total counter`)

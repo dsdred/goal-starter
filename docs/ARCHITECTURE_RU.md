@@ -1,6 +1,19 @@
 # Архитектура
 
-GoAl — однофайловое приложение, составленное из отдельных слоёв с чётким разделением ответственности. Этот документ описывает production V1 архитектуру.
+GoAl — однофайловое приложение, составленное из отдельных слоёв с чётким разделением ответственности. Этот документ описывает текущую архитектуру GoAl 2.0.
+
+## Доменная модель (v6)
+
+GoAl 2.0 использует упрощённый домен из трёх сущностей:
+
+- **Runtime** — конфигурация движка выполнения (исполняемый файл, рабочая директория, аргументы по умолчанию, окружение)
+- **Model** — настроенное определение запуска (ссылка на runtime, аргументы запуска, host, порт, окружение, автозапуск)
+- **Instance** — конкретная история запуска (неизменяемая запись о запуске процесса)
+
+Физические файлы моделей (GGUF, MMProj) НЕ являются отдельными доменными сущностями. Это обычные
+аргументы запуска (например, `-m <путь>`, `--mmproj <путь>`).
+
+Связь: Runtime ← Model → Instance
 
 ## Точка композиции
 
@@ -24,7 +37,7 @@ main
 | Конфигурация | `internal/config/` | Парсинг, валидация, миграция, сохранение `goal.json`. |
 | Персистентность | `internal/storage/` | `JSONRepository` — однофайловое хранилище с атомарными записями. |
 | Домен | `internal/domain/` | Типы, конвертация DTO между storage и application слоями. |
-| Application | `internal/application/` | Бизнес-логика: ProfileService, InstanceService, RuntimeService, ModelService. |
+| Application | `internal/application/` | Бизнес-логика: ModelService, RuntimeService, InstanceService. |
 | Жизненный цикл | `internal/process/` | Supervisor, Manager, LogBroker, LogStore, SlotReservation. |
 | ОС | `internal/platform/` | Windows Job Object, Linux process groups. |
 | HTTP / UI | `internal/webui/` | Роуты, хэндлеры, embedded шаблоны, статика, безопасность. |
@@ -68,7 +81,7 @@ Application services (internal/application/)
 4. `os.Rename()` (атомарно на Windows и Linux)
 5. Sync родительской директории
 
-**Legacy хранилища:** `internal/webui/store/` содержит файловые stores (profiles, runtimes, models), но не используется для production персистентности. Авторитарное хранилище — `internal/storage/JSONRepository`.
+Единый JSON-репозиторий в `internal/storage/` (`JSONRepository`) — единственный слой персистентности для всех сущностей.
 
 ## Seed-on_once
 
@@ -104,7 +117,7 @@ config ← main (загружается один раз при старте)
 - Каждый `exec.Cmd` имеет ровно одного goroutine-владельца, вызывающего `cmd.Wait()`.
 - HTTP handlers не управляют `exec.Cmd` напрямую; они делегируют `Supervisor`.
 - Аргументы процессов передаются как `[]string` — без shell-инвокации.
-- Переменные окружения профиля сливаются с окружением родительского процесса (переменные профиля переопределяют системные).
+- Переменные окружения модели сливаются с окружением родительского процесса (переменные модели переопределяют системные).
 
 ## ADR сводка
 

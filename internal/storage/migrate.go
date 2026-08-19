@@ -11,15 +11,15 @@ import (
 // MigrateFromOldStores reads the legacy separate JSON files from oldDir
 // and populates the new unified repository at repoPath.
 // It skips entities that already exist in the new repository.
+// In v6, old profiles become models, and old physical-model files are
+// folded into the model's args.
 func MigrateFromOldStores(repo Repository, oldDir, repoPath string) error {
 	profilePath := filepath.Join(oldDir, "profiles.json")
 	runtimePath := filepath.Join(oldDir, "runtimes.json")
 	modelPath := filepath.Join(oldDir, "models.json")
 
-	// Load existing data from new repo to avoid duplicates.
 	newRuntimes, _ := repo.ListRuntimes()
 	newModels, _ := repo.ListModels()
-	newProfiles, _ := repo.ListProfiles()
 
 	existingRuntime := make(map[string]bool)
 	for _, r := range newRuntimes {
@@ -29,12 +29,25 @@ func MigrateFromOldStores(repo Repository, oldDir, repoPath string) error {
 	for _, m := range newModels {
 		existingModel[m.ID] = true
 	}
-	existingProfile := make(map[string]bool)
-	for _, p := range newProfiles {
-		existingProfile[p.ID] = true
+
+	// Load old models for reference.
+	oldModelMap := make(map[string]*oldModelEntry)
+	if _, err := os.Stat(modelPath); err == nil {
+		data, err := os.ReadFile(modelPath)
+		if err != nil {
+			return fmt.Errorf("read models: %w", err)
+		}
+		var oldModels []oldModelEntry
+		if err := json.Unmarshal(data, &oldModels); err != nil {
+			return fmt.Errorf("decode models: %w", err)
+		}
+		for i := range oldModels {
+			oldModelMap[oldModels[i].ID] = &oldModels[i]
+		}
 	}
 
 	// Migrate runtimes.
+	runtimeArgsMap := make(map[string][]string)
 	if _, err := os.Stat(runtimePath); err == nil {
 		data, err := os.ReadFile(runtimePath)
 		if err != nil {
@@ -45,6 +58,7 @@ func MigrateFromOldStores(repo Repository, oldDir, repoPath string) error {
 			return fmt.Errorf("decode runtimes: %w", err)
 		}
 		for _, old := range oldRuntimes {
+			runtimeArgsMap[old.ID] = old.DefaultArgs
 			if existingRuntime[old.ID] {
 				continue
 			}
@@ -53,7 +67,6 @@ func MigrateFromOldStores(repo Repository, oldDir, repoPath string) error {
 				Name:             old.Name,
 				Executable:       old.Executable,
 				WorkingDirectory: old.WorkingDirectory,
-				DefaultArgs:      old.DefaultArgs,
 				Environment:      old.Environment,
 				CreatedAt:        old.CreatedAt,
 				UpdatedAt:        old.UpdatedAt,
@@ -65,37 +78,7 @@ func MigrateFromOldStores(repo Repository, oldDir, repoPath string) error {
 		}
 	}
 
-	// Migrate models.
-	if _, err := os.Stat(modelPath); err == nil {
-		data, err := os.ReadFile(modelPath)
-		if err != nil {
-			return fmt.Errorf("read models: %w", err)
-		}
-		var oldModels []oldModelEntry
-		if err := json.Unmarshal(data, &oldModels); err != nil {
-			return fmt.Errorf("decode models: %w", err)
-		}
-		for _, old := range oldModels {
-			if existingModel[old.ID] {
-				continue
-			}
-			me := ModelEntry{
-				ID:        old.ID,
-				Name:      old.Name,
-				Path:      old.Path,
-				MMProj:    old.MMProj,
-				Format:    old.Format,
-				CreatedAt: time.Now(),
-				UpdatedAt: time.Now(),
-			}
-			if err := repo.CreateModel(&me); err != nil {
-				return fmt.Errorf("create model %s: %w", old.ID, err)
-			}
-			existingModel[old.ID] = true
-		}
-	}
-
-	// Migrate profiles.
+	// Migrate profiles → new models (folding old model args).
 	if _, err := os.Stat(profilePath); err == nil {
 		data, err := os.ReadFile(profilePath)
 		if err != nil {
@@ -106,30 +89,45 @@ func MigrateFromOldStores(repo Repository, oldDir, repoPath string) error {
 			return fmt.Errorf("decode profiles: %w", err)
 		}
 		for _, old := range oldProfiles {
-			if existingProfile[old.ID] {
+			if existingModel[old.ID] {
 				continue
 			}
-			pe := ProfileEntry{
+			args := make([]string, 0, len(runtimeArgsMap[old.RuntimeID])+len(old.Args)+8)
+			args = append(args, runtimeArgsMap[old.RuntimeID]...)
+			args = append(args, old.Args...)
+			if old.ModelID != "" {
+				if m, ok := oldModelMap[old.ModelID]; ok {
+					if m.Path != "" {
+						args = append(args, "-m", m.Path)
+					}
+					if m.MMProj != "" {
+						args = append(args, "--mmproj", m.MMProj)
+					}
+				}
+			}
+			if old.Host != "" && !containsV5Flag(args, "--host", "-a") {
+				args = append(args, "--host", old.Host)
+			}
+			if old.Port > 0 && !containsV5Flag(args, "--port") {
+				args = append(args, "--port", fmt.Sprintf("%d", old.Port))
+			}
+			me := ModelEntry{
 				ID:          old.ID,
 				Name:        old.Name,
 				RuntimeID:   old.RuntimeID,
-				ModelID:     old.ModelID,
-				Host:        old.Host,
-				Port:        old.Port,
-				Args:        old.Args,
+				Args:        args,
 				Environment: old.Environment,
 				Active:      old.Active,
 				CreatedAt:   old.CreatedAt,
 				UpdatedAt:   old.UpdatedAt,
 			}
-			if err := repo.CreateProfile(&pe); err != nil {
-				return fmt.Errorf("create profile %s: %w", old.ID, err)
+			if err := repo.CreateModel(&me); err != nil {
+				return fmt.Errorf("create model %s: %w", old.ID, err)
 			}
-			existingProfile[old.ID] = true
+			existingModel[old.ID] = true
 		}
 	}
 
-	// Save unified repository.
 	if err := repo.SaveUnified(repoPath); err != nil {
 		return fmt.Errorf("save unified repository: %w", err)
 	}
@@ -137,7 +135,6 @@ func MigrateFromOldStores(repo Repository, oldDir, repoPath string) error {
 	return nil
 }
 
-// oldRuntimeEntry is the legacy format for runtime data.
 type oldRuntimeEntry struct {
 	ID               string            `json:"id"`
 	Name             string            `json:"name"`
@@ -149,7 +146,6 @@ type oldRuntimeEntry struct {
 	UpdatedAt        time.Time         `json:"updated_at"`
 }
 
-// oldProfileEntry is the legacy format for profile data.
 type oldProfileEntry struct {
 	ID          string            `json:"id"`
 	Name        string            `json:"name"`
@@ -164,7 +160,6 @@ type oldProfileEntry struct {
 	UpdatedAt   time.Time         `json:"updated_at"`
 }
 
-// oldModelEntry is the legacy format for model data.
 type oldModelEntry struct {
 	ID     string `json:"id"`
 	Name   string `json:"name"`

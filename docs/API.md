@@ -1,6 +1,6 @@
 # API Reference
 
-All endpoints are under the `/api/v1` prefix. Base URL is `http://127.0.0.1:9090` (configurable via `webPort`).
+All endpoints are under the `/api/v1` prefix. Base URL is `http://127.0.0.1:8088` (configurable via `webPort`).
 
 ## Authentication model
 
@@ -26,7 +26,7 @@ All errors return JSON:
 }
 ```
 
-Error codes: `bad_request`, `unauthorized`, `forbidden`, `not_found`, `conflict`, `invalid_port`, `invalid_host`, `invalid_address`, `invalid_profile`, `invalid_runtime`, `invalid_model`, `internal_server_error`.
+Error codes: `bad_request`, `unauthorized`, `forbidden`, `not_found`, `conflict`, `invalid_port`, `invalid_host`, `invalid_address`, `invalid_runtime`, `invalid_model`, `internal_server_error`.
 
 ## Health & version
 
@@ -54,13 +54,13 @@ Error codes: `bad_request`, `unauthorized`, `forbidden`, `not_found`, `conflict`
 
 ## Instances (processes)
 
-Instances are running processes created from profiles.
+Instances are running processes created from models.
 
 | Method | Path | Auth | CSRF | Description |
 |--------|------|------|------|-------------|
 | `GET` | `/api/v1/instances` | Yes | — | List all instances. |
 | `GET` | `/api/v1/instances/{id}` | Yes | — | Instance detail. |
-| `POST` | `/api/v1/instances/start` | Yes | Yes | Start a new instance from a profile. |
+| `POST` | `/api/v1/instances/start` | Yes | Yes | Start a new instance from a model. |
 | `POST` | `/api/v1/instances/{id}/stop` | Yes | Yes | Stop an instance. |
 | `POST` | `/api/v1/instances/{id}/restart` | Yes | Yes | Restart an instance. |
 
@@ -71,31 +71,46 @@ Instances are running processes created from profiles.
 | `GET` | `/api/v1/instances/{id}/logs` | Yes | — | Historical logs for instance (query with filters). |
 | `GET` | `/api/v1/instances/{id}/logs/stream` | Yes | — | SSE log stream for instance. |
 
-## Profiles (launch templates)
+### POST /api/v1/instances/cleanup
 
-Profiles are static configuration. Instances are created from profiles.
+Mass-delete terminal (non-active) instances. Requires auth + CSRF.
 
-Profile `environment` values are write-only. Profile read and mutation
-responses omit the values and return sorted `environment_keys` instead.
-On `PUT`, omitting `environment` preserves the stored map, an explicit empty
-object removes all profile environment entries, and a non-empty object replaces
-the stored map. Redaction strings are never accepted or stored implicitly.
+Request body:
+```json
+{ "mode": "all_terminal" }
+```
 
-| Method | Path | Auth | CSRF | Description |
-|--------|------|------|------|-------------|
-| `GET` | `/api/v1/profiles` | Yes | — | List profiles. |
-| `GET` | `/api/v1/profiles/{id}` | Yes | — | Get profile. |
-| `POST` | `/api/v1/profiles` | Yes | Yes | Create profile. |
-| `PUT` | `/api/v1/profiles/{id}` | Yes | Yes | Update profile. |
-| `DELETE` | `/api/v1/profiles/{id}` | Yes | Yes | Delete profile. |
-| `POST` | `/api/v1/profiles/{id}/start` | Yes | Yes | Start instance from profile. |
-| `POST` | `/api/v1/profiles/{id}/stop` | Yes | Yes | Stop all instances from profile. |
-| `POST` | `/api/v1/profiles/{id}/restart` | Yes | Yes | Restart all instances from profile. |
-| `POST` | `/api/v1/profiles/{id}/action/{action}` | Yes | Yes | Legacy action endpoint (start/stop/restart). |
-| `GET` | `/api/v1/profiles/{id}/status` | Yes | — | Process status for profile. |
-| `POST` | `/api/v1/profiles/{id}/activate` | Yes | Yes | Activate profile. |
-| `POST` | `/api/v1/profiles/{id}/deactivate` | Yes | Yes | Deactivate profile. |
-| `POST` | `/api/v1/profiles/{id}/resolve` | Yes | Yes | Preview resolved launch command. |
+Modes: `all_terminal`, `older_than_7d`, `older_than_30d`, `selected` (requires `ids` array).
+
+Response 200:
+```json
+{ "status": "cleaned", "deleted": 5 }
+```
+
+### POST /api/v1/runtimes/{id}/replace
+
+Rebind all models from the given runtime to a new runtime, then delete the old one. Requires auth + CSRF.
+
+Request body:
+```json
+{ "new_runtime_id": "rt-new-id" }
+```
+
+Response 200:
+```json
+{ "status": "replaced", "models_moved": 3 }
+```
+
+### POST /api/v1/runtimes/{id}/cascade-delete
+
+Delete the runtime and all models referencing it. Instance history is preserved. Requires auth + CSRF.
+
+No request body.
+
+Response 200:
+```json
+{ "status": "deleted", "models_deleted": 2 }
+```
 
 ## Runtimes
 
@@ -118,13 +133,25 @@ values remain available internally for process launch.
 
 ## Models
 
-| Method | Path | Auth | CSRF | Description |
-|--------|------|------|------|-------------|
-| `GET` | `/api/v1/models` | Yes | — | List models. |
-| `GET` | `/api/v1/models/{id}` | Yes | — | Get model. |
-| `POST` | `/api/v1/models` | Yes | Yes | Create model. |
-| `PUT` | `/api/v1/models/{id}` | Yes | Yes | Update model. |
-| `DELETE` | `/api/v1/models/{id}` | Yes | Yes | Delete model. |
+Models are configured launch definitions combining a runtime with launch arguments and environment.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | /api/v1/models | List all models |
+| GET | /api/v1/models/{id} | Get a model |
+| POST | /api/v1/models | Create a model |
+| PUT | /api/v1/models/{id} | Update a model |
+| DELETE | /api/v1/models/{id} | Delete a model |
+| POST | /api/v1/models/{id}/start | Start an instance |
+| POST | /api/v1/models/{id}/stop | Stop active instances |
+| POST | /api/v1/models/{id}/restart | Restart |
+| GET | /api/v1/models/{id}/status | Get instance status |
+| POST | /api/v1/models/{id}/activate | Enable autostart |
+| POST | /api/v1/models/{id}/deactivate | Disable autostart |
+| POST | /api/v1/models/{id}/resolve | Preview resolved command |
+
+Model environment values are write-only: they are accepted on create/update but never
+returned in API responses. Only `environment_keys` (the list of variable names) is exposed.
 
 ## Logs (aggregated)
 
@@ -133,7 +160,7 @@ values remain available internally for process launch.
 | `GET` | `/api/v1/logs` | Yes | — | Query aggregated logs (filters: `stream`, `search`, `instance_id`, `page`, `page_size`). |
 | `GET` | `/api/v1/logs/stream` | Yes | — | SSE log stream (multi-instance LogBroker). |
 
-## Not part of V1 public contract
+## Not part of the public contract
 
 | Path | Status |
 |------|--------|

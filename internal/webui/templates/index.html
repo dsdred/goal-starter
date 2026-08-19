@@ -14,18 +14,18 @@
                 <svg width="32" height="32" viewBox="0 0 32 32" fill="none"><path d="M6 4L28 16L6 28V4Z" fill="currentColor" opacity="0.9"/><path d="M10 8L22 16L10 24V8Z" fill="var(--bg-primary)" opacity="0.5"/></svg>
                 <span>GoAl</span>
             </div>
-            <h2>Вход</h2>
+            <h2 data-i18n="auth.login.title">Вход</h2>
             <form id="login-form" onsubmit="return handleLogin(event)">
                 <div class="form-group">
-                    <label for="username">Пользователь</label>
+                    <label for="username" data-i18n="auth.login.username">Пользователь</label>
                     <input type="text" id="username" name="username" required autofocus autocomplete="username">
                 </div>
                 <div class="form-group">
-                    <label for="password">Пароль</label>
+                    <label for="password" data-i18n="auth.login.password">Пароль</label>
                     <input type="password" id="password" name="password" required autocomplete="current-password">
                 </div>
                 <div id="login-error" class="error-msg" style="display:none;"></div>
-                <button type="submit" class="btn btn-primary btn-block">Войти</button>
+                <button type="submit" class="btn btn-primary btn-block" data-i18n="auth.login.btn">Войти</button>
             </form>
         </div>
     </div>
@@ -36,162 +36,182 @@
     <!-- Confirm Modal -->
     <div id="confirm-modal" class="modal-overlay" style="display:none;">
         <div class="modal-box">
-            <h2>Подтверждение</h2>
+            <h2 data-i18n="confirm.title">Подтверждение</h2>
             <p id="confirm-message" class="confirm-text"></p>
             <div class="modal-actions">
-                <button id="confirm-yes" class="btn btn-danger">Подтвердить</button>
-                <button class="btn btn-ghost" onclick="closeConfirm()">Отмена</button>
+                <button id="confirm-yes" class="btn btn-danger" data-i18n="common.confirm">Подтвердить</button>
+                <button class="btn btn-ghost" onclick="closeConfirm()" data-i18n="common.cancel">Отмена</button>
             </div>
         </div>
     </div>
 
-    <!-- Blocked Delete Modal (no confirm button) -->
-    <div id="blocked-modal" class="modal-overlay" style="display:none;">
+    <!-- Runtime Delete Choice Modal -->
+    <div id="rt-delete-modal" class="modal-overlay" style="display:none;">
         <div class="modal-box">
-            <h2>Невозможно удалить</h2>
-            <div id="blocked-content" class="confirm-text"></div>
+            <div class="modal-header">
+                <h2 data-i18n="blocked.title">Невозможно удалить</h2>
+                <button class="modal-close" onclick="closeRTDelete()">&times;</button>
+            </div>
+            <div id="rt-delete-content" class="confirm-text"></div>
+            <div class="rt-delete-options">
+                <button class="btn btn-primary" id="rt-delete-replace-btn" onclick="openRTReplace()">
+                    <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M8 3a5 5 0 104.546 7.146l-1.42-.71A3.5 3.5 0 118 4.5V3z"/></svg>
+                    <span data-i18n="runtimes.delete.replace">Заменить другим Runtime</span>
+                </button>
+                <button class="btn btn-danger" id="rt-delete-cascade-btn" onclick="openRTCascade()">
+                    <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M6 2h4a1 1 0 011 1v1h3a1 1 0 011 1v10a1 1 0 01-1 1H2a1 1 0 01-1-1V5a1 1 0 011-1h3V3a1 1 0 011-1zm0 2h4V3H6v1z"/></svg>
+                    <span data-i18n="runtimes.delete.cascade">Удалить рантайм + модели</span>
+                </button>
+            </div>
             <div class="modal-actions">
-                <button class="btn btn-ghost" onclick="closeBlocked()">Закрыть</button>
+                <button class="btn btn-ghost" onclick="closeRTDelete()" data-i18n="common.cancel">Отмена</button>
             </div>
         </div>
     </div>
 
-    <!-- Add Model Wizard -->
+    <!-- Runtime Replace Modal -->
+    <div id="rt-replace-modal" class="modal-overlay" style="display:none;">
+        <div class="modal-box">
+            <div class="modal-header">
+                <h2 data-i18n="runtimes.replace.title">Замена Runtime</h2>
+                <button class="modal-close" onclick="closeRTReplace()">&times;</button>
+            </div>
+            <p id="rt-replace-msg" class="confirm-text"></p>
+            <div class="form-group">
+                <label data-i18n="runtimes.replace.select">Выберите новый Runtime:</label>
+                <select id="rt-replace-select"></select>
+            </div>
+            <div class="modal-actions">
+                <button class="btn btn-primary" id="rt-replace-btn" onclick="confirmRTReplace()" data-i18n="runtimes.replace.confirm">Перепривязать и удалить</button>
+                <button class="btn btn-ghost" onclick="closeRTReplace()" data-i18n="common.cancel">Отмена</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Runtime Cascade Confirm Modal -->
+    <div id="rt-cascade-modal" class="modal-overlay" style="display:none;">
+        <div class="modal-box">
+            <div class="modal-header">
+                <h2 data-i18n="runtimes.cascade.title">Каскадное удаление</h2>
+                <button class="modal-close" onclick="closeRTCascade()">&times;</button>
+            </div>
+            <p id="rt-cascade-msg" class="confirm-text"></p>
+            <div class="modal-actions">
+                <button class="btn btn-danger" id="rt-cascade-btn" onclick="confirmRTCascade()" data-i18n="runtimes.cascade.btn">Удалить всё</button>
+                <button class="btn btn-ghost" onclick="closeRTCascade()" data-i18n="common.cancel">Отмена</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Instance Cleanup Modal -->
+    <div id="cleanup-modal" class="modal-overlay" style="display:none;">
+        <div class="modal-box">
+            <div class="modal-header">
+                <h2 data-i18n="instances.cleanup.title">Очистка экземпляров</h2>
+                <button class="modal-close" onclick="closeCleanup()">&times;</button>
+            </div>
+            <p class="confirm-text" data-i18n="instances.cleanup.desc">Активные экземпляры никогда не удаляются.</p>
+            <div class="radio-group" id="cleanup-modes">
+                <label class="radio-option"><input type="radio" name="cleanup-mode" value="all_terminal" checked><span data-i18n="instances.cleanup.all_terminal">Все завершённые</span></label>
+                <label class="radio-option"><input type="radio" name="cleanup-mode" value="older_than_7d"><span data-i18n="instances.cleanup.7d">Старше 7 дней</span></label>
+                <label class="radio-option"><input type="radio" name="cleanup-mode" value="older_than_30d"><span data-i18n="instances.cleanup.30d">Старше 30 дней</span></label>
+                <label class="radio-option"><input type="radio" name="cleanup-mode" value="selected"><span data-i18n="instances.cleanup.selected">Выбранные</span></label>
+            </div>
+            <div class="modal-actions">
+                <button class="btn btn-danger" onclick="confirmCleanup()" data-i18n="instances.cleanup.confirm">Очистить</button>
+                <button class="btn btn-ghost" onclick="closeCleanup()" data-i18n="common.cancel">Отмена</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Add/Edit Model Wizard -->
     <div id="wizard-modal" class="modal-overlay" style="display:none;">
         <div class="modal-box modal-wide">
             <div class="modal-header">
-                <h2>Добавить модель</h2>
+                <h2 id="wizard-title">Добавить модель</h2>
                 <button class="modal-close" onclick="closeWizard()">&times;</button>
             </div>
-            <div class="wizard-steps">
-                <div class="wizard-step active" data-step="1"><span>1</span> Название</div>
-                <div class="wizard-step" data-step="2"><span>2</span> Runtime</div>
-                <div class="wizard-step" data-step="3"><span>3</span> Модель</div>
-                <div class="wizard-step" data-step="4"><span>4</span> Запуск</div>
+            <div class="wizard-steps" id="wizard-steps">
+                <div class="wizard-step active" data-step="1" onclick="wizGoto(1)"><span>1</span> <span data-i18n="wizard.step.name">Название</span></div>
+                <div class="wizard-step" data-step="2" onclick="wizGoto(2)"><span>2</span> <span data-i18n="wizard.step.runtime">Runtime</span></div>
+                <div class="wizard-step" data-step="3" onclick="wizGoto(3)"><span>3</span> <span data-i18n="wizard.step.launch">Запуск</span></div>
             </div>
             <form id="wizard-form">
                 <!-- Step 1: Name -->
                 <div class="wizard-panel active" data-panel="1">
                     <div class="form-group">
-                        <label>Название модели *</label>
-                        <input type="text" id="wiz-name" placeholder="Например: Qwen3.8-27B-Q4_K_M" required>
+                        <label data-i18n="wizard.name">Название модели *</label>
+                        <input type="text" id="wiz-name" placeholder="Qwen3.8-27B-Q4_K_M" required>
                     </div>
                 </div>
                 <!-- Step 2: Runtime -->
                 <div class="wizard-panel" data-panel="2">
                     <div class="form-group">
-                        <label>Runtime</label>
+                        <label data-i18n="wizard.rt.label">Runtime</label>
                         <div class="radio-group">
                             <label class="radio-option">
                                 <input type="radio" name="wiz-rt-mode" value="existing" checked onchange="onWizRtModeChange()">
-                                <span>Использовать существующий</span>
+                                <span data-i18n="wizard.rt.existing">Использовать существующий</span>
                             </label>
                             <label class="radio-option">
                                 <input type="radio" name="wiz-rt-mode" value="new" onchange="onWizRtModeChange()">
-                                <span>Создать новый Runtime</span>
+                                <span data-i18n="wizard.rt.new">Создать новый Runtime</span>
                             </label>
                         </div>
                     </div>
                     <div id="wiz-rt-existing-section" class="form-group">
-                        <label>Выберите Runtime</label>
-                        <select id="wiz-runtime-existing">
-                            <option value="">— выбрать —</option>
-                        </select>
+                        <label data-i18n="wizard.rt.select">Выберите Runtime</label>
+                        <div id="wiz-rt-cards" class="rt-card-list"></div>
                     </div>
                     <div id="wiz-rt-new-section" class="form-group" style="display:none;">
-                        <small class="hint" style="margin-bottom:8px;display:block;">Runtime будет создан автоматически при нажатии «Создать» на последнем шаге.</small>
+                        <small class="hint" style="margin-bottom:8px;display:block;" data-i18n="wizard.rt.new.hint">Runtime будет создан автоматически.</small>
                         <div class="form-group">
-                            <label>Имя Runtime *</label>
-                            <input type="text" id="wiz-rt-name" placeholder="llama.cpp 10444">
-                        </div>
-                        <div class="form-group">
-                            <label>Executable *</label>
-                            <input type="text" id="wiz-rt-executable" placeholder="llama-server.exe">
-                            <small class="hint">Имя файла (относительно Working Directory) или абсолютный путь</small>
-                        </div>
-                        <div class="form-group">
-                            <label>Working Directory</label>
+                            <label data-i18n="wizard.rt.workdir">Рабочая папка</label>
                             <input type="text" id="wiz-rt-workdir" placeholder="E:\tools\llama10444">
                         </div>
+                        <div class="form-group">
+                            <label data-i18n="wizard.rt.executable">Исполняемый файл *</label>
+                            <input type="text" id="wiz-rt-executable" placeholder="llama-server.exe">
+                            <small class="hint" data-i18n="wizard.rt.executable.hint">Имя файла или абсолютный путь</small>
+                        </div>
+                        <div class="form-group">
+                            <label data-i18n="wizard.rt.name">Имя Runtime *</label>
+                            <input type="text" id="wiz-rt-name" placeholder="llama.cpp 10444">
+                        </div>
                     </div>
                 </div>
-                <!-- Step 3: Model -->
+                <!-- Step 3: Launch config -->
                 <div class="wizard-panel" data-panel="3">
                     <div class="form-group">
-                        <label>GGUF файл</label>
-                        <input type="text" id="wiz-model-path" placeholder="E:\models\qwen\Qwen3.8-27B-Q4_K_M.gguf">
+                        <label data-i18n="wizard.args">Аргументы запуска *</label>
+                        <textarea id="wiz-args" rows="6" placeholder="-m E:\models\model.gguf&#10;--mmproj E:\models\mmproj.gguf&#10;-ngl 99&#10;-c 131072&#10;--host 127.0.0.1&#10;--port 8080"></textarea>
+                        <small class="hint" data-i18n="wizard.args.hint">По одному флагу в строке. Host и port — обычные аргументы.</small>
                     </div>
                     <div class="form-group">
-                        <label>MMProj (опционально)</label>
-                        <input type="text" id="wiz-model-mmproj" placeholder="E:\models\qwen\mmproj-F16.gguf">
-                    </div>
-                    <div class="form-group">
-                        <label>Параметры модели</label>
-                        <textarea id="wiz-model-args" rows="4" placeholder="-ngl 999&#10;-c 200000&#10;-np 1&#10;-ctk q8_0&#10;-ctv q8_0&#10;-fa on&#10;--jinja"></textarea>
-                        <small class="hint">По одному параметру в строке</small>
-                    </div>
-                </div>
-                <!-- Step 4: Launch config -->
-                <div class="wizard-panel" data-panel="4">
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label>Host</label>
-                            <input type="text" id="wiz-host" value="127.0.0.1">
-                        </div>
-                        <div class="form-group">
-                            <label>Port</label>
-                            <input type="number" id="wiz-port" value="8085" min="1" max="65535">
-                        </div>
-                    </div>
-                    <div class="form-group">
-                        <label>Дополнительные аргументы запуска</label>
-                        <textarea id="wiz-profile-args" rows="2" placeholder="Дополнительные args для этого запуска (опционально)"></textarea>
-                    </div>
-                    <div class="form-group">
-                        <label>Переменные окружения</label>
-                        <small class="hint">Дополнительные env-переменные, передаваемые процессу (например, CUDA_VISIBLE_DEVICES). Не показываются при чтении.</small>
+                        <label data-i18n="wizard.env">Переменные окружения</label>
+                        <small class="hint" data-i18n="wizard.env.hint">Дополнительные env-переменные процесса.</small>
                         <div id="wiz-env-container"></div>
-                        <button type="button" class="btn btn-ghost btn-sm" onclick="addWizEnvRow()">+ Переменная</button>
+                        <button type="button" class="btn btn-ghost btn-sm" onclick="addWizEnvRow()" data-i18n="wizard.env.add">+ Переменная</button>
                     </div>
                     <div class="form-group form-autostart">
                         <div>
-                            <span class="autostart-label">Автозапуск при старте GoAl</span>
-                            <small class="hint">Модель будет запущена автоматически при каждом старте GoAl</small>
+                            <span class="autostart-label" data-i18n="wizard.autostart">Автозапуск при старте GoAl</span>
+                            <small class="hint" data-i18n="wizard.autostart.hint">Модель будет запущена автоматически при каждом старте GoAl</small>
                         </div>
                         <label class="toggle-switch"><input type="checkbox" id="wiz-autostart"><span class="toggle-slider"></span></label>
                     </div>
                     <div class="form-group" id="wiz-delay-group" style="display:none;">
-                        <label>Задержка запуска (сек)</label>
+                        <label data-i18n="wizard.delay">Задержка запуска (сек)</label>
                         <input type="number" id="wiz-autostart-delay" value="0" min="0" max="300">
                     </div>
                 </div>
                 <div id="wizard-error" class="error-msg" style="display:none;"></div>
                 <div class="modal-actions">
-                    <button type="button" class="btn btn-ghost" id="wiz-prev" onclick="wizPrev()" style="display:none;">Назад</button>
-                    <button type="submit" class="btn btn-primary" id="wiz-next">Далее</button>
-                    <button type="button" class="btn btn-ghost" onclick="closeWizard()">Отмена</button>
+                    <button type="button" class="btn btn-ghost" id="wiz-prev" onclick="wizPrev()" style="display:none;" data-i18n="wizard.btn.prev">Назад</button>
+                    <button type="submit" class="btn btn-primary" id="wiz-next" data-i18n="wizard.btn.next">Далее</button>
+                    <button type="button" class="btn btn-ghost" onclick="closeWizard()" data-i18n="common.cancel">Отмена</button>
                 </div>
             </form>
-        </div>
-    </div>
-
-    <!-- Model Details Modal -->
-    <div id="details-modal" class="modal-overlay" style="display:none;">
-        <div class="modal-box modal-wide">
-            <div class="modal-header">
-                <h2 id="details-title">Детали</h2>
-                <button class="modal-close" onclick="closeDetails()">&times;</button>
-            </div>
-            <div class="details-tabs">
-                <button class="tab active" data-tab="overview" onclick="switchDetailTab('overview')">Обзор</button>
-                <button class="tab" data-tab="launch" onclick="switchDetailTab('launch')">Параметры</button>
-                <button class="tab" data-tab="instances" onclick="switchDetailTab('instances')">Экземпляры</button>
-            </div>
-            <div class="details-content">
-                <div class="tab-panel active" id="detail-overview"></div>
-                <div class="tab-panel" id="detail-launch"></div>
-                <div class="tab-panel" id="detail-instances"></div>
-            </div>
         </div>
     </div>
 
@@ -206,33 +226,48 @@
             <nav class="sidebar-nav">
                 <button class="nav-item active" data-view="models" onclick="navigate('models')">
                     <svg class="nav-icon" viewBox="0 0 20 20" fill="currentColor"><path d="M3 4h14a1 1 0 011 1v10a1 1 0 01-1 1H3a1 1 0 01-1-1V5a1 1 0 011-1zm2 2v8h10V6H5z"/></svg>
-                    Мои модели
+                    <span data-i18n="nav.models">Мои модели</span>
                 </button>
                 <button class="nav-item" data-view="logs" onclick="navigate('logs')">
                     <svg class="nav-icon" viewBox="0 0 20 20" fill="currentColor"><path d="M4 4h12v2H4V4zm0 4h12v2H4V8zm0 4h8v2H4v-2zm0 4h5v2H4v-2z"/></svg>
-                    Логи
+                    <span data-i18n="nav.logs">Логи</span>
                 </button>
                 <button class="nav-item" data-view="history" onclick="navigate('history')">
                     <svg class="nav-icon" viewBox="0 0 20 20" fill="currentColor"><path d="M10 2a8 8 0 100 16 8 8 0 000-16zm1 4H9v5l4 2 .75-1.5L11 10.5V6z"/></svg>
-                    История
+                    <span data-i18n="nav.history">История</span>
                 </button>
             </nav>
             <div class="sidebar-divider"></div>
-            <div class="sidebar-label">РАСШИРЕННО</div>
+            <div class="sidebar-label" data-i18n="nav.advanced">РАСШИРЕННО</div>
             <nav class="sidebar-nav">
-                <button class="nav-item nav-adv" data-view="adv-runtimes" onclick="navigate('adv-runtimes')">Рантаймы</button>
-                <button class="nav-item nav-adv" data-view="adv-models" onclick="navigate('adv-models')">Модели (сущ.)</button>
-                <button class="nav-item nav-adv" data-view="adv-profiles" onclick="navigate('adv-profiles')">Профили</button>
-                <button class="nav-item nav-adv" data-view="adv-instances" onclick="navigate('adv-instances')">Экземпляры</button>
-                <button class="nav-item nav-adv" data-view="adv-autostart" onclick="navigate('adv-autostart')">Автозапуск</button>
-                <button class="nav-item nav-adv" data-view="adv-settings" onclick="navigate('adv-settings')">Настройки</button>
+                <button class="nav-item nav-adv" data-view="adv-runtimes" onclick="navigate('adv-runtimes')"><span data-i18n="nav.runtimes">Рантаймы</span></button>
+                <button class="nav-item nav-adv" data-view="adv-instances" onclick="navigate('adv-instances')"><span data-i18n="nav.instances">Экземпляры</span></button>
+                <button class="nav-item nav-adv" data-view="adv-settings" onclick="navigate('adv-settings')"><span data-i18n="nav.settings">Настройки</span></button>
             </nav>
             <div class="sidebar-footer">
                 <div class="server-status">
                     <span class="status-dot online"></span>
-                    <span>Сервер GoAl</span>
+                    <span data-i18n="sidebar.version">Сервер GoAl</span>
                 </div>
                 <div class="server-version" id="server-version"></div>
+                <div class="sidebar-footer-links">
+                    <a href="https://github.com/dsdred/goal-starter" target="_blank" rel="noopener noreferrer" class="sidebar-link" data-i18n="sidebar.repo">Репозиторий</a>
+                </div>
+                <div class="sidebar-footer-controls">
+                    <select id="theme-select" class="mini-select" onchange="setTheme(this.value)" title="Theme">
+                        <option value="system">System</option>
+                        <option value="dark">Dark</option>
+                        <option value="light">Light</option>
+                    </select>
+                    <select id="lang-select" class="mini-select" onchange="setLanguage(this.value)" title="Language">
+                        <option value="ru">RU</option>
+                        <option value="en">EN</option>
+                    </select>
+                </div>
+                <div class="sidebar-auth" id="sidebar-auth" style="display:none;">
+                    <span class="sidebar-auth-user" id="sidebar-user"></span>
+                    <button class="btn btn-ghost btn-sm" onclick="handleLogout()" data-i18n="auth.logout">Выйти</button>
+                </div>
             </div>
         </aside>
 
@@ -241,58 +276,87 @@
             <!-- View: My Models -->
             <section class="view active" id="view-models">
                 <div class="view-header">
-                    <h1>Мои модели</h1>
-                    <button class="btn btn-primary" onclick="openWizard()">+ Добавить модель</button>
+                    <h1 data-i18n="models.title">Мои модели</h1>
+                    <button class="btn btn-primary" onclick="openWizard()" data-i18n="models.add">+ Добавить модель</button>
                 </div>
-                <div class="model-grid" id="model-grid"></div>
+                <div class="filter-bar" id="models-filter-bar">
+                    <input type="text" id="mf-search" placeholder="Search..." oninput="renderModels()">
+                    <select id="mf-runtime" onchange="renderModels()"><option value="">All Runtimes</option></select>
+                    <select id="mf-state" onchange="renderModels()">
+                        <option value="">All States</option>
+                        <option value="running">Running</option>
+                        <option value="stopped">Stopped</option>
+                        <option value="starting">Starting</option>
+                        <option value="stopping">Stopping</option>
+                    </select>
+                    <label class="toggle-label"><input type="checkbox" id="mf-autostart" onchange="renderModels()"><span>Autostart</span></label>
+                </div>
+                <div class="model-list" id="model-list"></div>
                 <div class="empty-state" id="models-empty" style="display:none;">
-                    <p>Модели не добавлены.</p>
-                    <button class="btn btn-primary" onclick="openWizard()">Добавить первую модель</button>
+                    <p data-i18n="models.empty">Модели не добавлены.</p>
+                    <button class="btn btn-primary" onclick="openWizard()" data-i18n="models.empty_cta">Добавить первую модель</button>
                 </div>
             </section>
 
             <!-- View: Logs -->
             <section class="view" id="view-logs">
                 <div class="view-header">
-                    <h1>Логи</h1>
+                    <h1 data-i18n="logs.title">Логи</h1>
                 </div>
                 <div class="empty-state" id="logs-empty" style="display:none;">
-                    <p>Нет активных экземпляров для логирования.</p>
-                    <small class="hint-text">Запустите модель, чтобы увидеть логи в реальном времени.</small>
+                    <p data-i18n="logs.empty">Нет экземпляров для просмотра логов.</p>
+                    <small class="hint-text" data-i18n="logs.empty.hint">Запустите модель, чтобы увидеть логи в реальном времени.</small>
                 </div>
                 <div class="logs-toolbar">
-                    <select id="log-instance-select" onchange="switchLogInstance()">
-                        <option value="">Все экземпляры</option>
-                    </select>
+                    <select id="log-instance-select" onchange="switchLogInstance()"><option value="">All Instances</option></select>
                     <select id="log-stream-filter">
-                        <option value="">Все</option>
+                        <option value="">All</option>
                         <option value="stdout">stdout</option>
                         <option value="stderr">stderr</option>
                         <option value="system">system</option>
                     </select>
-                    <input type="text" id="log-search" placeholder="Поиск..." oninput="applyLogSearch()">
-                    <label class="toggle-label">
-                        <input type="checkbox" id="log-autoscroll" checked>
-                        <span>Автопрокрутка</span>
-                    </label>
-                    <button class="btn btn-ghost btn-sm" onclick="toggleLogPause()" id="log-pause-btn">Пауза</button>
-                    <button class="btn btn-ghost btn-sm" onclick="clearLogView()">Очистить</button>
+                    <input type="text" id="log-search" placeholder="Search..." oninput="applyLogSearch()">
+                    <label class="toggle-label"><input type="checkbox" id="log-autoscroll" checked><span data-i18n="logs.autoscroll">Автопрокрутка</span></label>
+                    <button class="btn btn-ghost btn-sm" onclick="toggleLogPause()" id="log-pause-btn" data-i18n="logs.pause">Пауза</button>
+                    <button class="btn btn-ghost btn-sm" onclick="clearLogView()" data-i18n="logs.clear">Очистить</button>
                 </div>
                 <div class="log-instance-bar" id="log-instance-bar" style="display:none;"></div>
                 <div class="log-view" id="log-view"></div>
             </section>
 
-            <!-- View: History -->
+            <!-- View: Instance History -->
             <section class="view" id="view-history">
                 <div class="view-header">
-                    <h1>История</h1>
+                    <h1 data-i18n="history.title">История экземпляров</h1>
+                    <button class="btn btn-ghost btn-sm" onclick="openCleanup()" data-i18n="instances.cleanup">Очистка</button>
+                </div>
+                <div class="filter-bar">
+                    <select id="hf-state" onchange="renderHistory()">
+                        <option value="">All States</option>
+                        <option value="running">running</option>
+                        <option value="starting">starting</option>
+                        <option value="stopping">stopping</option>
+                        <option value="exited">exited</option>
+                        <option value="failed">failed</option>
+                    </select>
+                    <select id="hf-model" onchange="renderHistory()"><option value="">All Models</option></select>
+                    <label class="toggle-label"><input type="checkbox" id="hf-active" onchange="renderHistory()"><span data-i18n="history.filter.only_active">Только активные</span></label>
                 </div>
                 <div class="empty-state" id="history-empty" style="display:none;">
-                    <p>История пуста.</p>
-                    <small class="hint-text">Завершённые экземпляры появятся здесь.</small>
+                    <p data-i18n="history.empty">Экземпляры не найдены.</p>
+                    <small class="hint-text" data-i18n="history.empty.hint">Завершённые экземпляры появятся здесь.</small>
                 </div>
                 <table class="data-table">
-                    <thead><tr><th>Модель</th><th>Состояние</th><th>Запущен</th><th>Остановлен</th><th>Exit</th><th></th></tr></thead>
+                    <thead><tr>
+                        <th data-i18n="history.col.model">Модель</th>
+                        <th data-i18n="history.col.instance">Instance</th>
+                        <th data-i18n="history.col.state">Состояние</th>
+                        <th data-i18n="history.col.pid">PID</th>
+                        <th data-i18n="history.col.started">Запущен</th>
+                        <th data-i18n="history.col.stopped">Остановлен</th>
+                        <th data-i18n="history.col.exit">Exit</th>
+                        <th></th>
+                    </tr></thead>
                     <tbody id="history-body"></tbody>
                 </table>
             </section>
@@ -300,185 +364,121 @@
             <!-- View: Advanced - Runtimes -->
             <section class="view" id="view-adv-runtimes">
                 <div class="view-header">
-                    <h1>Рантаймы</h1>
-                    <button class="btn btn-primary" onclick="showCreateRuntimeModal()">+ Добавить</button>
+                    <h1 data-i18n="runtimes.title">Рантаймы</h1>
+                    <button class="btn btn-primary" onclick="showCreateRuntimeModal()" data-i18n="runtimes.add">+ Добавить</button>
                 </div>
                 <div class="empty-state" id="runtimes-empty" style="display:none;">
-                    <p>Рантаймы не добавлены.</p>
+                    <p data-i18n="runtimes.empty">Рантаймы не добавлены.</p>
                 </div>
                 <table class="data-table">
-                    <thead><tr><th>Имя</th><th>Executable</th><th>Рабочий каталог</th><th>Аргументы по умолчанию</th><th></th></tr></thead>
+                    <thead><tr>
+                        <th data-i18n="runtimes.col.name">Имя</th>
+                        <th data-i18n="runtimes.col.executable">Executable</th>
+                        <th data-i18n="runtimes.col.workdir">Рабочая папка</th>
+                        <th></th>
+                    </tr></thead>
                     <tbody id="adv-runtimes-body"></tbody>
-                </table>
-            </section>
-
-            <!-- View: Advanced - Models -->
-            <section class="view" id="view-adv-models">
-                <div class="view-header">
-                    <h1>Модели (сущ.)</h1>
-                    <button class="btn btn-primary" onclick="showCreateModelModal()">+ Добавить</button>
-                </div>
-                <div class="empty-state" id="models-adv-empty" style="display:none;">
-                    <p>Модели не добавлены.</p>
-                </div>
-                <table class="data-table">
-                    <thead><tr><th>Имя</th><th>Runtime</th><th>Путь</th><th>MMProj</th><th>Формат</th><th></th></tr></thead>
-                    <tbody id="adv-models-body"></tbody>
-                </table>
-            </section>
-
-            <!-- View: Advanced - Profiles -->
-            <section class="view" id="view-adv-profiles">
-                <div class="view-header">
-                    <h1>Профили</h1>
-                    <button class="btn btn-primary" onclick="showCreateProfileModal()">+ Добавить</button>
-                </div>
-                <div class="empty-state" id="profiles-adv-empty" style="display:none;">
-                    <p>Профили не добавлены.</p>
-                </div>
-                <table class="data-table">
-                    <thead><tr><th>Имя</th><th>Runtime</th><th>Модель</th><th>Адрес:Порт</th><th>Аргументы</th><th></th></tr></thead>
-                    <tbody id="adv-profiles-body"></tbody>
                 </table>
             </section>
 
             <!-- View: Advanced - Instances -->
             <section class="view" id="view-adv-instances">
                 <div class="view-header">
-                    <h1>Экземпляры</h1>
+                    <h1 data-i18n="instances.title">Экземпляры</h1>
                 </div>
                 <div class="empty-state" id="instances-empty" style="display:none;">
-                    <p>Экземпляры не запущены.</p>
-                    <small class="hint-text">Запустите модель из «Мои модели», чтобы увидеть экземпляр здесь.</small>
+                    <p data-i18n="instances.empty">Экземпляры не запущены.</p>
+                    <small class="hint-text" data-i18n="instances.empty.hint">Запустите модель из «Мои модели».</small>
                 </div>
                 <table class="data-table">
-                    <thead><tr><th>ID</th><th>Профиль</th><th>Состояние</th><th>PID</th><th>Запущен</th><th>Остановлен</th><th>Exit</th><th></th></tr></thead>
+                    <thead><tr>
+                        <th data-i18n="instances.col.id">ID</th>
+                        <th data-i18n="instances.col.model">Модель</th>
+                        <th data-i18n="instances.col.state">Состояние</th>
+                        <th data-i18n="instances.col.pid">PID</th>
+                        <th data-i18n="instances.col.started">Запущен</th>
+                        <th data-i18n="instances.col.stopped">Остановлен</th>
+                        <th data-i18n="instances.col.exit">Exit</th>
+                        <th></th>
+                    </tr></thead>
                     <tbody id="adv-instances-body"></tbody>
-                </table>
-            </section>
-
-            <!-- View: Advanced - Autostart -->
-            <section class="view" id="view-adv-autostart">
-                <div class="view-header">
-                    <h1>Автозапуск</h1>
-                </div>
-                <p class="hint-text">Модели с включённым автозапуском стартуют при запуске GoAl.</p>
-                <table class="data-table">
-                    <thead><tr><th>Модель</th><th>Адрес:Порт</th><th>Задержка</th><th>Вкл.</th><th></th></tr></thead>
-                    <tbody id="autostart-body"></tbody>
                 </table>
             </section>
 
             <!-- View: Advanced - Settings -->
             <section class="view" id="view-adv-settings">
                 <div class="view-header">
-                    <h1>Настройки</h1>
+                    <h1 data-i18n="settings.title">Настройки</h1>
                 </div>
                 <div class="settings-grid">
                     <div class="settings-card">
-                        <h3>Сервер</h3>
-                        <div class="setting-row"><span>Версия</span><span id="set-version">-</span></div>
-                        <div class="setting-row"><span>Адрес</span><span id="set-listen">-</span></div>
-                        <div class="setting-row"><span>Авторизация</span><span id="set-auth">-</span></div>
+                        <h3 data-i18n="settings.interface.title">Интерфейс</h3>
+                        <div class="setting-row">
+                            <span data-i18n="settings.interface.theme">Тема</span>
+                            <select id="set-theme" class="mini-select" onchange="setTheme(this.value)">
+                                <option value="system">System</option>
+                                <option value="dark">Dark</option>
+                                <option value="light">Light</option>
+                            </select>
+                        </div>
+                        <div class="setting-row">
+                            <span data-i18n="settings.interface.language">Язык</span>
+                            <select id="set-lang" class="mini-select" onchange="setLanguage(this.value)">
+                                <option value="ru">Русский</option>
+                                <option value="en">English</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="settings-card">
+                        <h3 data-i18n="settings.server.title">Сервер</h3>
+                        <div class="setting-row"><span data-i18n="settings.server.listen">Адрес</span><span id="set-listen">-</span></div>
+                        <div class="setting-row"><span data-i18n="settings.server.auth">Авторизация</span><span id="set-auth">-</span></div>
+                        <p class="hint" style="margin-top:0.8rem;" data-i18n="settings.server.restart_hint">Изменения требуют перезапуск.</p>
+                    </div>
+                    <div class="settings-card">
+                        <h3 data-i18n="settings.about.title">О программе</h3>
+                        <div class="setting-row"><span data-i18n="settings.about.version">Версия</span><span id="set-version">-</span></div>
+                        <div class="setting-row"><span data-i18n="settings.about.commit">Commit</span><span id="set-commit">-</span></div>
+                        <div class="setting-row"><span data-i18n="settings.about.go">Go</span><span id="set-go">-</span></div>
+                        <div class="setting-row"><span data-i18n="settings.about.platform">Platform</span><span id="set-platform">-</span></div>
                     </div>
                     <div class="settings-card" id="set-user-card">
-                        <h3>Пользователь</h3>
-                        <div class="setting-row"><span>Логин</span><span id="set-user">-</span></div>
-                        <button class="btn btn-ghost btn-sm" onclick="handleLogout()" style="margin-top:1rem;">Выйти</button>
+                        <h3 data-i18n="settings.auth.title">Пользователь</h3>
+                        <div class="setting-row"><span data-i18n="settings.auth.user">Логин</span><span id="set-user">-</span></div>
+                        <button class="btn btn-ghost btn-sm" onclick="handleLogout()" style="margin-top:1rem;" data-i18n="settings.auth.logout">Выйти</button>
                     </div>
                 </div>
             </section>
         </main>
     </div>
 
-    <!-- Legacy modals (kept for Advanced CRUD) -->
+    <!-- Create Runtime Modal -->
     <div id="create-runtime-modal" class="modal-overlay" style="display:none;">
         <div class="modal-box">
-            <div class="modal-header"><h2>Создать Runtime</h2><button class="modal-close" onclick="closeModal('create-runtime-modal')">&times;</button></div>
+            <div class="modal-header"><h2 data-i18n="runtimes.create.title">Создать Runtime</h2><button class="modal-close" onclick="closeModal('create-runtime-modal')">&times;</button></div>
             <form onsubmit="return handleCreateRuntime(event)">
-                <div class="form-group"><label>Имя *</label><input type="text" name="name" required></div>
-                <div class="form-group"><label>Executable *</label><input type="text" name="executable" required></div>
-                <div class="form-group"><label>Working Directory</label><input type="text" name="working_directory"></div>
-                <div class="form-group"><label>Default Args (space-separated)</label><textarea name="default_args" rows="2"></textarea></div>
-                <div class="modal-actions"><button type="submit" class="btn btn-primary">Создать</button><button type="button" class="btn btn-ghost" onclick="closeModal('create-runtime-modal')">Отмена</button></div>
+                <div class="form-group"><label data-i18n="runtimes.field.workdir">Рабочая папка</label><input type="text" name="working_directory" placeholder="E:\tools\llama10444"></div>
+                <div class="form-group"><label data-i18n="runtimes.field.executable">Исполняемый файл *</label><input type="text" name="executable" required placeholder="llama-server.exe"></div>
+                <div class="form-group"><label data-i18n="runtimes.field.name">Имя *</label><input type="text" name="name" required placeholder="llama.cpp"></div>
+                <div class="form-group"><label data-i18n="runtimes.field.env">Окружение</label><div id="rt-create-env-container"></div>
+                <button type="button" class="btn btn-ghost btn-sm" onclick="addEnvRow('rt-create-env-container')">+ Переменная</button></div>
+                <div class="modal-actions"><button type="submit" class="btn btn-primary" data-i18n="runtimes.btn.create">Создать</button><button type="button" class="btn btn-ghost" onclick="closeModal('create-runtime-modal')" data-i18n="common.cancel">Отмена</button></div>
             </form>
         </div>
     </div>
 
-    <div id="create-model-modal" class="modal-overlay" style="display:none;">
-        <div class="modal-box">
-            <div class="modal-header"><h2>Создать Model</h2><button class="modal-close" onclick="closeModal('create-model-modal')">&times;</button></div>
-            <form onsubmit="return handleCreateModel(event)">
-                <div class="form-group"><label>Имя *</label><input type="text" name="name" required></div>
-                <div class="form-group"><label>Runtime *</label><select name="runtime_id" required><option value="">—</option></select></div>
-                <div class="form-group"><label>Тип *</label><select name="kind" required onchange="toggleModelKind(this)"><option value="">—</option><option value="path">Path (GGUF)</option><option value="arguments">Arguments</option></select></div>
-                <div class="form-group" data-kind="path"><label>Path *</label><input type="text" name="path"></div>
-                <div class="form-group" data-kind="arguments" style="display:none;"><label>Arguments</label><textarea name="arguments" rows="3"></textarea></div>
-                <div class="modal-actions"><button type="submit" class="btn btn-primary">Создать</button><button type="button" class="btn btn-ghost" onclick="closeModal('create-model-modal')">Отмена</button></div>
-            </form>
-        </div>
-    </div>
-
-    <div id="create-profile-modal" class="modal-overlay" style="display:none;">
-        <div class="modal-box">
-            <div class="modal-header"><h2>Создать Profile</h2><button class="modal-close" onclick="closeModal('create-profile-modal')">&times;</button></div>
-            <form onsubmit="return handleCreateProfile(event)">
-                <div class="form-group"><label>Имя *</label><input type="text" name="name" required></div>
-                <div class="form-group"><label>Runtime *</label><select name="runtime_id" required></select></div>
-                <div class="form-group"><label>Model</label><select name="model_id"></select></div>
-                <div class="form-row">
-                    <div class="form-group"><label>Host</label><input type="text" name="host" value="127.0.0.1"></div>
-                    <div class="form-group"><label>Port</label><input type="number" name="port" min="1" max="65535"></div>
-                </div>
-                <div class="form-group"><label>Args (space-separated)</label><textarea name="args" rows="2"></textarea></div>
-                <div class="modal-actions"><button type="submit" class="btn btn-primary">Создать</button><button type="button" class="btn btn-ghost" onclick="closeModal('create-profile-modal')">Отмена</button></div>
-            </form>
-        </div>
-    </div>
-
+    <!-- Edit Runtime Modal -->
     <div id="edit-runtime-modal" class="modal-overlay" style="display:none;">
         <div class="modal-box">
-            <div class="modal-header"><h2>Редактировать Runtime</h2><button class="modal-close" onclick="closeModal('edit-runtime-modal')">&times;</button></div>
+            <div class="modal-header"><h2 data-i18n="runtimes.edit.title">Изменить Runtime</h2><button class="modal-close" onclick="closeModal('edit-runtime-modal')">&times;</button></div>
             <form onsubmit="return handleEditRuntime(event)">
                 <input type="hidden" name="id">
-                <div class="form-group"><label>Имя *</label><input type="text" name="name" required></div>
-                <div class="form-group"><label>Executable *</label><input type="text" name="executable" required></div>
-                <div class="form-group"><label>Working Directory</label><input type="text" name="working_directory"></div>
-                <div class="form-group"><label>Default Args</label><textarea name="default_args" rows="2"></textarea></div>
-                <div class="modal-actions"><button type="submit" class="btn btn-primary">Сохранить</button><button type="button" class="btn btn-ghost" onclick="closeModal('edit-runtime-modal')">Отмена</button></div>
-            </form>
-        </div>
-    </div>
-
-    <div id="edit-model-modal" class="modal-overlay" style="display:none;">
-        <div class="modal-box">
-            <div class="modal-header"><h2>Редактировать Model</h2><button class="modal-close" onclick="closeModal('edit-model-modal')">&times;</button></div>
-            <form onsubmit="return handleEditModel(event)">
-                <input type="hidden" name="id">
-                <div class="form-group"><label>Имя *</label><input type="text" name="name" required></div>
-                <div class="form-group"><label>Runtime *</label><select name="runtime_id" required></select></div>
-                <div class="form-group"><label>Тип *</label><select name="kind" required onchange="toggleModelKind(this)"><option value="path">Path</option><option value="arguments">Arguments</option></select></div>
-                <div class="form-group" data-kind="path"><label>Path *</label><input type="text" name="path"></div>
-                <div class="form-group" data-kind="arguments" style="display:none;"><label>Arguments</label><textarea name="arguments" rows="3"></textarea></div>
-                <div class="modal-actions"><button type="submit" class="btn btn-primary">Сохранить</button><button type="button" class="btn btn-ghost" onclick="closeModal('edit-model-modal')">Отмена</button></div>
-            </form>
-        </div>
-    </div>
-
-    <div id="edit-profile-modal" class="modal-overlay" style="display:none;">
-        <div class="modal-box">
-            <div class="modal-header"><h2>Редактировать Profile</h2><button class="modal-close" onclick="closeModal('edit-profile-modal')">&times;</button></div>
-            <form onsubmit="return handleEditProfile(event)">
-                <input type="hidden" name="id">
-                <div class="form-group"><label>Имя *</label><input type="text" name="name" required></div>
-                <div class="form-group"><label>Runtime *</label><select name="runtime_id" required></select></div>
-                <div class="form-group"><label>Model</label><select name="model_id"></select></div>
-                <div class="form-row">
-                    <div class="form-group"><label>Host</label><input type="text" name="host"></div>
-                    <div class="form-group"><label>Port</label><input type="number" name="port" min="1" max="65535"></div>
-                </div>
-                <div class="form-group"><label>Args</label><textarea name="args" rows="2"></textarea></div>
-                <div class="modal-actions"><button type="submit" class="btn btn-primary">Сохранить</button><button type="button" class="btn btn-ghost" onclick="closeModal('edit-profile-modal')">Отмена</button></div>
+                <div class="form-group"><label data-i18n="runtimes.field.workdir">Рабочая папка</label><input type="text" name="working_directory" placeholder="E:\tools\llama10444"></div>
+                <div class="form-group"><label data-i18n="runtimes.field.executable">Исполняемый файл *</label><input type="text" name="executable" required placeholder="llama-server.exe"></div>
+                <div class="form-group"><label data-i18n="runtimes.field.name">Имя *</label><input type="text" name="name" required placeholder="llama.cpp"></div>
+                <div class="form-group"><label data-i18n="runtimes.field.env">Окружение</label><div id="rt-edit-env-container"></div>
+                <button type="button" class="btn btn-ghost btn-sm" onclick="addEnvRow('rt-edit-env-container')">+ Переменная</button></div>
+                <div class="modal-actions"><button type="submit" class="btn btn-primary" data-i18n="runtimes.btn.save">Сохранить</button><button type="button" class="btn btn-ghost" onclick="closeModal('edit-runtime-modal')" data-i18n="common.cancel">Отмена</button></div>
             </form>
         </div>
     </div>

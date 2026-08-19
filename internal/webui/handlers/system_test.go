@@ -80,7 +80,6 @@ func TestSystemHandler_ServeIndex_EmptyDataNoPanic(t *testing.T) {
 	templateContent := `{{define "index.html"}}<html><body>
 <div id="runtimes-count">{{len .Runtimes}}</div>
 <div id="models-count">{{len .Models}}</div>
-<div id="profiles-count">{{len .Profiles}}</div>
 </body></html>{{end}}`
 
 	fsys := fstest.MapFS{

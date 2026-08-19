@@ -55,8 +55,6 @@ func TestResolveExecutablePath_Absolute(t *testing.T) {
 }
 
 func TestResolveExecutablePath_EmptyWorkDir(t *testing.T) {
-	// With empty WorkingDirectory, relative path is returned as-is
-	// (will be resolved by the OS against the process CWD)
 	got := resolveExecutablePath("llama-server", "")
 	if got != "llama-server" {
 		t.Errorf("expected unchanged relative path with empty workdir, got %q", got)
@@ -64,7 +62,6 @@ func TestResolveExecutablePath_EmptyWorkDir(t *testing.T) {
 }
 
 func TestResolve_PreviewMatchesExecution_ExecutablePath(t *testing.T) {
-	// Create a temp directory with a fake executable
 	dir := t.TempDir()
 	exePath := filepath.Join(dir, "fake-server")
 	if err := os.WriteFile(exePath, []byte("#!/bin/sh\nexit 0"), 0755); err != nil {
@@ -72,18 +69,15 @@ func TestResolve_PreviewMatchesExecution_ExecutablePath(t *testing.T) {
 	}
 
 	r := NewLaunchResolver()
-	profile := &Profile{ID: "p1", Name: "test", RuntimeID: "r1", Host: "127.0.0.1", Port: 8085}
-	runtime := &Runtime{ID: "r1", Name: "rt", Executable: filepath.Base(exePath), WorkingDirectory: dir}
-	model := &Model{ID: "m1", Name: "m", Path: dir}
+	model := &Model{ID: "m1", Name: "test", RuntimeID: "r1"}
+	rt := &Runtime{ID: "r1", Name: "rt", Executable: filepath.Base(exePath), WorkingDirectory: dir}
 
-	// Execution path
-	specExec, err := r.Resolve(profile, runtime, model, nil, nil)
+	specExec, err := r.Resolve(model, rt, nil, nil)
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
 
-	// Preview path
-	specPrev, err := r.Preview(profile, runtime, model, nil, nil)
+	specPrev, err := r.Preview(model, rt, nil, nil)
 	if err != nil {
 		t.Fatalf("Preview: %v", err)
 	}
@@ -92,7 +86,6 @@ func TestResolve_PreviewMatchesExecution_ExecutablePath(t *testing.T) {
 		t.Errorf("executable mismatch: Resolve=%q Preview=%q", specExec.Executable, specPrev.Executable)
 	}
 
-	// Both should resolve to the absolute path
 	expected := filepath.Join(dir, filepath.Base(exePath))
 	if specExec.Executable != expected {
 		t.Errorf("Resolve executable = %q, want %q", specExec.Executable, expected)
@@ -110,10 +103,10 @@ func TestResolve_AbsoluteExecutable(t *testing.T) {
 	}
 
 	r := NewLaunchResolver()
-	profile := &Profile{ID: "p1", Name: "test", RuntimeID: "r1", Host: "0.0.0.0", Port: 9999}
-	runtime := &Runtime{ID: "r1", Name: "rt", Executable: exePath, WorkingDirectory: dir}
+	model := &Model{ID: "m1", Name: "t", RuntimeID: "r1"}
+	rt := &Runtime{ID: "r1", Name: "rt", Executable: exePath, WorkingDirectory: dir}
 
-	spec, err := r.Resolve(profile, runtime, nil, nil, nil)
+	spec, err := r.Resolve(model, rt, nil, nil)
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}

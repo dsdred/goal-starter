@@ -7,15 +7,86 @@ let logEs = null;
 let logPaused = false;
 let refreshTimer = null;
 
-// Data cache
-let profilesData = [];
 let runtimesData = [];
 let modelsData = [];
 let instancesData = [];
 
+let wizStep = 1;
+let wizEditId = null;
+
+let i18nDict = {};
+let currentLang = localStorage.getItem('goal_lang') || 'ru';
+let currentTheme = localStorage.getItem('goal_theme') || 'system';
+let versionInfo = {};
+
+// ─── i18n ───────────────────────────────────────────────────────────────────
+
+function t(key, params) {
+    let s = i18nDict[key] || key;
+    if (params) {
+        Object.keys(params).forEach(function (k) {
+            s = s.replace('{' + k + '}', params[k]);
+        });
+    }
+    return s;
+}
+
+function applyI18n() {
+    document.querySelectorAll('[data-i18n]').forEach(function (el) {
+        el.textContent = t(el.dataset.i18n);
+    });
+    document.title = t('app.title');
+}
+
+async function loadI18n(lang) {
+    try {
+        const r = await fetch('/static/i18n/' + lang + '.json');
+        if (r.ok) {
+            i18nDict = await r.json();
+            applyI18n();
+        }
+    } catch {}
+}
+
+function setLanguage(lang) {
+    currentLang = lang;
+    localStorage.setItem('goal_lang', lang);
+    document.getElementById('lang-select').value = lang;
+    const setLang = document.getElementById('set-lang');
+    if (setLang) setLang.value = lang;
+    loadI18n(lang);
+}
+
+// ─── Theme ──────────────────────────────────────────────────────────────────
+
+function applyTheme() {
+    let mode = currentTheme;
+    if (mode === 'system') {
+        mode = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    }
+    document.documentElement.setAttribute('data-theme', mode);
+}
+
+function setTheme(theme) {
+    currentTheme = theme;
+    localStorage.setItem('goal_theme', theme);
+    applyTheme();
+    document.getElementById('theme-select').value = theme;
+    const setThemeEl = document.getElementById('set-theme');
+    if (setThemeEl) setThemeEl.value = theme;
+}
+
 // ─── Init ───────────────────────────────────────────────────────────────────
 
 async function init() {
+    applyTheme();
+    document.getElementById('theme-select').value = currentTheme;
+    document.getElementById('lang-select').value = currentLang;
+    await loadI18n(currentLang);
+    document.getElementById('wizard-form').addEventListener('submit', handleWizardSubmit);
+    document.getElementById('wiz-autostart').addEventListener('change', function () {
+        document.getElementById('wiz-delay-group').style.display = this.checked ? '' : 'none';
+    });
     await getCSRFToken();
     const auth = await checkAuth();
     if (!auth) {
@@ -41,13 +112,25 @@ async function checkAuth() {
         if (r.ok) {
             const d = await r.json();
             if (d.authenticated) {
-                document.getElementById('set-user').textContent = d.user || '';
+                updateSidebarAuth(d.user);
                 return true;
             }
         }
     } catch {}
     showLogin();
     return false;
+}
+
+function updateSidebarAuth(user) {
+    const el = document.getElementById('sidebar-auth');
+    if (user) {
+        el.style.display = 'flex';
+        document.getElementById('sidebar-user').textContent = user;
+    }
+    const setCard = document.getElementById('set-user-card');
+    if (setCard) setCard.style.display = user ? '' : 'none';
+    const setUser = document.getElementById('set-user');
+    if (setUser) setUser.textContent = user || '-';
 }
 
 function showLogin() {
@@ -81,6 +164,7 @@ async function handleLogin(e) {
         });
         if (r.ok) {
             await getCSRFToken();
+            updateSidebarAuth(u);
             document.getElementById('login-modal').style.display = 'none';
             document.getElementById('app-shell').style.display = 'flex';
             await reloadAllData();
@@ -105,81 +189,103 @@ async function handleLogout() {
 
 // ─── API helper ─────────────────────────────────────────────────────────────
 
-async function api(path, opts = {}) {
+async function api(path, opts) {
+    opts = opts || {};
     const headers = { 'Content-Type': 'application/json' };
     if (opts.method && opts.method !== 'GET') headers['X-CSRF-Token'] = csrfToken;
-    const r = await fetch('/api/v1' + path, { ...opts, headers });
+    const r = await fetch('/api/v1' + path, { method: opts.method || 'GET', headers: headers, body: opts.body });
     if (!r.ok) {
         let msg = r.statusText;
-        try { const d = await r.json(); msg = d.error || msg; } catch {}
-        throw new Error(msg);
+        let details = null;
+        try {
+            const d = await r.json();
+            msg = d.error || msg;
+            if (Array.isArray(d.details)) details = d.details;
+        } catch {}
+        const err = new Error(msg);
+        err.status = r.status;
+        err.details = details;
+        throw err;
     }
+    if (r.status === 204) return null;
     return r.json();
 }
 
 // ─── Data loading ───────────────────────────────────────────────────────────
 
 async function reloadAllData() {
-    const [pr, rt, mo, ins] = await Promise.allSettled([
-        api('/profiles'), api('/runtimes'), api('/models'), api('/instances')
+    const [rt, mo, ins] = await Promise.allSettled([
+        api('/runtimes'), api('/models'), api('/instances')
     ]);
-    profilesData = pr.status === 'fulfilled' ? pr.value : [];
     runtimesData = rt.status === 'fulfilled' ? rt.value : [];
     modelsData = mo.status === 'fulfilled' ? mo.value : [];
     instancesData = ins.status === 'fulfilled' ? ins.value : [];
     loadVersion();
+    updateFilterOptions();
 }
 
 async function loadVersion() {
     try {
         const d = await api('/version');
-        document.getElementById('server-version').textContent = 'v' + (d.version || '?');
-        document.getElementById('set-version').textContent = 'v' + (d.version || '?');
+        versionInfo = d;
+        const ver = d.version || 'dev';
+        document.getElementById('server-version').textContent = ver;
+        document.getElementById('set-version').textContent = ver;
+        document.getElementById('set-commit').textContent = d.gitCommit || '-';
+        document.getElementById('set-go').textContent = d.goVersion || '-';
+        document.getElementById('set-platform').textContent = (d.os || '') + '/' + (d.arch || '');
     } catch {}
 }
 
-// ─── Rendering ──────────────────────────────────────────────────────────────
-
-function renderAll() {
-    renderModelCards();
-    renderAdvRuntimes();
-    renderAdvModels();
-    renderAdvProfiles();
-    renderAdvInstances();
-    renderAutostart();
-    renderHistory();
-    updateLogInstanceSelect();
+function updateFilterOptions() {
+    const mfRt = document.getElementById('mf-runtime');
+    if (mfRt) {
+        const cur = mfRt.value;
+        mfRt.innerHTML = '<option value="">' + t('models.filter.runtime') + '</option>' +
+            runtimesData.map(function (r) { return '<option value="' + esc(r.id) + '">' + esc(r.name) + '</option>'; }).join('');
+        mfRt.value = cur;
+    }
+    const hfM = document.getElementById('hf-model');
+    if (hfM) {
+        const cur = hfM.value;
+        hfM.innerHTML = '<option value="">' + t('history.filter.model') + '</option>' +
+            modelsData.map(function (m) { return '<option value="' + esc(m.id) + '">' + esc(m.name) + '</option>'; }).join('');
+        hfM.value = cur;
+    }
 }
 
+// ─── Utilities ──────────────────────────────────────────────────────────────
+
 function getRuntimeName(id) {
-    const r = runtimesData.find(x => x.id === id);
-    return r ? r.name : (id || '');
+    const r = runtimesData.find(function (x) { return x.id === id; });
+    return r ? r.name : (id || '—');
 }
 
 function getModelName(id) {
-    const m = modelsData.find(x => x.id === id);
-    return m ? m.name : (id || '');
+    const m = modelsData.find(function (x) { return x.id === id; });
+    return m ? m.name : (id || '—');
 }
 
-function getActiveInstance(profileId) {
-    return instancesData.filter(i => i.profile_id === profileId && isActive(i.state));
+function getActiveInstances(modelId) {
+    return instancesData.filter(function (i) { return i.model_id === modelId && isActive(i.state); });
 }
 
 function isActive(s) { return s === 'running' || s === 'starting' || s === 'stopping'; }
 
-function modelStatus(profile) {
-    const active = getActiveInstance(profile.id);
+function modelStatus(model) {
+    const active = getActiveInstances(model.id);
     if (active.length === 0) return 'stopped';
-    const states = active.map(i => i.state);
-    if (states.includes('running')) return 'running';
-    if (states.includes('starting')) return 'starting';
-    if (states.includes('stopping')) return 'stopping';
+    const states = active.map(function (i) { return i.state; });
+    if (states.indexOf('running') !== -1) return 'running';
+    if (states.indexOf('starting') !== -1) return 'starting';
+    if (states.indexOf('stopping') !== -1) return 'stopping';
     return 'stopped';
 }
 
 function fmtUptime(startedAt) {
     if (!startedAt) return '';
     const diff = Math.floor((Date.now() - new Date(startedAt).getTime()) / 1000);
+    if (diff < 0) return '';
     const h = Math.floor(diff / 3600);
     const m = Math.floor((diff % 3600) / 60);
     const s = diff % 60;
@@ -188,7 +294,9 @@ function fmtUptime(startedAt) {
 
 function fmtTime(ts) {
     if (!ts) return '—';
-    return new Date(ts).toLocaleString();
+    const d = new Date(ts);
+    if (isNaN(d.getTime())) return '—';
+    return d.toLocaleString();
 }
 
 function esc(s) {
@@ -201,110 +309,145 @@ function safeId(id) {
     return String(id).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
-// ─── Model Cards ────────────────────────────────────────────────────────────
+function parseArgs(raw) {
+    if (!raw) return [];
+    return raw.trim().split(/\s+/).filter(Boolean);
+}
 
-function renderModelCards() {
-    const grid = document.getElementById('model-grid');
+// ─── Rendering ──────────────────────────────────────────────────────────────
+
+function renderAll() {
+    renderModels();
+    renderAdvRuntimes();
+    renderAdvInstances();
+    renderHistory();
+    updateLogInstanceSelect();
+}
+
+// ─── My Models (compact list) ──────────────────────────────────────────────
+
+function renderModels() {
+    const list = document.getElementById('model-list');
     const empty = document.getElementById('models-empty');
-    if (profilesData.length === 0) {
-        grid.innerHTML = '';
-        empty.style.display = 'block';
+    const search = (document.getElementById('mf-search').value || '').toLowerCase();
+    const rtFilter = document.getElementById('mf-runtime').value;
+    const stateFilter = document.getElementById('mf-state').value;
+    const autoOnly = document.getElementById('mf-autostart').checked;
+
+    let filtered = modelsData.filter(function (m) {
+        if (search && m.name.toLowerCase().indexOf(search) === -1) return false;
+        if (rtFilter && m.runtime_id !== rtFilter) return false;
+        if (stateFilter && modelStatus(m) !== stateFilter) return false;
+        if (autoOnly && !m.active) return false;
+        return true;
+    });
+
+    if (filtered.length === 0) {
+        list.innerHTML = '';
+        empty.style.display = modelsData.length === 0 ? 'block' : 'none';
+        if (modelsData.length > 0) {
+            list.innerHTML = '<div class="empty-state" style="padding:1.5rem;"><p style="font-size:0.85rem;">No matching models.</p></div>';
+        }
         return;
     }
     empty.style.display = 'none';
-    grid.innerHTML = profilesData.map(p => {
-        const status = modelStatus(p);
-        const active = getActiveInstance(p.id);
-        const rt = runtimesData.find(r => r.id === p.runtime_id);
-        const mo = modelsData.find(m => m.id === p.model_id);
+
+    list.innerHTML = filtered.map(function (m) {
+        const status = modelStatus(m);
+        const active = getActiveInstances(m.id);
         const inst = active[0];
-
-        let tags = [];
-        if (mo && mo.format) tags.push(mo.format.toUpperCase());
-        if (mo && mo.path) {
-            const base = mo.path.split(/[\\/]/).pop() || '';
-            const q = base.match(/Q\d+[_A-Z0-9]*/);
-            if (q) tags.push(q[0]);
-        }
-        if (mo && mo.mmproj) tags.push('Vision');
-
         const uptime = inst ? fmtUptime(inst.started_at) : '';
-
-        let instanceSection = '';
-        if (active.length > 1) {
-            instanceSection = `<div class="instance-expand">
-                <div style="font-size:0.8rem;color:var(--text-muted);margin-bottom:4px;">Экземпляры (${active.length})</div>` +
-                active.map(i => `<div class="instance-row">
-                    <span class="inst-info">PID: <span class="inst-pid">${i.pid || '—'}</span></span>
-                    <button class="btn btn-ghost btn-sm" onclick="viewInstanceLogs('${safeId(i.id)}')">Логи</button>
-                </div>`).join('') + '</div>';
-        }
 
         let actionBtns = '';
         if (status === 'running') {
-            actionBtns = `<button class="btn btn-warning btn-sm" onclick="restartModel('${safeId(p.id)}')">Перезапустить</button>
-                <button class="btn btn-danger btn-sm" onclick="stopModel('${safeId(p.id)}')">Остановить</button>`;
+            actionBtns = '<button class="btn btn-warning btn-sm" onclick="restartModel(\'' + safeId(m.id) + '\')">' + t('models.actions.restart') + '</button>' +
+                '<button class="btn btn-danger btn-sm" onclick="stopModel(\'' + safeId(m.id) + '\')">' + t('models.actions.stop') + '</button>';
         } else if (status === 'starting' || status === 'stopping') {
-            actionBtns = `<span class="hint-text">В процессе...</span>`;
+            actionBtns = '<span class="hint-text">' + status + '...</span>';
         } else {
-            actionBtns = `<button class="btn btn-success btn-sm" onclick="startModel('${safeId(p.id)}')">Запустить</button>`;
+            actionBtns = '<button class="btn btn-success btn-sm" onclick="startModel(\'' + safeId(m.id) + '\')">' + t('models.actions.start') + '</button>';
         }
 
-        return `<div class="model-card">
-            <div class="model-card-header">
-                <div>
-                    <div class="model-card-title">${esc(p.name)}</div>
-                    <div class="model-card-runtime">${esc(getRuntimeName(p.runtime_id))}</div>
-                </div>
-                <span class="status-badge ${status}"><span class="status-dot ${status === 'running' ? 'running' : ''}"></span>${status.toUpperCase()}</span>
-            </div>
-            <div class="model-card-info">
-                <div class="info-row"><span class="label">Адрес:</span><span>${esc(p.host || '127.0.0.1')}:${p.port || '—'}</span></div>
-                ${inst ? `<div class="info-row"><span class="label">PID:</span><span>${inst.pid || '—'}</span></div>` : ''}
-                ${uptime ? `<div class="info-row"><span class="label">Uptime:</span><span>${uptime}</span></div>` : ''}
-            </div>
-            ${tags.length ? `<div class="model-tags">${tags.map(t => `<span class="model-tag">${esc(t)}</span>`).join('')}</div>` : ''}
-            <div class="model-card-autostart"><span class="autostart-label">Автозапуск</span><label class="toggle-switch"><input type="checkbox" ${p.active ? 'checked' : ''} onchange="toggleAutostart('${safeId(p.id)}')"><span class="toggle-slider"></span></label></div>
-            ${instanceSection}
-            <div class="model-card-actions">
-                ${actionBtns}
-                <button class="btn btn-ghost btn-sm" onclick="viewInstanceLogs('${active.length ? safeId(active[0].id) : ''}')">Логи</button>
-                <button class="btn btn-ghost btn-sm" onclick="openDetails('${safeId(p.id)}')">Настройки</button>
-            </div>
-        </div>`;
+        return '<div class="model-row">' +
+            '<div class="model-row-main">' +
+                '<div class="model-row-name">' + esc(m.name) + '</div>' +
+                '<div class="model-row-sub">' + esc(getRuntimeName(m.runtime_id)) +
+                    (m.active ? ' <span class="autostart-indicator" title="' + t('models.autostart') + '">A</span>' : '') +
+                '</div>' +
+            '</div>' +
+            (inst && inst.pid ? '<span class="model-row-pid">PID ' + inst.pid + '</span>' : '') +
+            (uptime ? '<span class="model-row-uptime">' + uptime + '</span>' : '') +
+            '<span class="status-badge ' + status + '">' + t('models.status.' + status) + '</span>' +
+            '<div class="model-row-actions">' +
+                actionBtns +
+                '<button class="btn btn-ghost btn-sm" onclick="viewInstanceLogs(\'' + (active.length ? safeId(active[0].id) : '') + '\')">' + t('models.actions.logs') + '</button>' +
+                '<button class="btn btn-ghost btn-sm" onclick="openWizard(\'' + safeId(m.id) + '\')">' + t('models.actions.edit') + '</button>' +
+                '<button class="btn btn-danger btn-sm" onclick="deleteModel(\'' + safeId(m.id) + '\')">' + t('models.actions.delete') + '</button>' +
+            '</div>' +
+        '</div>';
     }).join('');
 }
 
-// ─── Actions ────────────────────────────────────────────────────────────────
+// ─── Model actions ──────────────────────────────────────────────────────────
 
-async function startModel(profileId) {
-    const btns = document.querySelectorAll('.model-card-actions .btn-success');
-    btns.forEach(b => b.disabled = true);
+async function startModel(modelId) {
     try {
-        await api('/profiles/' + profileId + '/start', { method: 'POST' });
-        showToast('Запуск...', 'success');
+        await api('/models/' + modelId + '/start', { method: 'POST' });
+        showToast(t('common.loading'), 'success');
         await reloadAllData(); renderAll();
-    } catch (e) { showToast('Ошибка: ' + e.message, 'error'); btns.forEach(b => b.disabled = false); }
+    } catch (e) { showToast(friendlyError(e), 'error'); }
 }
 
-async function stopModel(profileId) {
-    const btns = document.querySelectorAll('.model-card-actions .btn-danger');
-    btns.forEach(b => b.disabled = true);
+async function stopModel(modelId) {
     try {
-        await api('/profiles/' + profileId + '/stop', { method: 'POST' });
-        showToast('Остановка...', 'success');
+        await api('/models/' + modelId + '/stop', { method: 'POST' });
+        showToast(t('common.loading'), 'success');
         await reloadAllData(); renderAll();
-    } catch (e) { showToast('Ошибка: ' + e.message, 'error'); btns.forEach(b => b.disabled = false); }
+    } catch (e) { showToast(friendlyError(e), 'error'); }
 }
 
-async function restartModel(profileId) {
-    const btns = document.querySelectorAll('.model-card-actions .btn-warning');
-    btns.forEach(b => b.disabled = true);
+async function restartModel(modelId) {
     try {
-        await api('/profiles/' + profileId + '/restart', { method: 'POST' });
-        showToast('Перезапуск...', 'success');
+        await api('/models/' + modelId + '/restart', { method: 'POST' });
+        showToast(t('common.loading'), 'success');
         await reloadAllData(); renderAll();
-    } catch (e) { showToast('Ошибка: ' + e.message, 'error'); btns.forEach(b => b.disabled = false); }
+    } catch (e) { showToast(friendlyError(e), 'error'); }
+}
+
+function deleteModel(id) {
+    const m = modelsData.find(function (x) { return x.id === id; });
+    const name = m ? m.name : id;
+    const activeInsts = getActiveInstances(id);
+    let msg = 'Delete "' + name + '"?';
+    if (activeInsts.length > 0) msg += '\n' + activeInsts.length + ' active instance(s) will be stopped.';
+    showConfirm(msg, async function () {
+        try {
+            await api('/models/' + id, { method: 'DELETE' });
+            closeConfirm();
+            showToast(t('common.deleted'), 'success');
+            await reloadAllData(); renderAll();
+        } catch (err) {
+            if (err.status === 409 && err.details && err.details.length) {
+                closeConfirm();
+                showBlockedModal(t('blocked.title'), err.details);
+            } else {
+                showToast(friendlyError(err), 'error');
+            }
+        }
+    });
+}
+
+async function toggleAutostart(id) {
+    const m = modelsData.find(function (x) { return x.id === id; });
+    if (!m) return;
+    try {
+        if (m.active) {
+            await api('/models/' + id + '/deactivate', { method: 'POST' });
+        } else {
+            await api('/models/' + id + '/activate', { method: 'POST' });
+        }
+        await reloadAllData(); renderAll();
+    } catch (err) { showToast(friendlyError(err), 'error'); await reloadAllData(); renderAll(); }
 }
 
 // ─── Logs ───────────────────────────────────────────────────────────────────
@@ -312,19 +455,19 @@ async function restartModel(profileId) {
 function updateLogInstanceSelect() {
     const sel = document.getElementById('log-instance-select');
     const cur = sel.value;
-    const activeInsts = instancesData.filter(i => isActive(i.state));
+    const allInsts = instancesData.slice().sort(function (a, b) {
+        const ta = a.started_at ? new Date(a.started_at).getTime() : 0;
+        const tb = b.started_at ? new Date(b.started_at).getTime() : 0;
+        return tb - ta;
+    });
     const logsEmpty = document.getElementById('logs-empty');
-    if (logsEmpty) logsEmpty.style.display = activeInsts.length === 0 ? 'block' : 'none';
-    sel.innerHTML = '<option value="">Все экземпляры</option>' +
-        activeInsts.map(i =>
-            `<option value="${esc(i.id)}">${esc(getProfileName(i.profile_id))} | ${i.id.slice(0,12)}… | PID ${i.pid || '?'} | ${i.state}</option>`
-        ).join('');
+    if (logsEmpty) logsEmpty.style.display = allInsts.length === 0 ? 'block' : 'none';
+    sel.innerHTML = '<option value="">' + t('logs.select.all') + '</option>' +
+        allInsts.map(function (i) {
+            const label = getModelName(i.model_id) + ' | ' + i.id.slice(0, 12) + '… | ' + i.state;
+            return '<option value="' + esc(i.id) + '">' + esc(label) + '</option>';
+        }).join('');
     sel.value = cur;
-}
-
-function getProfileName(id) {
-    const p = profilesData.find(x => x.id === id);
-    return p ? p.name : id;
 }
 
 function switchLogInstance() {
@@ -335,11 +478,16 @@ function switchLogInstance() {
 
 function updateLogInstanceBar(instId) {
     const bar = document.getElementById('log-instance-bar');
+    if (!bar) return;
     if (!instId) { bar.style.display = 'none'; return; }
-    const inst = instancesData.find(i => i.id === instId);
+    const inst = instancesData.find(function (i) { return i.id === instId; });
     if (!inst) { bar.style.display = 'none'; return; }
-    const started = inst.started_at ? new Date(inst.started_at).toLocaleString() : '—';
-    bar.innerHTML = `<span class="log-bar-label">Профиль:</span> ${esc(getProfileName(inst.profile_id))} &nbsp;|&nbsp; <span class="log-bar-label">Instance:</span> <code>${esc(inst.id)}</code> &nbsp;|&nbsp; <span class="log-bar-label">PID:</span> ${inst.pid || '—'} &nbsp;|&nbsp; <span class="log-bar-label">State:</span> <span class="status-badge ${inst.state}">${inst.state}</span> &nbsp;|&nbsp; <span class="log-bar-label">Старт:</span> ${started}`;
+    const started = fmtTime(inst.started_at);
+    bar.innerHTML = '<span class="log-bar-label">' + t('logs.bar.model') + ':</span> ' + esc(getModelName(inst.model_id)) +
+        ' &nbsp;|&nbsp; <span class="log-bar-label">' + t('logs.bar.instance') + ':</span> <code>' + esc(inst.id.slice(0, 16)) + '</code>' +
+        ' &nbsp;|&nbsp; <span class="log-bar-label">' + t('logs.bar.pid') + ':</span> ' + (inst.pid || '—') +
+        ' &nbsp;|&nbsp; <span class="log-bar-label">' + t('logs.bar.state') + ':</span> <span class="status-badge ' + esc(inst.state) + '">' + esc(inst.state) + '</span>' +
+        ' &nbsp;|&nbsp; <span class="log-bar-label">' + t('logs.bar.started') + ':</span> ' + started;
     bar.style.display = 'flex';
 }
 
@@ -356,7 +504,7 @@ function connectLogStream(instanceId) {
             appendLogLine(d);
         } catch {}
     };
-    logEs.onerror = function () { /* auto-reconnect */ };
+    logEs.onerror = function () {};
 }
 
 function appendLogLine(d) {
@@ -364,13 +512,13 @@ function appendLogLine(d) {
     const search = document.getElementById('log-search').value.toLowerCase();
     const filter = document.getElementById('log-stream-filter').value;
     if (filter && stream !== filter) return;
-    if (search && !d.message.toLowerCase().includes(search)) return;
+    if (search && !(d.message || '').toLowerCase().indexOf(search) !== -1) return;
 
     const view = document.getElementById('log-view');
     const div = document.createElement('div');
     div.className = 'log-line ' + stream;
-    const t = d.time ? new Date(d.time).toLocaleTimeString() : '';
-    div.innerHTML = `<span class="log-time">${t}</span><span class="log-source">[${stream}]</span>${esc(d.message)}`;
+    const ts = d.time ? new Date(d.time).toLocaleTimeString() : '';
+    div.innerHTML = '<span class="log-time">' + ts + '</span><span class="log-source">[' + esc(stream) + ']</span>' + esc(d.message);
     view.appendChild(div);
 
     while (view.children.length > 2000) view.removeChild(view.firstChild);
@@ -379,11 +527,11 @@ function appendLogLine(d) {
     }
 }
 
-function applyLogSearch() { /* search applied on new lines */ }
+function applyLogSearch() {}
 
 function toggleLogPause() {
     logPaused = !logPaused;
-    document.getElementById('log-pause-btn').textContent = logPaused ? 'Продолжить' : 'Пауза';
+    document.getElementById('log-pause-btn').textContent = logPaused ? t('logs.resume') : t('logs.pause');
 }
 
 function clearLogView() {
@@ -406,93 +554,70 @@ function viewInstanceLogs(instanceId) {
 
 function navigate(view) {
     currentView = view;
-    document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+    document.querySelectorAll('.view').forEach(function (v) { v.classList.remove('active'); });
     const target = document.getElementById('view-' + view);
     if (target) target.classList.add('active');
-    document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
-    const navBtn = document.querySelector(`.nav-item[data-view="${view}"]`);
+    document.querySelectorAll('.nav-item').forEach(function (n) { n.classList.remove('active'); });
+    const navBtn = document.querySelector('.nav-item[data-view="' + view + '"]');
     if (navBtn) navBtn.classList.add('active');
 
     if (view === 'logs' && !logEs) connectLogStream('');
     if (view === 'adv-settings') loadSettings();
-    if (view !== 'logs' && logEs && currentView !== 'logs') { /* keep SSE alive */ }
 }
 
-// ─── Details Modal ──────────────────────────────────────────────────────────
+// ─── Wizard (create / edit model) ───────────────────────────────────────────
 
-function openDetails(profileId) {
-    const p = profilesData.find(x => x.id === profileId);
-    if (!p) return;
-    const rt = runtimesData.find(r => r.id === p.runtime_id);
-    const mo = modelsData.find(m => m.id === p.model_id);
-    const active = getActiveInstance(profileId);
-
-    document.getElementById('details-title').textContent = p.name;
-
-    // Overview tab
-    document.getElementById('detail-overview').innerHTML = `
-        <div class="detail-row"><span class="dl">Runtime</span><span class="dv">${esc(rt ? rt.name : '—')}</span></div>
-        <div class="detail-row"><span class="dl">Executable</span><span class="dv">${esc(rt ? rt.executable : '—')}</span></div>
-        <div class="detail-row"><span class="dl">Working Dir</span><span class="dv">${esc(rt ? (rt.working_directory || '—') : '—')}</span></div>
-        <div class="detail-row"><span class="dl">Model</span><span class="dv">${esc(mo ? mo.name : '—')}</span></div>
-        <div class="detail-row"><span class="dl">GGUF</span><span class="dv">${esc(mo ? (mo.path || '—') : '—')}</span></div>
-        <div class="detail-row"><span class="dl">MMProj</span><span class="dv">${esc(mo ? (mo.mmproj || '—') : '—')}</span></div>
-        <div class="detail-row"><span class="dl">Host:Port</span><span class="dv">${esc(p.host || '127.0.0.1')}:${p.port || '—'}</span></div>
-        <div class="detail-row"><span class="dl">Автозапуск</span><span class="dv">${p.active ? 'ON' : 'OFF'}${p.autostart_delay ? ' (' + p.autostart_delay + 's)' : ''}</span></div>`;
-
-    // Launch tab
-    let launchHtml = '<div class="detail-row"><span class="dl">Runtime defaults</span><span class="dv">' + esc(rt ? (rt.default_args || []).join(' ') : '—') + '</span></div>';
-    launchHtml += '<div class="detail-row"><span class="dl">Model args</span><span class="dv">' + esc(mo ? (mo.arguments || []).join(' ') : '—') + '</span></div>';
-    launchHtml += '<div class="detail-row"><span class="dl">Profile args</span><span class="dv">' + esc((p.args || []).join(' ') || '—') + '</span></div>';
-    launchHtml += '<div class="detail-row"><span class="dl">Host/Port</span><span class="dv">--host ' + esc(p.host || '127.0.0.1') + ' --port ' + (p.port || '') + '</span></div>';
-    if (p.environment_keys && p.environment_keys.length) {
-        launchHtml += '<div class="detail-row"><span class="dl">Env keys</span><span class="dv">' + p.environment_keys.map(esc).join(', ') + '</span></div>';
-    }
-    document.getElementById('detail-launch').innerHTML = launchHtml;
-
-    // Instances tab
-    const allInst = instancesData.filter(i => i.profile_id === profileId);
-    document.getElementById('detail-instances').innerHTML = allInst.length ?
-        `<table class="data-table"><thead><tr><th>ID</th><th>State</th><th>PID</th><th>Started</th><th></th></tr></thead><tbody>` +
-        allInst.map(i => `<tr><td style="font-family:var(--font-mono);font-size:0.78rem;">${esc(i.id.slice(0, 12))}</td>
-            <td><span class="status-badge ${i.state}">${i.state}</span></td>
-            <td>${i.pid || '—'}</td><td>${fmtTime(i.started_at)}</td>
-            <td><button class="btn btn-ghost btn-sm" onclick="closeDetails();viewInstanceLogs('${safeId(i.id)}')">Логи</button></td></tr>`).join('') +
-        '</tbody></table>' :
-        '<p class="hint-text">Нет экземпляров.</p>';
-
-    document.getElementById('details-modal').style.display = 'flex';
-}
-
-function closeDetails() { document.getElementById('details-modal').style.display = 'none'; }
-
-function switchDetailTab(tab) {
-    document.querySelectorAll('.details-tabs .tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tab));
-    document.querySelectorAll('.tab-panel').forEach(p => p.classList.toggle('active', p.id === 'detail-' + tab));
-}
-
-// ─── Wizard ─────────────────────────────────────────────────────────────────
-
-let wizStep = 1;
-
-function openWizard() {
+function openWizard(modelId) {
     wizStep = 1;
-    document.getElementById('wizard-form').reset();
+    wizEditId = modelId || null;
+    const form = document.getElementById('wizard-form');
+    form.reset();
     document.getElementById('wizard-error').style.display = 'none';
     document.getElementById('wiz-env-container').innerHTML = '';
     document.querySelector('input[name=wiz-rt-mode][value=existing]').checked = true;
     onWizRtModeChange();
-    loadWizardRuntimeSelect();
+    loadWizardRuntimeCards();
+
+    const titleEl = document.getElementById('wizard-title');
+    titleEl.textContent = wizEditId ? t('wizard.title.edit') : t('wizard.title.add');
+
+    if (wizEditId) {
+        const m = modelsData.find(function (x) { return x.id === wizEditId; });
+        if (m) {
+            document.getElementById('wiz-name').value = m.name || '';
+            document.getElementById('wiz-args').value = (m.args || []).join('\n');
+            document.getElementById('wiz-autostart').checked = !!m.active;
+            document.getElementById('wiz-delay-group').style.display = m.active ? '' : 'none';
+            document.getElementById('wiz-autostart-delay').value = m.autostart_delay || 0;
+            if (m.runtime_id) {
+                const card = document.querySelector('#wiz-rt-cards .rt-card[data-id="' + m.runtime_id + '"]');
+                if (card) card.classList.add('selected');
+            }
+        }
+    }
     updateWizardStep();
     document.getElementById('wizard-modal').style.display = 'flex';
 }
 
 function closeWizard() { document.getElementById('wizard-modal').style.display = 'none'; }
 
-function loadWizardRuntimeSelect() {
-    const sel = document.getElementById('wiz-runtime-existing');
-    sel.innerHTML = '<option value="">— выбрать —</option>' +
-        runtimesData.map(r => `<option value="${esc(r.id)}">${esc(r.name)} (${esc(r.executable)})</option>`).join('');
+function loadWizardRuntimeCards() {
+    const container = document.getElementById('wiz-rt-cards');
+    if (runtimesData.length === 0) {
+        container.innerHTML = '<div class="hint-text">No runtimes. Create one below.</div>';
+        return;
+    }
+    container.innerHTML = runtimesData.map(function (r) {
+        return '<div class="rt-card" data-id="' + esc(r.id) + '" onclick="selectRtCard(this)">' +
+            '<div class="rt-card-name">' + esc(r.name) + '</div>' +
+            '<div class="rt-card-exe">' + esc(r.executable) + (r.working_directory ? ' (' + esc(r.working_directory) + ')' : '') + '</div>' +
+        '</div>';
+    }).join('');
+}
+
+function selectRtCard(el) {
+    document.querySelectorAll('#wiz-rt-cards .rt-card').forEach(function (c) { c.classList.remove('selected'); });
+    el.classList.add('selected');
 }
 
 function onWizRtModeChange() {
@@ -501,46 +626,63 @@ function onWizRtModeChange() {
     document.getElementById('wiz-rt-new-section').style.display = mode === 'new' ? '' : 'none';
 }
 
+function wizGoto(step) {
+    wizStep = step;
+    updateWizardStep();
+}
+
 function wizPrev() { if (wizStep > 1) { wizStep--; updateWizardStep(); } }
 
 function updateWizardStep() {
-    document.querySelectorAll('.wizard-step').forEach(s => {
+    document.querySelectorAll('#wizard-steps .wizard-step').forEach(function (s) {
         const n = parseInt(s.dataset.step);
         s.classList.toggle('active', n === wizStep);
         s.classList.toggle('done', n < wizStep);
     });
-    document.querySelectorAll('.wizard-panel').forEach(p => p.classList.toggle('active', parseInt(p.dataset.panel) === wizStep));
+    document.querySelectorAll('#wizard-modal .wizard-panel').forEach(function (p) {
+        p.classList.toggle('active', parseInt(p.dataset.panel) === wizStep);
+    });
     document.getElementById('wiz-prev').style.display = wizStep > 1 ? '' : 'none';
-    document.getElementById('wiz-next').textContent = wizStep === 4 ? 'Создать' : 'Далее';
+    const nextBtn = document.getElementById('wiz-next');
+    nextBtn.textContent = wizStep === 3 ? (wizEditId ? t('wizard.btn.save') : t('wizard.btn.create')) : t('wizard.btn.next');
 }
 
-document.getElementById('wizard-form').addEventListener('submit', async function (e) {
+async function handleWizardSubmit(e) {
     e.preventDefault();
-    if (wizStep < 4) { wizStep++; updateWizardStep(); return; }
+    if (wizStep < 3) {
+        if (wizStep === 1 && !document.getElementById('wiz-name').value.trim()) {
+            wizError(t('wizard.error.name'));
+            return;
+        }
+        wizStep++;
+        updateWizardStep();
+        return;
+    }
 
     const name = document.getElementById('wiz-name').value.trim();
-    if (!name) { wizError('Укажите название'); return; }
+    if (!name) { wizError(t('wizard.error.name')); return; }
 
     const rtMode = document.querySelector('input[name=wiz-rt-mode]:checked').value;
-    let runtimeId = rtMode === 'existing' ? document.getElementById('wiz-runtime-existing').value : '';
+    let runtimeId = '';
+    if (rtMode === 'existing') {
+        const sel = document.querySelector('#wiz-rt-cards .rt-card.selected');
+        if (sel) runtimeId = sel.dataset.id;
+        if (!runtimeId) {
+            if (wizStep === 2) { wizError(t('wizard.error.runtime')); return; }
+        }
+    }
 
     const submitBtn = document.getElementById('wiz-next');
     if (submitBtn.disabled) return;
     submitBtn.disabled = true;
-    submitBtn.textContent = 'Создание...';
+    const oldLabel = submitBtn.textContent;
+    submitBtn.textContent = t('common.loading');
 
     try {
-        // Create runtime if needed
-        if (rtMode === 'existing' && !runtimeId) {
-            wizError('Выберите Runtime');
-            submitBtn.disabled = false;
-            submitBtn.textContent = 'Создать';
-            return;
-        }
-        if (rtMode === 'new' || !runtimeId) {
+        if (rtMode === 'new') {
             const rtName = document.getElementById('wiz-rt-name').value.trim();
             const rtExe = document.getElementById('wiz-rt-executable').value.trim();
-            if (!rtName || !rtExe) { wizError('Заполните Runtime поля'); return; }
+            if (!rtName || !rtExe) { wizError('Fill runtime fields'); return; }
             const rtBody = { name: rtName, executable: rtExe };
             const rtWd = document.getElementById('wiz-rt-workdir').value.trim();
             if (rtWd) rtBody.working_directory = rtWd;
@@ -548,48 +690,39 @@ document.getElementById('wizard-form').addEventListener('submit', async function
             runtimeId = rt.id;
         }
 
-        // Create model
-        const modelPath = document.getElementById('wiz-model-path').value.trim();
-        const modelMmproj = document.getElementById('wiz-model-mmproj').value.trim();
-        const modelArgsRaw = document.getElementById('wiz-model-args').value.trim();
-        const modelArgs = modelArgsRaw ? modelArgsRaw.split('\n').map(s => s.trim()).filter(Boolean) : [];
-        const modelBody = { name: name, runtime_id: runtimeId };
-        if (modelPath) modelBody.path = modelPath;
-        if (modelMmproj) modelBody.mmproj = modelMmproj;
-        if (modelArgs.length) modelBody.arguments = modelArgs;
-        if (!modelPath && !modelArgs.length) { wizError('Укажите GGUF путь или аргументы модели'); return; }
-        const model = await api('/models', { method: 'POST', body: JSON.stringify(modelBody) });
+        if (!runtimeId) { wizError(t('wizard.error.runtime')); return; }
 
-        // Create profile
-        const host = document.getElementById('wiz-host').value.trim() || '127.0.0.1';
-        const port = parseInt(document.getElementById('wiz-port').value) || 8085;
-        const profArgsRaw = document.getElementById('wiz-profile-args').value.trim();
-        const profArgs = profArgsRaw ? profArgsRaw.split(/\s+/).filter(Boolean) : [];
-        const profBody = {
-            name: name, runtime_id: runtimeId, model_id: model.id,
-            host: host, port: port, active: document.getElementById('wiz-autostart').checked
+        const body = {
+            name: name,
+            runtime_id: runtimeId,
+            args: parseArgs(document.getElementById('wiz-args').value),
+            active: document.getElementById('wiz-autostart').checked
         };
-        if (profArgs.length) profBody.args = profArgs;
-        if (document.getElementById('wiz-autostart').checked) {
+        if (body.active) {
             const delay = parseInt(document.getElementById('wiz-autostart-delay').value) || 0;
-            if (delay > 0) profBody.autostart_delay = delay;
+            if (delay > 0) body.autostart_delay = delay;
         }
-        // Env
-        const env = collectWizEnv();
-        if (Object.keys(env).length) profBody.environment = env;
+        const env = collectEnvRows('wiz-env-container');
+        if (Object.keys(env).length) body.environment = env;
 
-        await api('/profiles', { method: 'POST', body: JSON.stringify(profBody) });
-        showToast('Модель "' + name + '" создана', 'success');
-        submitBtn.disabled = false;
-        submitBtn.textContent = 'Создать';
+        if (wizEditId) {
+            await api('/models/' + wizEditId, { method: 'PUT', body: JSON.stringify(body) });
+            showToast('"' + name + '" ' + t('common.saved'), 'success');
+        } else {
+            await api('/models', { method: 'POST', body: JSON.stringify(body) });
+            showToast('"' + name + '" created', 'success');
+        }
         closeWizard();
         await reloadAllData(); renderAll();
     } catch (e2) {
         submitBtn.disabled = false;
-        submitBtn.textContent = 'Создать';
-        wizError(e2.message);
+        submitBtn.textContent = oldLabel;
+        wizError(friendlyError(e2));
+        return;
     }
-});
+    submitBtn.disabled = false;
+    submitBtn.textContent = oldLabel;
+}
 
 function wizError(msg) {
     const el = document.getElementById('wizard-error');
@@ -597,23 +730,27 @@ function wizError(msg) {
     el.style.display = 'block';
 }
 
-function addWizEnvRow() {
+// ─── Environment rows ───────────────────────────────────────────────────────
+
+function addEnvRow(containerId) {
     const div = document.createElement('div');
     div.className = 'env-row';
     div.style.display = 'flex';
     div.style.gap = '6px';
     div.style.marginBottom = '6px';
-    div.innerHTML = `<input type="text" placeholder="KEY" style="flex:1;padding:6px;border:1px solid var(--border);border-radius:4px;background:var(--bg-input);color:var(--text-primary);">
-        <input type="text" placeholder="value" style="flex:2;padding:6px;border:1px solid var(--border);border-radius:4px;background:var(--bg-input);color:var(--text-primary);">
-        <button type="button" class="btn btn-danger btn-sm" onclick="this.parentElement.remove()">&times;</button>`;
-    document.getElementById('wiz-env-container').appendChild(div);
+    div.innerHTML = '<input type="text" placeholder="KEY" style="flex:1;padding:6px;border:1px solid var(--border);border-radius:4px;background:var(--bg-input);color:var(--text-primary);">' +
+        '<input type="text" placeholder="value" style="flex:2;padding:6px;border:1px solid var(--border);border-radius:4px;background:var(--bg-input);color:var(--text-primary);">' +
+        '<button type="button" class="btn btn-danger btn-sm" onclick="this.parentElement.remove()">&times;</button>';
+    document.getElementById(containerId).appendChild(div);
 }
 
-function collectWizEnv() {
+function addWizEnvRow() { addEnvRow('wiz-env-container'); }
+
+function collectEnvRows(containerId) {
     const env = {};
-    document.querySelectorAll('#wiz-env-container .env-row').forEach(row => {
+    document.querySelectorAll('#' + containerId + ' .env-row').forEach(function (row) {
         const inputs = row.querySelectorAll('input');
-        if (inputs[0].value.trim()) env[inputs[0].value.trim()] = inputs[1].value;
+        if (inputs[0] && inputs[0].value.trim()) env[inputs[0].value.trim()] = inputs[1] ? inputs[1].value : '';
     });
     return env;
 }
@@ -628,33 +765,38 @@ function renderAdvRuntimes() {
         return;
     }
     if (empty) empty.style.display = 'none';
-    document.getElementById('adv-runtimes-body').innerHTML = runtimesData.map(r =>
-        `<tr><td>${esc(r.name)}</td><td>${esc(r.executable)}</td><td>${esc(r.working_directory || '—')}</td>
-        <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;"><code>${esc((r.default_args || []).join(' '))}</code></td>
-        <td class="actions-cell"><button class="btn btn-ghost btn-sm" onclick="editRuntime('${safeId(r.id)}')">Изменить</button>
-        <button class="btn btn-danger btn-sm" onclick="deleteRuntime('${safeId(r.id)}')">Удалить</button></td></tr>`
-    ).join('');
+    document.getElementById('adv-runtimes-body').innerHTML = runtimesData.map(function (r) {
+        return '<tr><td>' + esc(r.name) + '</td><td>' + esc(r.executable) + '</td><td>' + esc(r.working_directory || '—') + '</td>' +
+            '<td class="actions-cell"><button class="btn btn-ghost btn-sm" onclick="editRuntime(\'' + safeId(r.id) + '\')">' + t('runtimes.actions.edit') + '</button> ' +
+            '<button class="btn btn-danger btn-sm" onclick="deleteRuntime(\'' + safeId(r.id) + '\')">' + t('runtimes.actions.delete') + '</button></td></tr>';
+    }).join('');
 }
 
-function showCreateRuntimeModal() { document.getElementById('create-runtime-modal').style.display = 'flex'; }
+function showCreateRuntimeModal() {
+    const f = document.querySelector('#create-runtime-modal form');
+    f.reset();
+    document.getElementById('rt-create-env-container').innerHTML = '';
+    document.getElementById('create-runtime-modal').style.display = 'flex';
+}
 
 async function handleCreateRuntime(e) {
     e.preventDefault();
     const f = e.target;
     const body = { name: f.name.value, executable: f.executable.value };
     if (f.working_directory.value) body.working_directory = f.working_directory.value;
-    const args = f.default_args.value.trim();
-    if (args) body.default_args = args.split(/\s+/);
+    const env = collectEnvRows('rt-create-env-container');
+    if (Object.keys(env).length) body.environment = env;
     try {
         await api('/runtimes', { method: 'POST', body: JSON.stringify(body) });
-        closeModal('create-runtime-modal'); showToast('Runtime создан', 'success');
+        closeModal('create-runtime-modal');
+        showToast(t('common.saved'), 'success');
         await reloadAllData(); renderAll();
-    } catch (err) { showToast(err.message, 'error'); }
+    } catch (err) { showToast(friendlyError(err), 'error'); }
     return false;
 }
 
 function editRuntime(id) {
-    const r = runtimesData.find(x => x.id === id);
+    const r = runtimesData.find(function (x) { return x.id === id; });
     if (!r) return;
     const modal = document.getElementById('edit-runtime-modal');
     const f = modal.querySelector('form');
@@ -662,7 +804,34 @@ function editRuntime(id) {
     f.querySelector('[name=name]').value = r.name;
     f.querySelector('[name=executable]').value = r.executable;
     f.querySelector('[name=working_directory]').value = r.working_directory || '';
-    f.querySelector('[name=default_args]').value = (r.default_args || []).join(' ');
+    const envC = document.getElementById('rt-edit-env-container');
+    envC.innerHTML = '';
+    if (r.environment_keys && r.environment_keys.length) {
+        r.environment_keys.forEach(function (k) {
+            const row = document.createElement('div');
+            row.className = 'env-row';
+            row.style.display = 'flex';
+            row.style.gap = '6px';
+            row.style.marginBottom = '6px';
+            const i1 = document.createElement('input');
+            i1.type = 'text';
+            i1.value = k;
+            i1.style.cssText = 'flex:1;padding:6px;border:1px solid var(--border);border-radius:4px;background:var(--bg-input);color:var(--text-primary);';
+            const i2 = document.createElement('input');
+            i2.type = 'text';
+            i2.placeholder = 'value (write-only)';
+            i2.style.cssText = 'flex:2;padding:6px;border:1px solid var(--border);border-radius:4px;background:var(--bg-input);color:var(--text-primary);';
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'btn btn-danger btn-sm';
+            btn.onclick = function () { row.remove(); };
+            btn.innerHTML = '&times;';
+            row.appendChild(i1);
+            row.appendChild(i2);
+            row.appendChild(btn);
+            envC.appendChild(row);
+        });
+    }
     modal.style.display = 'flex';
 }
 
@@ -671,263 +840,110 @@ async function handleEditRuntime(e) {
     const f = e.target;
     const body = { name: f.name.value, executable: f.executable.value };
     if (f.working_directory.value) body.working_directory = f.working_directory.value;
-    const args = f.default_args.value.trim();
-    body.default_args = args ? args.split(/\s+/) : [];
+    const env = collectEnvRows('rt-edit-env-container');
+    if (Object.keys(env).length) body.environment = env;
     try {
         await api('/runtimes/' + f.querySelector('[name=id]').value, { method: 'PUT', body: JSON.stringify(body) });
-        closeModal('edit-runtime-modal'); showToast('Сохранено', 'success');
+        closeModal('edit-runtime-modal');
+        showToast(t('common.saved'), 'success');
         await reloadAllData(); renderAll();
-    } catch (err) { showToast(err.message, 'error'); }
+    } catch (err) { showToast(friendlyError(err), 'error'); }
     return false;
 }
+
+// ─── Runtime delete (replace / cascade) ─────────────────────────────────────
+
+let rtDeleteId = null;
 
 function deleteRuntime(id) {
-    const rt = runtimesData.find(x => x.id === id);
-    const name = rt ? rt.name : id;
-    const depModels = modelsData.filter(m => m.runtime_id === id);
-    const depProfiles = profilesData.filter(p => p.runtime_id === id);
-    const dependents = [];
-    depModels.forEach(m => dependents.push('Модель: ' + m.name));
-    depProfiles.forEach(p => dependents.push('Профиль: ' + p.name));
-    if (dependents.length > 0) {
-        showBlockedModal('Runtime', name, dependents);
-        return;
+    const rt = runtimesData.find(function (x) { return x.id === id; });
+    if (!rt) return;
+    const depModels = modelsData.filter(function (m) { return m.runtime_id === id; });
+    if (depModels.length > 0) {
+        rtDeleteId = id;
+        const content = document.getElementById('rt-delete-content');
+        content.innerHTML = '<p><strong>' + esc(rt.name) + '</strong></p>' +
+            '<p style="margin-top:0.5rem;">' + t('runtimes.delete.dependents', { count: depModels.length }) + '</p>' +
+            '<ul style="margin:0.5rem 0 0.5rem 1.2rem;font-size:0.88rem;color:var(--text-secondary);">' +
+            depModels.map(function (m) { return '<li>' + esc(m.name) + '</li>'; }).join('') + '</ul>';
+        const otherRt = runtimesData.filter(function (r) { return r.id !== id; });
+        document.getElementById('rt-delete-replace-btn').style.display = otherRt.length > 0 ? '' : 'none';
+        document.getElementById('rt-delete-modal').style.display = 'flex';
+    } else {
+        showConfirm(t('runtimes.delete.confirm', { name: rt.name }), async function () {
+            try {
+                await api('/runtimes/' + id, { method: 'DELETE' });
+                closeConfirm();
+                showToast(t('common.deleted'), 'success');
+                await reloadAllData(); renderAll();
+            } catch (err) {
+                showToast(friendlyError(err), 'error');
+            }
+        });
     }
-    showConfirm(`Удалить runtime "${name}"?`, async function () {
-        try {
-            await api('/runtimes/' + id, { method: 'DELETE' });
-            closeConfirm();
-            await reloadAllData(); renderAll();
-        } catch (err) {
-            showToast(friendlyError(err), 'error');
-        }
-    });
 }
 
-// ─── Advanced: Models ───────────────────────────────────────────────────────
+function closeRTDelete() {
+    document.getElementById('rt-delete-modal').style.display = 'none';
+    rtDeleteId = null;
+}
 
-function renderAdvModels() {
-    const empty = document.getElementById('models-adv-empty');
-    if (modelsData.length === 0) {
-        document.getElementById('adv-models-body').innerHTML = '';
-        if (empty) empty.style.display = 'block';
-        return;
-    }
-    if (empty) empty.style.display = 'none';
-    document.getElementById('adv-models-body').innerHTML = modelsData.map(m => {
-        const fmt = m.format || deriveModelFormat(m);
-        return `<tr><td>${esc(m.name)}</td><td>${esc(getRuntimeName(m.runtime_id))}</td><td>${esc(m.path || '—')}</td>
-        <td>${esc(m.mmproj || '—')}</td><td>${esc(fmt)}</td>
-        <td class="actions-cell"><button class="btn btn-ghost btn-sm" onclick="editModel('${safeId(m.id)}')">Изменить</button>
-        <button class="btn btn-danger btn-sm" onclick="deleteModel('${safeId(m.id)}')">Удалить</button></td></tr>`;
+function openRTReplace() {
+    closeRTDelete();
+    const depCount = modelsData.filter(function (m) { return m.runtime_id === rtDeleteId; }).length;
+    document.getElementById('rt-replace-msg').textContent = t('runtimes.replace.select', { count: depCount });
+    const sel = document.getElementById('rt-replace-select');
+    const otherRt = runtimesData.filter(function (r) { return r.id !== rtDeleteId; });
+    sel.innerHTML = otherRt.map(function (r) {
+        return '<option value="' + esc(r.id) + '">' + esc(r.name) + ' (' + esc(r.executable) + ')</option>';
     }).join('');
+    document.getElementById('rt-replace-modal').style.display = 'flex';
 }
 
-function deriveModelFormat(m) {
-    const hasPath = !!(m.path && m.path.toLowerCase().endsWith('.gguf'));
-    const hasArgs = (m.arguments && m.arguments.length > 0);
-    if (hasPath && hasArgs) return 'GGUF+Args';
-    if (hasPath) return 'GGUF';
-    if (hasArgs) return 'Args';
-    return '—';
-}
+function closeRTReplace() { document.getElementById('rt-replace-modal').style.display = 'none'; }
 
-function showCreateModelModal() {
-    const sel = document.querySelector('#create-model-modal select[name=runtime_id]');
-    sel.innerHTML = '<option value="">—</option>' + runtimesData.map(r => `<option value="${esc(r.id)}">${esc(r.name)}</option>`).join('');
-    document.getElementById('create-model-modal').style.display = 'flex';
-}
-
-async function handleCreateModel(e) {
-    e.preventDefault();
-    const f = e.target;
-    const kind = f.kind.value;
-    const body = { name: f.name.value, runtime_id: f.runtime_id.value };
-    if (kind === 'path') body.path = f.path.value;
-    else body.arguments = f.arguments.value.trim().split(/\s+/).filter(Boolean);
+async function confirmRTReplace() {
+    const newId = document.getElementById('rt-replace-select').value;
+    if (!newId || !rtDeleteId) return;
+    const btn = document.getElementById('rt-replace-btn');
+    btn.disabled = true;
+    btn.textContent = t('confirm.executing');
     try {
-        await api('/models', { method: 'POST', body: JSON.stringify(body) });
-        closeModal('create-model-modal'); showToast('Модель создана', 'success');
+        await api('/runtimes/' + rtDeleteId + '/replace', { method: 'POST', body: JSON.stringify({ new_runtime_id: newId }) });
+        closeRTReplace();
+        showToast(t('common.saved'), 'success');
         await reloadAllData(); renderAll();
-    } catch (err) { showToast(err.message, 'error'); }
-    return false;
+    } catch (err) {
+        showToast(friendlyError(err), 'error');
+    }
+    btn.disabled = false;
+    btn.textContent = t('runtimes.replace.confirm');
 }
 
-function editModel(id) {
-    const m = modelsData.find(x => x.id === id);
-    if (!m) return;
-    const modal = document.getElementById('edit-model-modal');
-    const f = modal.querySelector('form');
-    const rtSel = f.querySelector('[name=runtime_id]');
-    rtSel.innerHTML = runtimesData.map(r => `<option value="${esc(r.id)}" ${r.id === m.runtime_id ? 'selected' : ''}>${esc(r.name)}</option>`).join('');
-    f.querySelector('[name=id]').value = m.id;
-    f.querySelector('[name=name]').value = m.name;
-    const hasPath = !!m.path;
-    f.querySelector('[name=kind]').value = hasPath ? 'path' : 'arguments';
-    toggleModelKind(f.querySelector('[name=kind]'));
-    f.querySelector('[name=path]').value = m.path || '';
-    f.querySelector('[name=arguments]').value = (m.arguments || []).join(' ');
-    modal.style.display = 'flex';
+function openRTCascade() {
+    closeRTDelete();
+    const depCount = modelsData.filter(function (m) { return m.runtime_id === rtDeleteId; }).length;
+    document.getElementById('rt-cascade-msg').textContent = t('runtimes.cascade.confirm', { count: depCount });
+    document.getElementById('rt-cascade-modal').style.display = 'flex';
 }
 
-function toggleModelKind(sel) {
-    const form = sel.closest('form');
-    form.querySelector('[data-kind=path]').style.display = sel.value === 'path' ? '' : 'none';
-    form.querySelector('[data-kind=arguments]').style.display = sel.value === 'arguments' ? '' : 'none';
-}
+function closeRTCascade() { document.getElementById('rt-cascade-modal').style.display = 'none'; }
 
-async function handleEditModel(e) {
-    e.preventDefault();
-    const f = e.target;
-    const id = f.querySelector('[name=id]').value;
-    const body = { name: f.name.value, runtime_id: f.runtime_id.value };
-    if (f.kind.value === 'path') body.path = f.path.value;
-    else body.arguments = f.arguments.value.trim().split(/\s+/).filter(Boolean);
+async function confirmRTCascade() {
+    if (!rtDeleteId) return;
+    const btn = document.getElementById('rt-cascade-btn');
+    btn.disabled = true;
+    btn.textContent = t('confirm.executing');
     try {
-        await api('/models/' + id, { method: 'PUT', body: JSON.stringify(body) });
-        closeModal('edit-model-modal'); showToast('Сохранено', 'success');
+        const res = await api('/runtimes/' + rtDeleteId + '/cascade-delete', { method: 'POST' });
+        closeRTCascade();
+        showToast(t('common.deleted') + (res.models_deleted ? ' (' + res.models_deleted + ' models)' : ''), 'success');
         await reloadAllData(); renderAll();
-    } catch (err) { showToast(err.message, 'error'); }
-    return false;
-}
-
-function deleteModel(id) {
-    const m = modelsData.find(x => x.id === id);
-    const name = m ? m.name : id;
-    const depProfiles = profilesData.filter(p => p.model_id === id);
-    if (depProfiles.length > 0) {
-        showBlockedModal('Модель', name, depProfiles.map(p => 'Профиль: ' + p.name));
-        return;
+    } catch (err) {
+        showToast(friendlyError(err), 'error');
     }
-    showConfirm(`Удалить модель "${name}"?`, async function () {
-        try {
-            await api('/models/' + id, { method: 'DELETE' });
-            closeConfirm();
-            await reloadAllData(); renderAll();
-        } catch (err) {
-            showToast(friendlyError(err), 'error');
-        }
-    });
-}
-
-// ─── Advanced: Profiles ─────────────────────────────────────────────────────
-
-function renderAdvProfiles() {
-    const empty = document.getElementById('profiles-adv-empty');
-    if (profilesData.length === 0) {
-        document.getElementById('adv-profiles-body').innerHTML = '';
-        if (empty) empty.style.display = 'block';
-        return;
-    }
-    if (empty) empty.style.display = 'none';
-    document.getElementById('adv-profiles-body').innerHTML = profilesData.map(p =>
-        `<tr><td>${esc(p.name)}</td><td>${esc(getRuntimeName(p.runtime_id))}</td>
-        <td>${esc(getModelName(p.model_id))}</td><td>${esc(p.host)}:${p.port}</td>
-        <td style="max-width:150px;overflow:hidden;text-overflow:ellipsis;"><code>${esc((p.args || []).join(' '))}</code></td>
-        <td class="actions-cell"><button class="btn btn-ghost btn-sm" onclick="editProfile('${safeId(p.id)}')">Изменить</button>
-        <button class="btn btn-danger btn-sm" onclick="deleteProfile('${safeId(p.id)}')">Удалить</button></td></tr>`
-    ).join('');
-}
-
-function showCreateProfileModal() {
-    const rtSel = document.querySelector('#create-profile-modal select[name=runtime_id]');
-    rtSel.innerHTML = '<option value="">—</option>' + runtimesData.map(r => `<option value="${esc(r.id)}">${esc(r.name)}</option>`).join('');
-    const moSel = document.querySelector('#create-profile-modal select[name=model_id]');
-    moSel.innerHTML = '<option value="">—</option>' + modelsData.map(m => `<option value="${esc(m.id)}">${esc(m.name)}</option>`).join('');
-    document.getElementById('create-profile-modal').style.display = 'flex';
-}
-
-async function handleCreateProfile(e) {
-    e.preventDefault();
-    const f = e.target;
-    const body = {
-        name: f.name.value, runtime_id: f.runtime_id.value,
-        host: f.host.value || '127.0.0.1', port: parseInt(f.port.value) || 8080
-    };
-    if (f.model_id.value) body.model_id = f.model_id.value;
-    const args = f.args.value.trim();
-    if (args) body.args = args.split(/\s+/);
-    try {
-        await api('/profiles', { method: 'POST', body: JSON.stringify(body) });
-        closeModal('create-profile-modal'); showToast('Профиль создан', 'success');
-        await reloadAllData(); renderAll();
-    } catch (err) { showToast(err.message, 'error'); }
-    return false;
-}
-
-function editProfile(id) {
-    const p = profilesData.find(x => x.id === id);
-    if (!p) return;
-    const modal = document.getElementById('edit-profile-modal');
-    const f = modal.querySelector('form');
-    const rtSel = f.querySelector('[name=runtime_id]');
-    rtSel.innerHTML = runtimesData.map(r => `<option value="${esc(r.id)}" ${r.id === p.runtime_id ? 'selected' : ''}>${esc(r.name)}</option>`).join('');
-    const moSel = f.querySelector('[name=model_id]');
-    moSel.innerHTML = '<option value="">—</option>' + modelsData.map(m => `<option value="${esc(m.id)}" ${m.id === p.model_id ? 'selected' : ''}>${esc(m.name)}</option>`).join('');
-    f.querySelector('[name=id]').value = p.id;
-    f.querySelector('[name=name]').value = p.name;
-    f.querySelector('[name=host]').value = p.host || '';
-    f.querySelector('[name=port]').value = p.port || '';
-    f.querySelector('[name=args]').value = (p.args || []).join(' ');
-    modal.style.display = 'flex';
-}
-
-async function handleEditProfile(e) {
-    e.preventDefault();
-    const f = e.target;
-    const id = f.querySelector('[name=id]').value;
-    const body = {
-        name: f.name.value, runtime_id: f.runtime_id.value,
-        host: f.host.value || '127.0.0.1', port: parseInt(f.port.value) || 8080
-    };
-    if (f.model_id.value) body.model_id = f.model_id.value;
-    const args = f.args.value.trim();
-    body.args = args ? args.split(/\s+/) : [];
-    try {
-        await api('/profiles/' + id, { method: 'PUT', body: JSON.stringify(body) });
-        closeModal('edit-profile-modal'); showToast('Сохранено', 'success');
-        await reloadAllData(); renderAll();
-    } catch (err) { showToast(err.message, 'error'); }
-    return false;
-}
-
-function deleteProfile(id) {
-    const p = profilesData.find(x => x.id === id);
-    const name = p ? p.name : id;
-    const activeInsts = getActiveInstance(id);
-    let msg = `Удалить профиль "${name}"?`;
-    if (activeInsts.length > 0) msg += `\nАктивные экземпляры (${activeInsts.length}) будут остановлены.`;
-    showConfirm(msg, async function () {
-        try {
-            await api('/profiles/' + id, { method: 'DELETE' });
-            closeConfirm();
-            await reloadAllData(); renderAll();
-        } catch (err) {
-            showToast(friendlyError(err), 'error');
-        }
-    });
-}
-
-function friendlyError(err) {
-    let msg = err.message || 'Неизвестная ошибка';
-    const patterns = [
-        [/profile not found/i, 'Профиль не найден. Возможно, он уже удалён.'],
-        [/model not found/i, 'Модель не найдена. Возможно, она уже удалена.'],
-        [/runtime not found/i, 'Runtime не найден. Возможно, он уже удалён.'],
-        [/instance not found/i, 'Экземпляр не найден.'],
-        [/in use|referenced|depend/i, 'Объект используется другими записями и не может быть удалён.'],
-        [/port.*in use|address already in use/i, 'Порт уже занят другим процессом.'],
-        [/executable.*not found|no such file/i, 'Исполняемый файл не найден. Проверьте путь.'],
-    ];
-    for (const [re, replacement] of patterns) {
-        if (re.test(msg)) return replacement;
-    }
-    if (msg.includes(': ')) {
-        const parts = msg.split(': ');
-        const unique = [...new Set(parts)];
-        msg = unique.length > 1 ? unique[unique.length - 1] : msg;
-    }
-    return msg.charAt(0).toUpperCase() + msg.slice(1);
+    btn.disabled = false;
+    btn.textContent = t('runtimes.cascade.btn');
 }
 
 // ─── Advanced: Instances ────────────────────────────────────────────────────
@@ -940,71 +956,85 @@ function renderAdvInstances() {
         return;
     }
     if (empty) empty.style.display = 'none';
-    document.getElementById('adv-instances-body').innerHTML = instancesData.map(i =>
-        `<tr><td style="font-family:var(--font-mono);font-size:0.78rem;">${esc(i.id.slice(0, 16))}</td>
-        <td>${esc(getProfileName(i.profile_id))}</td>
-        <td><span class="status-badge ${i.state}">${i.state}</span></td>
-        <td>${i.pid || '—'}</td><td>${fmtTime(i.started_at)}</td><td>${fmtTime(i.stopped_at)}</td>
-        <td>${i.exit_code != null ? i.exit_code : '—'}</td>
-        <td class="actions-cell"><button class="btn btn-ghost btn-sm" onclick="viewInstanceLogs('${safeId(i.id)}')">Логи</button>
-        ${isActive(i.state) ? `<button class="btn btn-danger btn-sm" onclick="stopInstance('${safeId(i.id)}')">Остановить</button>
-        <button class="btn btn-warning btn-sm" onclick="restartInstance('${safeId(i.id)}')">Перезапустить</button>` : ''}</td></tr>`
-    ).join('');
+    document.getElementById('adv-instances-body').innerHTML = instancesData.map(function (i) {
+        return '<tr><td style="font-family:var(--font-mono);font-size:0.78rem;">' + esc(i.id.slice(0, 16)) + '</td>' +
+            '<td>' + esc(getModelName(i.model_id)) + '</td>' +
+            '<td><span class="status-badge ' + esc(i.state) + '">' + esc(i.state) + '</span></td>' +
+            '<td>' + (i.pid || '—') + '</td><td>' + fmtTime(i.started_at) + '</td><td>' + fmtTime(i.stopped_at) + '</td>' +
+            '<td>' + (i.exit_code != null ? i.exit_code : '—') + '</td>' +
+            '<td class="actions-cell"><button class="btn btn-ghost btn-sm" onclick="viewInstanceLogs(\'' + safeId(i.id) + '\')">' + t('instances.actions.logs') + '</button>' +
+            (isActive(i.state) ? ' <button class="btn btn-danger btn-sm" onclick="stopInstance(\'' + safeId(i.id) + '\')">' + t('instances.actions.stop') + '</button> ' +
+            '<button class="btn btn-warning btn-sm" onclick="restartInstance(\'' + safeId(i.id) + '\')">' + t('instances.actions.restart') + '</button>' : '') + '</td></tr>';
+    }).join('');
 }
 
 async function stopInstance(id) {
     try { await api('/instances/' + id + '/stop', { method: 'POST' }); await reloadAllData(); renderAll(); }
-    catch (err) { showToast(err.message, 'error'); }
+    catch (err) { showToast(friendlyError(err), 'error'); }
 }
 
 async function restartInstance(id) {
     try { await api('/instances/' + id + '/restart', { method: 'POST' }); await reloadAllData(); renderAll(); }
-    catch (err) { showToast(err.message, 'error'); }
+    catch (err) { showToast(friendlyError(err), 'error'); }
 }
 
-// ─── Autostart ──────────────────────────────────────────────────────────────
-
-function renderAutostart() {
-    const active = profilesData.filter(p => p.active);
-    document.getElementById('autostart-body').innerHTML = active.length ? active.map(p =>
-        `<tr><td>${esc(p.name)}</td><td>${esc(p.host || '127.0.0.1')}:${p.port}</td>
-        <td>${p.autostart_delay ? p.autostart_delay + 'с' : '0с'}</td>
-        <td><label class="toggle-switch"><input type="checkbox" checked onchange="toggleAutostart('${safeId(p.id)}')"><span class="toggle-slider"></span></label></td>
-        <td class="actions-cell"><button class="btn btn-ghost btn-sm" onclick="openDetails('${safeId(p.id)}')">Настройки</button></td></tr>`
-    ).join('') : '<tr><td colspan="5" class="hint-text">Нет моделей с автозапуском.</td></tr>';
-}
-
-async function toggleAutostart(id) {
-    const p = profilesData.find(x => x.id === id);
-    if (!p) return;
-    try {
-        if (p.active) {
-            await api('/profiles/' + id + '/deactivate', { method: 'POST' });
-        } else {
-            await api('/profiles/' + id + '/activate', { method: 'POST' });
-        }
-        await reloadAllData(); renderAll();
-    } catch (err) { showToast(err.message, 'error'); }
-}
-
-// ─── History ────────────────────────────────────────────────────────────────
+// ─── Instance History (with filters) ────────────────────────────────────────
 
 function renderHistory() {
     const empty = document.getElementById('history-empty');
-    const terminal = instancesData.filter(i => !isActive(i.state));
-    if (terminal.length === 0) {
+    const stateF = document.getElementById('hf-state').value;
+    const modelF = document.getElementById('hf-model').value;
+    const activeOnly = document.getElementById('hf-active').checked;
+
+    let filtered = instancesData.filter(function (i) {
+        if (stateF && i.state !== stateF) return false;
+        if (modelF && i.model_id !== modelF) return false;
+        if (activeOnly && !isActive(i.state)) return false;
+        return true;
+    });
+    filtered.sort(function (a, b) {
+        const ta = a.started_at ? new Date(a.started_at).getTime() : 0;
+        const tb = b.started_at ? new Date(b.started_at).getTime() : 0;
+        return tb - ta;
+    });
+
+    if (filtered.length === 0) {
         document.getElementById('history-body').innerHTML = '';
         if (empty) empty.style.display = 'block';
         return;
     }
     if (empty) empty.style.display = 'none';
-    document.getElementById('history-body').innerHTML = terminal.slice(0, 50).map(i =>
-        `<tr><td>${esc(getProfileName(i.profile_id))}</td>
-        <td><span class="status-badge ${i.state}">${i.state}</span></td>
-        <td>${fmtTime(i.started_at)}</td><td>${fmtTime(i.stopped_at)}</td>
-        <td>${i.exit_code != null ? i.exit_code : '—'}</td>
-        <td><button class="btn btn-ghost btn-sm" onclick="viewInstanceLogs('${safeId(i.id)}')">Логи</button></td></tr>`
-    ).join('');
+    document.getElementById('history-body').innerHTML = filtered.slice(0, 200).map(function (i) {
+        return '<tr><td>' + esc(getModelName(i.model_id)) + '</td>' +
+            '<td style="font-family:var(--font-mono);font-size:0.78rem;">' + esc(i.id.slice(0, 12)) + '</td>' +
+            '<td><span class="status-badge ' + esc(i.state) + '">' + esc(i.state) + '</span></td>' +
+            '<td>' + (i.pid || '—') + '</td>' +
+            '<td>' + fmtTime(i.started_at) + '</td><td>' + fmtTime(i.stopped_at) + '</td>' +
+            '<td>' + (i.exit_code != null ? i.exit_code : '—') + '</td>' +
+            '<td class="actions-cell"><button class="btn btn-ghost btn-sm" onclick="viewInstanceLogs(\'' + safeId(i.id) + '\')">' + t('instances.actions.logs') + '</button></td></tr>';
+    }).join('');
+}
+
+// ─── Instance Cleanup ───────────────────────────────────────────────────────
+
+function openCleanup() {
+    document.querySelectorAll('input[name=cleanup-mode]').forEach(function (r) { r.checked = r.value === 'all_terminal'; });
+    document.getElementById('cleanup-modal').style.display = 'flex';
+}
+
+function closeCleanup() { document.getElementById('cleanup-modal').style.display = 'none'; }
+
+async function confirmCleanup() {
+    const mode = document.querySelector('input[name=cleanup-mode]:checked').value;
+    const body = { mode: mode };
+    try {
+        const res = await api('/instances/cleanup', { method: 'POST', body: JSON.stringify(body) });
+        closeCleanup();
+        showToast(t('instances.cleanup.result', { count: res.deleted }), 'success');
+        await reloadAllData(); renderAll();
+    } catch (err) {
+        showToast(friendlyError(err), 'error');
+    }
 }
 
 // ─── Settings ───────────────────────────────────────────────────────────────
@@ -1013,10 +1043,26 @@ async function loadSettings() {
     try {
         const m = await api('/metrics');
         document.getElementById('set-listen').textContent = (m.listen_address || '127.0.0.1') + ':' + (m.web_port || '');
-        document.getElementById('set-auth').textContent = m.auth_enabled ? 'Включена' : 'Выключена';
-        const userCard = document.getElementById('set-user-card');
-        if (userCard) userCard.style.display = m.auth_enabled ? '' : 'none';
+        document.getElementById('set-auth').textContent = m.auth_enabled ? t('settings.server.auth.on') : t('settings.server.auth.off');
     } catch {}
+}
+
+// ─── Error messages ─────────────────────────────────────────────────────────
+
+function friendlyError(err) {
+    let msg = (err && err.message) || 'Unknown error';
+    const patterns = [
+        [/model not found/i, 'Model not found. It may have been deleted.'],
+        [/runtime not found/i, 'Runtime not found. It may have been deleted.'],
+        [/instance not found/i, 'Instance not found.'],
+        [/in use|referenced|depend/i, 'Object is used by other records and cannot be deleted.'],
+        [/port.*in use|address already in use/i, 'Port is already in use by another process.'],
+        [/executable.*not found|no such file/i, 'Executable not found. Check the path.'],
+    ];
+    for (let i = 0; i < patterns.length; i++) {
+        if (patterns[i][0].test(msg)) return patterns[i][1];
+    }
+    return msg.charAt(0).toUpperCase() + msg.slice(1);
 }
 
 // ─── Modal helpers ──────────────────────────────────────────────────────────
@@ -1024,18 +1070,24 @@ async function loadSettings() {
 function closeModal(id) { document.getElementById(id).style.display = 'none'; }
 
 function showConfirm(msg, onYes) {
-    document.getElementById('confirm-message').textContent = msg;
+    const el = document.getElementById('confirm-message');
+    el.textContent = '';
+    el.style.whiteSpace = 'pre-line';
+    msg.split('\n').forEach(function (line, idx) {
+        if (idx > 0) el.appendChild(document.createElement('br'));
+        el.appendChild(document.createTextNode(line));
+    });
     const btn = document.getElementById('confirm-yes');
     btn.disabled = false;
-    btn.textContent = 'Подтвердить';
+    btn.textContent = t('common.confirm');
     btn.onclick = async function () {
         btn.disabled = true;
-        btn.textContent = 'Выполняется...';
+        btn.textContent = t('confirm.executing');
         try {
             await onYes();
         } finally {
             btn.disabled = false;
-            btn.textContent = 'Подтвердить';
+            btn.textContent = t('common.confirm');
         }
     };
     document.getElementById('confirm-modal').style.display = 'flex';
@@ -1043,17 +1095,15 @@ function showConfirm(msg, onYes) {
 
 function closeConfirm() { document.getElementById('confirm-modal').style.display = 'none'; }
 
-function showBlockedModal(entityType, entityName, dependents) {
-    const content = document.getElementById('blocked-content');
-    let html = `<p><strong>${esc(entityType)}</strong>: ${esc(entityName)}</p>`;
-    html += '<p class="hint-text" style="margin-top:0.8rem;">Используется:</p><ul style="margin:0.5rem 0 0.5rem 1.2rem;font-size:0.88rem;color:var(--text-secondary);">';
-    dependents.forEach(d => { html += `<li>${esc(d)}</li>`; });
-    html += '</ul><p class="hint-text" style="margin-top:0.8rem;">Сначала удалите или измените связанные записи.</p>';
+function showBlockedModal(title, dependents) {
+    const content = document.getElementById('rt-delete-content');
+    let html = '<p><strong>' + esc(title) + '</strong></p>';
+    html += '<p class="hint-text" style="margin-top:0.8rem;">' + t('blocked.used_by') + '</p><ul style="margin:0.5rem 0 0.5rem 1.2rem;font-size:0.88rem;color:var(--text-secondary);">';
+    dependents.forEach(function (d) { html += '<li>' + esc(d) + '</li>'; });
+    html += '</ul><p class="hint-text" style="margin-top:0.8rem;">' + t('blocked.hint') + '</p>';
     content.innerHTML = html;
-    document.getElementById('blocked-modal').style.display = 'flex';
+    document.getElementById('rt-delete-modal').style.display = 'flex';
 }
-
-function closeBlocked() { document.getElementById('blocked-modal').style.display = 'none'; }
 
 // ─── Toast ──────────────────────────────────────────────────────────────────
 
@@ -1062,24 +1112,18 @@ function showToast(msg, type) {
     div.className = 'toast ' + (type || '');
     div.textContent = msg;
     document.getElementById('toast-container').appendChild(div);
-    setTimeout(() => div.remove(), 4000);
+    setTimeout(function () { div.remove(); }, 4000);
 }
 
 // ─── Refresh loop ───────────────────────────────────────────────────────────
 
 function startRefresh() {
     if (refreshTimer) clearInterval(refreshTimer);
-    refreshTimer = setInterval(async () => {
+    refreshTimer = setInterval(async function () {
         await reloadAllData();
         renderAll();
-    }, 5000);
+    }, 3000);
 }
-
-// ─── Autostart delay checkbox ───────────────────────────────────────────────
-
-document.getElementById('wiz-autostart').addEventListener('change', function () {
-    document.getElementById('wiz-delay-group').style.display = this.checked ? '' : 'none';
-});
 
 // ─── Expose to global scope for inline onclick handlers ────────────────────
 
@@ -1089,13 +1133,12 @@ window.navigate = navigate;
 window.openWizard = openWizard;
 window.closeWizard = closeWizard;
 window.wizPrev = wizPrev;
-window.closeDetails = closeDetails;
-window.switchDetailTab = switchDetailTab;
-window.openDetails = openDetails;
+window.wizGoto = wizGoto;
 window.viewInstanceLogs = viewInstanceLogs;
 window.startModel = startModel;
 window.stopModel = stopModel;
 window.restartModel = restartModel;
+window.deleteModel = deleteModel;
 window.stopInstance = stopInstance;
 window.restartInstance = restartInstance;
 window.showCreateRuntimeModal = showCreateRuntimeModal;
@@ -1103,16 +1146,6 @@ window.handleCreateRuntime = handleCreateRuntime;
 window.editRuntime = editRuntime;
 window.handleEditRuntime = handleEditRuntime;
 window.deleteRuntime = deleteRuntime;
-window.showCreateModelModal = showCreateModelModal;
-window.handleCreateModel = handleCreateModel;
-window.editModel = editModel;
-window.handleEditModel = handleEditModel;
-window.deleteModel = deleteModel;
-window.showCreateProfileModal = showCreateProfileModal;
-window.handleCreateProfile = handleCreateProfile;
-window.editProfile = editProfile;
-window.handleEditProfile = handleEditProfile;
-window.deleteProfile = deleteProfile;
 window.toggleAutostart = toggleAutostart;
 window.switchLogInstance = switchLogInstance;
 window.applyLogSearch = applyLogSearch;
@@ -1120,11 +1153,25 @@ window.toggleLogPause = toggleLogPause;
 window.clearLogView = clearLogView;
 window.closeModal = closeModal;
 window.closeConfirm = closeConfirm;
-window.closeBlocked = closeBlocked;
 window.reloadAllData = reloadAllData;
 window.addWizEnvRow = addWizEnvRow;
-window.toggleModelKind = toggleModelKind;
+window.addEnvRow = addEnvRow;
 window.onWizRtModeChange = onWizRtModeChange;
+window.setTheme = setTheme;
+window.setLanguage = setLanguage;
+window.selectRtCard = selectRtCard;
+window.renderModels = renderModels;
+window.renderHistory = renderHistory;
+window.closeRTDelete = closeRTDelete;
+window.openRTReplace = openRTReplace;
+window.closeRTReplace = closeRTReplace;
+window.confirmRTReplace = confirmRTReplace;
+window.openRTCascade = openRTCascade;
+window.closeRTCascade = closeRTCascade;
+window.confirmRTCascade = confirmRTCascade;
+window.openCleanup = openCleanup;
+window.closeCleanup = closeCleanup;
+window.confirmCleanup = confirmCleanup;
 
 // ─── Boot ───────────────────────────────────────────────────────────────────
 

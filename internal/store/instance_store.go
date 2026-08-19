@@ -35,9 +35,8 @@ type snapshot struct {
 // domainInstanceJSON is the JSON representation of a LaunchInstance.
 type domainInstanceJSON struct {
 	ID               string            `json:"id"`
-	ProfileID        string            `json:"profile_id"`
+	ModelID          string            `json:"model_id"`
 	RuntimeID        string            `json:"runtime_id"`
-	ModelID          string            `json:"model_id,omitempty"`
 	PID              int               `json:"pid,omitempty"`
 	State            string            `json:"state"`
 	StartedAt        string            `json:"started_at,omitempty"`
@@ -143,14 +142,14 @@ func (s *InstanceStoreJSON) List() ([]*domain.LaunchInstance, error) {
 	return result, nil
 }
 
-// FindByProfileID returns instances for a specific profile.
-func (s *InstanceStoreJSON) FindByProfileID(profileID string) ([]*domain.LaunchInstance, error) {
+// FindByModelID returns instances for a specific model.
+func (s *InstanceStoreJSON) FindByModelID(modelID string) ([]*domain.LaunchInstance, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	result := make([]*domain.LaunchInstance, 0)
 	for _, inst := range s.instances {
-		if inst.ProfileID == profileID {
+		if inst.ModelID == modelID {
 			c := *inst
 			result = append(result, &c)
 		}
@@ -199,9 +198,8 @@ func (s *InstanceStoreJSON) save() error {
 	for _, inst := range s.instances {
 		dij := domainInstanceJSON{
 			ID:               string(inst.ID),
-			ProfileID:        inst.ProfileID,
-			RuntimeID:        inst.RuntimeID,
 			ModelID:          inst.ModelID,
+			RuntimeID:        inst.RuntimeID,
 			PID:              inst.PID,
 			State:            string(inst.State),
 			ExitCode:         inst.ExitCode,
@@ -264,9 +262,8 @@ func (s *InstanceStoreJSON) load() error {
 	for _, dij := range snap.Instances {
 		inst := &domain.LaunchInstance{
 			ID:               domain.InstanceID(dij.ID),
-			ProfileID:        dij.ProfileID,
-			RuntimeID:        dij.RuntimeID,
 			ModelID:          dij.ModelID,
+			RuntimeID:        dij.RuntimeID,
 			PID:              dij.PID,
 			State:            domain.InstanceState(dij.State),
 			ExitCode:         dij.ExitCode,

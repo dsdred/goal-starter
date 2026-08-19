@@ -7,9 +7,8 @@ import "time"
 // depending on storage. The storage package uses this type for JSON serialization.
 type LaunchInstanceEntry struct {
 	ID               string            `json:"id"`
-	ProfileID        string            `json:"profile_id"`
+	ModelID          string            `json:"model_id"`
 	RuntimeID        string            `json:"runtime_id"`
-	ModelID          string            `json:"model_id,omitempty"`
 	Executable       string            `json:"executable,omitempty"`
 	Args             []string          `json:"args,omitempty"`
 	WorkingDirectory string            `json:"working_directory,omitempty"`

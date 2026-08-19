@@ -53,21 +53,20 @@ func (h *InstancesHandler) Get(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, inst)
 }
 
-// StartProfile handles POST /api/v1/instances/start
-func (h *InstancesHandler) StartProfile(w http.ResponseWriter, r *http.Request) {
+// StartModel handles POST /api/v1/instances/start
+func (h *InstancesHandler) StartModel(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		ProfileID string `json:"profile_id"`
-		ModelID   string `json:"model_id,omitempty"`
+		ModelID string `json:"model_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, 400, "invalid JSON")
 		return
 	}
-	if body.ProfileID == "" {
-		writeError(w, 400, "profile_id is required")
+	if body.ModelID == "" {
+		writeError(w, 400, "model_id is required")
 		return
 	}
-	inst, err := h.instanceSvc.StartProfile(r.Context(), body.ProfileID)
+	inst, err := h.instanceSvc.StartModel(r.Context(), body.ModelID)
 	if err != nil {
 		writeError(w, 500, err.Error())
 		return
@@ -106,6 +105,34 @@ func (h *InstancesHandler) RestartInstance(w http.ResponseWriter, r *http.Reques
 	}
 	inst.Environment = nil
 	writeJSON(w, http.StatusOK, inst)
+}
+
+// Cleanup handles POST /api/v1/instances/cleanup
+func (h *InstancesHandler) Cleanup(w http.ResponseWriter, r *http.Request) {
+	var request struct {
+		Mode string   `json:"mode"`
+		IDs  []string `json:"ids"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		writeError(w, 400, "invalid JSON")
+		return
+	}
+	switch request.Mode {
+	case "all_terminal", "older_than_7d", "older_than_30d", "selected":
+	default:
+		writeError(w, 400, "invalid mode: "+request.Mode)
+		return
+	}
+	if request.Mode == "selected" && len(request.IDs) == 0 {
+		writeError(w, 400, "ids is required for selected mode")
+		return
+	}
+	deleted, err := h.instanceSvc.CleanupInstances(r.Context(), request.Mode, request.IDs)
+	if err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"status": "cleaned", "deleted": deleted})
 }
 
 // Status handles GET /api/v1/instances/status

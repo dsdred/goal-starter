@@ -4,19 +4,30 @@ import (
 	"time"
 )
 
-// Model represents an AI model file (e.g., GGUF).
-type Model struct {
-	ID        string            `json:"id"`
-	Name      string            `json:"name"`
-	Path      string            `json:"path"`
-	MMProj    string            `json:"mmproj,omitempty"`
-	Format    string            `json:"format,omitempty"`
-	Arguments []string          `json:"arguments,omitempty"`
-	RuntimeID string            `json:"runtime_id,omitempty"`
-	Env       map[string]string `json:"environment,omitempty"`
+// ValidationError represents a validation error for a specific field.
+type ValidationError struct {
+	Field   string
+	Message string
+}
 
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+func (e *ValidationError) Error() string {
+	return e.Field + ": " + e.Message
+}
+
+// Model represents a configured launch definition.
+// It defines HOW to launch: runtime reference + args + environment.
+// All launch parameters (including --host, --port, -m, --mmproj) are in Args.
+type Model struct {
+	ID             string
+	Name           string
+	RuntimeID      string
+	Args           []string
+	Environment    map[string]string
+	Active         bool
+	AutostartDelay int
+
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 // Validate checks model consistency.
@@ -27,8 +38,8 @@ func (m *Model) Validate() error {
 	if m.Name == "" {
 		return &ValidationError{Field: "name", Message: "model name is required"}
 	}
-	if m.Path == "" && len(m.Arguments) == 0 {
-		return &ValidationError{Field: "path", Message: "either path or arguments is required"}
+	if m.RuntimeID == "" {
+		return &ValidationError{Field: "runtime_id", Message: "runtime_id is required"}
 	}
 	return nil
 }

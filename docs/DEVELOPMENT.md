@@ -117,7 +117,7 @@ $env:GOOS='linux'; $env:GOARCH='amd64'; go build -o bin/goal-linux-amd64 ./cmd/g
 - Process arguments are `[]string`.
 - Each `exec.Cmd` has exactly one owner calling `Wait()`.
 - HTTP handlers must not manage `exec.Cmd` directly.
-- Merge profile environment variables with parent process environment.
+- Merge model environment variables with parent process environment.
 - Platform-specific behavior belongs in `internal/platform/`.
 
 ## Adding a new endpoint

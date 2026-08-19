@@ -22,9 +22,8 @@ func TestInstanceStoreJSON_CreateAndGet(t *testing.T) {
 	now := time.Now().UTC()
 	inst := &domain.LaunchInstance{
 		ID:        domain.InstanceID("test-001"),
-		ProfileID: "profile-1",
-		RuntimeID: "runtime-1",
 		ModelID:   "model-1",
+		RuntimeID: "runtime-1",
 		PID:       1234,
 		State:     domain.InstanceStateRunning,
 		StartedAt: now,
@@ -65,7 +64,7 @@ func TestInstanceStoreJSON_Update(t *testing.T) {
 	now := time.Now().UTC()
 	inst := &domain.LaunchInstance{
 		ID:        domain.InstanceID("test-002"),
-		ProfileID: "profile-1",
+		ModelID:   "model-1",
 		State:     domain.InstanceStateRunning,
 		CreatedAt: now,
 		UpdatedAt: now,
@@ -111,7 +110,7 @@ func TestInstanceStoreJSON_Delete(t *testing.T) {
 	now := time.Now().UTC()
 	inst := &domain.LaunchInstance{
 		ID:        domain.InstanceID("test-003"),
-		ProfileID: "profile-1",
+		ModelID:   "model-1",
 		State:     domain.InstanceStateExited,
 		CreatedAt: now,
 		UpdatedAt: now,
@@ -145,7 +144,7 @@ func TestInstanceStoreJSON_List(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		inst := &domain.LaunchInstance{
 			ID:        domain.InstanceID("test-list-" + string(rune('a'+i))),
-			ProfileID: "profile-1",
+			ModelID:   "model-1",
 			State:     domain.InstanceStateExited,
 			CreatedAt: now,
 			UpdatedAt: now,
@@ -165,7 +164,7 @@ func TestInstanceStoreJSON_List(t *testing.T) {
 	}
 }
 
-func TestInstanceStoreJSON_FindByProfileID(t *testing.T) {
+func TestInstanceStoreJSON_FindByModelID(t *testing.T) {
 	dir := t.TempDir()
 	store, err := NewInstanceStoreJSON(InstanceStoreOptions{
 		Directory: dir,
@@ -177,39 +176,39 @@ func TestInstanceStoreJSON_FindByProfileID(t *testing.T) {
 
 	now := time.Now().UTC()
 
-	// Create instances for different profiles.
-	profile1 := &domain.LaunchInstance{
-		ID:        domain.InstanceID("test-profile1-1"),
-		ProfileID: "profile-1",
+	// Create instances for different models.
+	model1 := &domain.LaunchInstance{
+		ID:        domain.InstanceID("test-model1-1"),
+		ModelID:   "model-1",
 		State:     domain.InstanceStateExited,
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
-	profile2 := &domain.LaunchInstance{
-		ID:        domain.InstanceID("test-profile2-1"),
-		ProfileID: "profile-2",
+	model2 := &domain.LaunchInstance{
+		ID:        domain.InstanceID("test-model2-1"),
+		ModelID:   "model-2",
 		State:     domain.InstanceStateExited,
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
 
-	if err := store.Create(profile1); err != nil {
-		t.Fatalf("create profile1 instance: %v", err)
+	if err := store.Create(model1); err != nil {
+		t.Fatalf("create model1 instance: %v", err)
 	}
-	if err := store.Create(profile2); err != nil {
-		t.Fatalf("create profile2 instance: %v", err)
+	if err := store.Create(model2); err != nil {
+		t.Fatalf("create model2 instance: %v", err)
 	}
 
-	result, err := store.FindByProfileID("profile-1")
+	result, err := store.FindByModelID("model-1")
 	if err != nil {
-		t.Fatalf("find by profile id: %v", err)
+		t.Fatalf("find by model id: %v", err)
 	}
 
 	if len(result) != 1 {
-		t.Errorf("expected 1 instance for profile-1, got %d", len(result))
+		t.Errorf("expected 1 instance for model-1, got %d", len(result))
 	}
-	if len(result) > 0 && result[0].ProfileID != "profile-1" {
-		t.Errorf("expected profile-1, got %s", result[0].ProfileID)
+	if len(result) > 0 && result[0].ModelID != "model-1" {
+		t.Errorf("expected model-1, got %s", result[0].ModelID)
 	}
 }
 
@@ -228,14 +227,14 @@ func TestInstanceStoreJSON_CountActive(t *testing.T) {
 	// Create active instances.
 	active1 := &domain.LaunchInstance{
 		ID:        domain.InstanceID("test-active-1"),
-		ProfileID: "profile-1",
+		ModelID:   "model-1",
 		State:     domain.InstanceStateRunning,
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
 	active2 := &domain.LaunchInstance{
 		ID:        domain.InstanceID("test-active-2"),
-		ProfileID: "profile-1",
+		ModelID:   "model-1",
 		State:     domain.InstanceStateRunning,
 		CreatedAt: now,
 		UpdatedAt: now,
@@ -243,7 +242,7 @@ func TestInstanceStoreJSON_CountActive(t *testing.T) {
 	// Create exited instance.
 	exited := &domain.LaunchInstance{
 		ID:        domain.InstanceID("test-exited-1"),
-		ProfileID: "profile-1",
+		ModelID:   "model-1",
 		State:     domain.InstanceStateExited,
 		CreatedAt: now,
 		UpdatedAt: now,
@@ -266,7 +265,7 @@ func TestInstanceStoreJSON_Persistence(t *testing.T) {
 	now := time.Now().UTC()
 	inst := &domain.LaunchInstance{
 		ID:        domain.InstanceID("test-persist-1"),
-		ProfileID: "profile-1",
+		ModelID:   "model-1",
 		State:     domain.InstanceStateExited,
 		ExitCode:  ptrInt(1),
 		CreatedAt: now,
@@ -326,7 +325,7 @@ func TestInstanceStoreJSON_CleanupTerminal(t *testing.T) {
 	// Create old terminal instance.
 	oldInst := &domain.LaunchInstance{
 		ID:        domain.InstanceID("test-old"),
-		ProfileID: "profile-1",
+		ModelID:   "model-1",
 		State:     domain.InstanceStateExited,
 		StoppedAt: oldTime,
 		CreatedAt: now,
@@ -335,7 +334,7 @@ func TestInstanceStoreJSON_CleanupTerminal(t *testing.T) {
 	// Create recent terminal instance.
 	recentInst := &domain.LaunchInstance{
 		ID:        domain.InstanceID("test-recent"),
-		ProfileID: "profile-1",
+		ModelID:   "model-1",
 		State:     domain.InstanceStateExited,
 		StoppedAt: now.Add(-5 * time.Minute),
 		CreatedAt: now,
@@ -344,7 +343,7 @@ func TestInstanceStoreJSON_CleanupTerminal(t *testing.T) {
 	// Create active instance.
 	activeInst := &domain.LaunchInstance{
 		ID:        domain.InstanceID("test-active"),
-		ProfileID: "profile-1",
+		ModelID:   "model-1",
 		State:     domain.InstanceStateRunning,
 		CreatedAt: now,
 		UpdatedAt: now,
@@ -395,9 +394,9 @@ func TestInstanceStoreJSON_Error_NotFound(t *testing.T) {
 	}
 
 	err = store.Update(&domain.LaunchInstance{
-		ID:        domain.InstanceID("non-existent"),
-		ProfileID: "profile-1",
-		State:     domain.InstanceStateExited,
+		ID:      domain.InstanceID("non-existent"),
+		ModelID: "model-1",
+		State:   domain.InstanceStateExited,
 	})
 	if err == nil {
 		t.Fatal("expected error when updating non-existent instance")
@@ -412,9 +411,9 @@ func TestInstanceStoreJSON_Error_NotFound(t *testing.T) {
 func TestInstanceStoreJSON_EnvironmentToList(t *testing.T) {
 	now := time.Now().UTC()
 	inst := &domain.LaunchInstance{
-		ID:        domain.InstanceID("test-env"),
-		ProfileID: "profile-1",
-		State:     domain.InstanceStateRunning,
+		ID:      domain.InstanceID("test-env"),
+		ModelID: "model-1",
+		State:   domain.InstanceStateRunning,
 		Environment: map[string]string{
 			"PATH": "/usr/bin",
 			"HOME": "/root",

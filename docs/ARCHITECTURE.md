@@ -1,6 +1,19 @@
 # Architecture
 
-GoAl is a single-binary application composed of distinct ownership layers. This document describes the production V1 architecture.
+GoAl is a single-binary application composed of distinct ownership layers. This document describes the current GoAl 2.0 architecture.
+
+## Domain Model (v6)
+
+GoAl 2.0 uses a simplified 3-entity domain:
+
+- **Runtime** — execution engine configuration (executable, working directory, default args, environment)
+- **Model** — configured launch definition (runtime reference, launch args, host, port, environment, autostart)
+- **Instance** — concrete launch history (immutable record of a process launch)
+
+Physical model files (GGUF, MMProj) are NOT separate domain entities. They are ordinary
+launch arguments (e.g., `-m <path>`, `--mmproj <path>`).
+
+Relationship: Runtime ← Model → Instance
 
 ## Composition root
 
@@ -24,7 +37,7 @@ main
 | Configuration | `internal/config/` | Parse, validate, migrate, save `goal.json`. |
 | Persistence | `internal/storage/` | `JSONRepository` — single-file storage with atomic writes. |
 | Domain | `internal/domain/` | Type definitions, DTO conversion between storage and application layers. |
-| Application | `internal/application/` | Business logic: ProfileService, InstanceService, RuntimeService, ModelService. |
+| Application | `internal/application/` | Business logic: ModelService, RuntimeService, InstanceService. |
 | Process lifecycle | `internal/process/` | Supervisor, Manager, LogBroker, LogStore, SlotReservation. |
 | OS behavior | `internal/platform/` | Windows Job Object, Linux process groups. |
 | HTTP / UI | `internal/webui/` | Routes, handlers, embedded templates, static assets, security. |
@@ -68,7 +81,7 @@ Application services (internal/application/)
 4. `os.Rename()` (atomic on Windows and Linux)
 5. Sync parent directory
 
-**Legacy stores:** `internal/webui/store/` contains file-based stores (profiles, runtimes, models) but is not used for production persistence. The authoritative store is `internal/storage/JSONRepository`.
+The unified JSON repository in `internal/storage/` (`JSONRepository`) is the sole persistence layer for all entities.
 
 ## Process lifecycle
 
@@ -108,7 +121,7 @@ config ← main (loaded once at startup)
 - Each `exec.Cmd` has exactly one goroutine owner calling `cmd.Wait()`.
 - HTTP handlers do not manage `exec.Cmd` directly; they delegate to `Supervisor`.
 - Process arguments are passed as `[]string` — no shell invocation.
-- Profile environment variables are merged with the parent process environment (profile variables override system variables).
+- Model environment variables are merged with the parent process environment (model variables override system variables).
 
 ## ADR summary
 

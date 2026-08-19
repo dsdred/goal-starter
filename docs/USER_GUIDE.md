@@ -1,6 +1,6 @@
 # GoAl — User Guide
 
-GoAl is a lightweight cross-platform manager for local AI runtimes, models, and launch profiles. One binary for Windows and Linux.
+GoAl is a lightweight cross-platform manager for local AI runtimes and models. One binary for Windows and Linux.
 
 ---
 
@@ -12,15 +12,14 @@ GoAl is a lightweight cross-platform manager for local AI runtimes, models, and 
 4. [Web Interface](#web-interface)
 5. [API](#api)
 6. [Instance Management](#instance-management)
-7. [Launch Profiles](#launch-profiles)
+7. [Models](#models)
 8. [Runtimes](#runtimes)
-9. [Models](#models)
-10. [Logs](#logs)
-11. [Runtime Health](#runtime-health)
-12. [Security](#security)
-13. [Install as Service (Linux systemd)](#install-as-service-linux-systemd)
-14. [Install as Service (Windows)](#install-as-service-windows)
-15. [FAQ](#faq)
+9. [Logs](#logs)
+10. [Runtime Health](#runtime-health)
+11. [Security](#security)
+12. [Install as Service (Linux systemd)](#install-as-service-linux-systemd)
+13. [Install as Service (Windows)](#install-as-service-windows)
+14. [FAQ](#faq)
 
 ---
 
@@ -80,9 +79,9 @@ cp goal.example.json goal.json
 sudo ./goal          # Linux
 ```
 
-After starting, GoAl is available at: **http://127.0.0.1:9090**
+After starting, GoAl is available at: **http://127.0.0.1:8088**
 
-> **Note:** If port 9090 is in use, change `webPort` in `goal.json`.
+> **Note:** If port 8088 is in use, change `webPort` in `goal.json`.
 
 ---
 
@@ -90,13 +89,15 @@ After starting, GoAl is available at: **http://127.0.0.1:9090**
 
 The `goal.json` file is located in the same directory as the binary. It is **excluded from git** (contains secrets and custom paths).
 
+> **Legacy format:** `goal.json` uses the v5 config schema for backward compatibility. The `profiles` entries become GoAl 2.0 **Models** (launch definitions) at startup. Legacy `models` entries (with `path`) are folded into the corresponding model's launch args. New models created via the API or Web UI use the simplified GoAl 2.0 format.
+
 ### Full Configuration
 
 ```json
 {
   "version": 2,
   "listenAddress": "127.0.0.1",
-  "webPort": 9090,
+  "webPort": 8088,
   "dataDir": "./data",
   "adminUser": "admin",
   "adminPassword": "",
@@ -113,7 +114,7 @@ The `goal.json` file is located in the same directory as the binary. It is **exc
 |-------|-------------|---------|----------|
 | `version` | Configuration schema version | 2 | No |
 | `listenAddress` | HTTP server listen address | `127.0.0.1` | No |
-| `webPort` | HTTP server port | `9090` | No |
+| `webPort` | HTTP server port | `8088` | No |
 | `dataDir` | Directory for storing data | `./data` | No |
 | `adminUser` | Administrator username | `admin` | No |
 | `adminPassword` | Administrator password (empty = no auth) | `""` | No |
@@ -159,11 +160,12 @@ The `goal.json` file is located in the same directory as the binary. It is **exc
 | `healthCheck` | Health check configuration |
 | `active` | Whether the runtime is enabled |
 
-### Model Configuration
+### Model Configuration (legacy `goal.json` format)
 
-Models can be configured in two ways: via `arguments` (inline args for the server) or via `path` (direct GGUF file path).
+In `goal.json`, models use the legacy v5 format. At startup, `SeedFromConfig` folds
+`path` and `arguments` into the launch args of the GoAl 2.0 Model derived from `profiles`.
 
-**Option A: via arguments (for llama.cpp server and similar):**
+**Example: llama.cpp with GGUF model:**
 
 ```json
 {
@@ -186,7 +188,7 @@ Models can be configured in two ways: via `arguments` (inline args for the serve
 }
 ```
 
-**Option B: via path (simple GGUF file):**
+**Option B: via path (simple GGUF file, folded into args at startup):**
 
 ```json
 {
@@ -201,18 +203,24 @@ Models can be configured in two ways: via `arguments` (inline args for the serve
 }
 ```
 
-**Model Fields:**
+At startup, `path` becomes `-m E:/models/llama3/model.gguf` in the model's launch args.
+
+**Model Fields (legacy `goal.json`):**
 
 | Field | Description |
 |-------|-------------|
 | `id` | Unique identifier |
 | `name` | Display name |
 | `runtimeId` | ID of the runtime where the model will run |
-| `path` | Path to GGUF file (alternative to arguments) |
-| `arguments` | Command-line arguments array (alternative to path) |
+| `path` | Path to GGUF file (folded into args as `-m <path>` at startup) |
+| `arguments` | Command-line arguments array (appended to model args) |
 | `environment` | Process environment variables |
 
-### Launch Profile Configuration
+### Launch Profile Configuration (legacy `goal.json` format)
+
+Profiles in `goal.json` become GoAl 2.0 **Models** at startup. If `modelId` references
+a legacy model entry, that model's `path` and `arguments` are folded into the resulting
+model's launch args.
 
 ```json
 {
@@ -230,7 +238,7 @@ Models can be configured in two ways: via `arguments` (inline args for the serve
 }
 ```
 
-**Profile Fields:**
+**Profile Fields (legacy `goal.json` — becomes a Model at startup):**
 
 | Field | Description |
 |-------|-------------|
@@ -252,15 +260,14 @@ Models can be configured in two ways: via `arguments` (inline args for the serve
 
 ## Web Interface
 
-After starting, GoAl is available at: **http://127.0.0.1:9090**
+After starting, GoAl is available at: **http://127.0.0.1:8088**
 
 ### Web Interface Features:
 
 - **Dashboard** — overview of all instances and their statuses
 - **Instance Management** — start, stop, restart
-- **Profile CRUD** — create, edit, delete profiles
 - **Runtime CRUD** — configure AI runtimes
-- **Model CRUD** — configure models
+- **Model CRUD** — configure launch definitions (runtime + launch args + environment)
 - **Health Monitoring** — check runtime availability
 - **Metrics** — built-in application metrics
 
@@ -268,7 +275,7 @@ After starting, GoAl is available at: **http://127.0.0.1:9090**
 
 If `authEnabled` is set:
 
-1. Go to `http://127.0.0.1:9090`
+1. Go to `http://127.0.0.1:8088`
 2. Click **Login**
 3. Enter `adminUser` and `adminPassword` from your configuration
 4. After login, the session is stored in an HTTP-only cookie
@@ -279,7 +286,7 @@ If `authEnabled` is set:
 
 ### Base URL
 
-All API calls start with: `http://127.0.0.1:9090`
+All API calls start with: `http://127.0.0.1:8088`
 
 ### Authentication
 
@@ -298,26 +305,30 @@ All API calls start with: `http://127.0.0.1:9090`
 | POST | `/api/v1/instances/{id}/stop` | Stop instance |
 | POST | `/api/v1/instances/{id}/restart` | Restart instance |
 
-### Profiles
+### Models
+
+Models are configured launch definitions combining a runtime with launch arguments,
+host, port, and environment.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/api/v1/profiles` | List profiles |
-| GET | `/api/v1/profiles/{id}` | Get profile |
-| POST | `/api/v1/profiles` | Create profile |
-| PUT | `/api/v1/profiles/{id}` | Update profile |
-| DELETE | `/api/v1/profiles/{id}` | Delete profile |
-| POST | `/api/v1/profiles/{id}/start` | Start by profile |
-| POST | `/api/v1/profiles/{id}/stop` | Stop all processes of profile |
-| POST | `/api/v1/profiles/{id}/restart` | Restart profile processes |
-| GET | `/api/v1/profiles/{id}/status` | Processes status |
-| POST | `/api/v1/profiles/{id}/activate` | Activate |
-| POST | `/api/v1/profiles/{id}/deactivate` | Deactivate |
+| GET | `/api/v1/models` | List models |
+| GET | `/api/v1/models/{id}` | Get model |
+| POST | `/api/v1/models` | Create model |
+| PUT | `/api/v1/models/{id}` | Update model |
+| DELETE | `/api/v1/models/{id}` | Delete model |
+| POST | `/api/v1/models/{id}/start` | Start an instance |
+| POST | `/api/v1/models/{id}/stop` | Stop active instances |
+| POST | `/api/v1/models/{id}/restart` | Restart |
+| GET | `/api/v1/models/{id}/status` | Instance status |
+| POST | `/api/v1/models/{id}/activate` | Enable autostart |
+| POST | `/api/v1/models/{id}/deactivate` | Disable autostart |
+| POST | `/api/v1/models/{id}/resolve` | Preview resolved command |
 
-Profile environment values are write-only. The API and Web UI show only their
-keys. Editing other profile fields preserves the stored environment when the
+Model environment values are write-only. The API and Web UI show only their
+keys. Editing other model fields preserves the stored environment when the
 `environment` field is omitted. Send an explicit replacement map to change the
-environment, or `{}` to remove all profile environment entries.
+environment, or `{}` to remove all model environment entries.
 
 ### Runtimes
 
@@ -338,16 +349,6 @@ this file is not an encrypted secret vault.
 | GET | `/api/v1/runtimes/health` | Health of all runtimes |
 | GET | `/api/v1/runtimes/health/{id}` | Health of specific runtime |
 
-### Models
-
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/api/v1/models` | List models |
-| GET | `/api/v1/models/{id}` | Get model |
-| POST | `/api/v1/models` | Create model |
-| PUT | `/api/v1/models/{id}` | Update model |
-| DELETE | `/api/v1/models/{id}` | Delete model |
-
 ### Health Check and Version
 
 | Method | Path | Description |
@@ -364,69 +365,92 @@ this file is not an encrypted secret vault.
 
 ### What is an Instance?
 
-- **Profile** — launch template (configuration)
+- **Model** — configured launch definition (runtime reference + launch args + environment)
 - **Instance** — running process (runtime entity)
 
-One profile can create multiple instances. Stopping an instance does not delete the profile. Restart creates a new instance.
+One model can create multiple instances. Stopping an instance does not delete the model. Restart creates a new instance.
 
 ### CLI Management
 
 ```bash
 # List all instances
-curl http://127.0.0.1:9090/api/v1/instances
+curl http://127.0.0.1:8088/api/v1/instances
 
 # Status of specific instance
-curl http://127.0.0.1:9090/api/v1/instances/INSTANCE_ID
+curl http://127.0.0.1:8088/api/v1/instances/INSTANCE_ID
 
 # Stop instance
-curl -X POST http://127.0.0.1:9090/api/v1/instances/INSTANCE_ID/stop
+curl -X POST http://127.0.0.1:8088/api/v1/instances/INSTANCE_ID/stop
 
 # Restart instance
-curl -X POST http://127.0.0.1:9090/api/v1/instances/INSTANCE_ID/restart
+curl -X POST http://127.0.0.1:8088/api/v1/instances/INSTANCE_ID/restart
 ```
 
 ### Web Interface Management
 
-1. Open http://127.0.0.1:9090
+1. Open http://127.0.0.1:8088
 2. Click on the desired instance
 3. Use **Stop** / **Restart** buttons
 
 ---
 
-## Launch Profiles
+## Models
 
-### Creating a Profile
+A **Model** is a configured launch definition: a runtime reference, launch arguments,
+host/port, and environment. Physical model files (GGUF, MMProj) are not separate
+entities — they are ordinary launch arguments (e.g., `-m <path>`, `--mmproj <path>`).
+
+### Creating a Model
 
 **Via Web Interface:**
 
-1. Go to **Profiles** section
-2. Click **Create Profile**
+1. Go to the **Мои модели** section
+2. Click **+ Добавить модель**
 3. Fill in the fields:
-   - Profile name
+   - Model name
    - Select runtime
-   - Select model (optional)
-   - Specify arguments (optional)
+   - Specify launch arguments (optional)
    - Specify environment variables (optional)
 4. Click **Save**
 
 **Via API:**
 
 ```bash
-curl -X POST http://127.0.0.1:9090/api/v1/profiles \
+curl -X POST http://127.0.0.1:8088/api/v1/models \
   -H "Content-Type: application/json" \
   -d '{
-    "id": "my-profile",
-    "name": "My Profile",
+    "id": "my-model",
+    "name": "My Model",
     "runtimeId": "ollama",
-    "modelId": "llama3",
     "active": true
   }'
 ```
 
+### Example: llama.cpp with Qwen GGUF
+
+A typical llama.cpp model configuration:
+
+```bash
+curl -X POST http://127.0.0.1:8088/api/v1/models \
+  -H "Content-Type: application/json" \
+  -d '{
+    "id": "qwen-35b",
+    "name": "Qwen 3.6 35B",
+    "runtimeId": "llama-cpp",
+    "args": ["-m", "E:\\models\\qwen\\Qwen.gguf", "--mmproj", "E:\\models\\qwen\\mmproj.gguf", "-ngl", "99", "-c", "131072"],
+    "host": "127.0.0.1",
+    "port": 8085,
+    "active": true
+  }'
+```
+
+The resolved command will be:
+`llama-server <runtime-default-args> -m E:\models\qwen\Qwen.gguf --mmproj E:\models\qwen\mmproj.gguf -ngl 99 -c 131072 --host 127.0.0.1 --port 8085`
+
 ### Launch Command Preview
 
 ```bash
-curl -X POST http://127.0.0.1:9090/api/v1/profiles/my-profile/resolve \
+curl -X POST http://127.0.0.1:8088/api/v1/models/my-model/resolve \
   -H "Content-Type: application/json"
 ```
 
@@ -454,7 +478,7 @@ Returns the full command that will be executed.
 **Via API:**
 
 ```bash
-curl -X POST http://127.0.0.1:9090/api/v1/runtimes \
+curl -X POST http://127.0.0.1:8088/api/v1/runtimes \
   -H "Content-Type: application/json" \
   -d '{
     "id": "my-ollama",
@@ -495,28 +519,10 @@ GoAl automatically checks runtime health every 30 seconds. Two types are support
 
 ```bash
 # Health of all runtimes
-curl http://127.0.0.1:9090/api/v1/runtimes/health
+curl http://127.0.0.1:8088/api/v1/runtimes/health
 
 # Health of specific runtime
-curl http://127.0.0.1:9090/api/v1/runtimes/health/ollama
-```
-
----
-
-## Models
-
-### Creating a Model
-
-```bash
-curl -X POST http://127.0.0.1:9090/api/v1/models \
-  -H "Content-Type: application/json" \
-  -d '{
-    "id": "llama3",
-    "name": "Llama 3",
-    "runtimeId": "ollama",
-    "model": "llama3:8b",
-    "active": true
-  }'
+curl http://127.0.0.1:8088/api/v1/runtimes/health/ollama
 ```
 
 ---
@@ -529,24 +535,24 @@ curl -X POST http://127.0.0.1:9090/api/v1/models \
 
 ```bash
 # Logs of specific instance
-curl http://127.0.0.1:9090/api/v1/instances/INSTANCE_ID/logs
+curl http://127.0.0.1:8088/api/v1/instances/INSTANCE_ID/logs
 
 # SSE log stream
-curl http://127.0.0.1:9090/api/v1/logs/stream
+curl http://127.0.0.1:8088/api/v1/logs/stream
 ```
 
 ### Filtering Logs
 
 ```bash
 # With instance_id filter
-curl "http://127.0.0.1:9090/api/v1/logs?instance_id=INSTANCE_ID"
+curl "http://127.0.0.1:8088/api/v1/logs?instance_id=INSTANCE_ID"
 ```
 
 ### Pagination
 
 ```bash
 # Page 2, 50 records per page
-curl "http://127.0.0.1:9090/api/v1/logs?page=2&page_size=50"
+curl "http://127.0.0.1:8088/api/v1/logs?page=2&page_size=50"
 ```
 
 ---
@@ -577,7 +583,7 @@ To make GoAl accessible from the network:
 ```json
 {
   "listenAddress": "0.0.0.0",
-  "webPort": 9090,
+  "webPort": 8088,
   "authEnabled": true,
   "adminPassword": "secure_password_here"
 }
@@ -648,6 +654,21 @@ Get-Service goal
 ```powershell
 .\deploy\windows\uninstall-service.ps1
 ```
+
+---
+
+## Migration (v5 → v6)
+
+If you upgrade from GoAl v1.x, the `goal_repo.json` is automatically migrated on first startup:
+
+| v5 (old) | v6 (new) |
+|----------|----------|
+| `profiles` entries | Become `models` (launch definitions) |
+| `models` entries (physical GGUF) | Folded into the model's launch args (e.g., `-m <path>`) |
+| Instance `profile_id` | Renamed to `model_id` |
+| Instance history | Preserved unchanged |
+
+The resolved launch command is identical before and after migration. No user action is required.
 
 ---
 

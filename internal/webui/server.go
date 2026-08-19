@@ -31,7 +31,6 @@ var staticFS embed.FS
 type App struct {
 	cfg           *config.Config
 	supervisor    *process.Supervisor
-	profileSvc    *application.ProfileService
 	instanceSvc   *application.InstanceService
 	runtimeSvc    *application.RuntimeService
 	modelSvc      *application.ModelService
@@ -46,7 +45,6 @@ type App struct {
 
 // NewApp creates server dependencies.
 func NewApp(cfg *config.Config, repo storage.Repository, supervisor *process.Supervisor) (*App, error) {
-	profileSvc := application.NewProfileService(repo)
 	instanceSvc := application.NewInstanceService(supervisor, repo)
 	runtimeSvc := application.NewRuntimeService(repo)
 	modelSvc := application.NewModelService(repo)
@@ -54,7 +52,6 @@ func NewApp(cfg *config.Config, repo storage.Repository, supervisor *process.Sup
 	a := &App{
 		cfg:           cfg,
 		supervisor:    supervisor,
-		profileSvc:    profileSvc,
 		instanceSvc:   instanceSvc,
 		runtimeSvc:    runtimeSvc,
 		modelSvc:      modelSvc,
@@ -104,7 +101,6 @@ func (a *App) Router() http.Handler {
 // InitRegistry creates the route registry.
 func (a *App) InitRegistry() {
 	a.reg = handlers.NewRouteRegistry(
-		a.profileSvc,
 		a.instanceSvc,
 		a.runtimeSvc,
 		a.modelSvc,
@@ -141,24 +137,26 @@ func (a *App) buildRuntimeDefs() []health.RuntimeDef {
 	if err != nil {
 		return nil
 	}
-	defsMap := make(map[string]health.RuntimeDef)
+	rtNames := make(map[string]string)
 	for _, rt := range runtimes {
-		defsMap[rt.ID] = health.RuntimeDef{
-			ID:   rt.ID,
-			Name: rt.Name,
-			Host: "127.0.0.1",
-			Port: 0,
-		}
+		rtNames[rt.ID] = rt.Name
 	}
-	profiles, _ := a.repo.ListProfiles()
-	for _, p := range profiles {
-		if def, ok := defsMap[p.RuntimeID]; ok {
-			defsMap[p.RuntimeID] = health.RuntimeDef{
-				ID:   p.RuntimeID,
-				Name: def.Name,
-				Host: p.Host,
-				Port: p.Port,
-			}
+	models, _ := a.repo.ListModels()
+	defsMap := make(map[string]health.RuntimeDef)
+	for _, m := range models {
+		host, port := extractHostPort(m.Args)
+		if port == 0 {
+			continue
+		}
+		name, ok := rtNames[m.RuntimeID]
+		if !ok {
+			name = m.RuntimeID
+		}
+		defsMap[m.RuntimeID] = health.RuntimeDef{
+			ID:   m.RuntimeID,
+			Name: name,
+			Host: host,
+			Port: port,
 		}
 	}
 	defs := make([]health.RuntimeDef, 0, len(defsMap))
@@ -166,6 +164,20 @@ func (a *App) buildRuntimeDefs() []health.RuntimeDef {
 		defs = append(defs, d)
 	}
 	return defs
+}
+
+func extractHostPort(args []string) (string, int) {
+	host := "127.0.0.1"
+	port := 0
+	for i := 0; i < len(args)-1; i++ {
+		switch args[i] {
+		case "--host":
+			host = args[i+1]
+		case "--port":
+			fmt.Sscanf(args[i+1], "%d", &port)
+		}
+	}
+	return host, port
 }
 
 func (a *App) refreshHealthChecks() {

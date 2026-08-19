@@ -72,9 +72,9 @@ func TestHandler_AllMetricsPresent(t *testing.T) {
 		"goal_uptime_seconds",
 		"goal_http_requests_total",
 		"goal_http_errors_total",
-		"goal_profiles_started_total",
-		"goal_profiles_stopped_total",
-		"goal_profiles_failed_total",
+		"goal_models_started_total",
+		"goal_models_stopped_total",
+		"goal_models_failed_total",
 		"goal_sessions_created_total",
 		"goal_sessions_expired_total",
 		"goal_go_memstats_alloc_bytes",
@@ -151,14 +151,14 @@ func TestRecordError(t *testing.T) {
 	}
 }
 
-func TestRecordProfileMetrics(t *testing.T) {
+func TestRecordModelMetrics(t *testing.T) {
 	m := NewManager()
 	handler := m.Handler()
 
-	m.RecordProfileStart()
-	m.RecordProfileStart()
-	m.RecordProfileStop()
-	m.RecordProfileFailed()
+	m.RecordModelStart()
+	m.RecordModelStart()
+	m.RecordModelStop()
+	m.RecordModelFailed()
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/metrics", nil)
 	rec := httptest.NewRecorder()
@@ -167,14 +167,14 @@ func TestRecordProfileMetrics(t *testing.T) {
 
 	body := rec.Body.String()
 
-	if !strings.Contains(body, "goal_profiles_started_total 2") {
-		t.Error("expected goal_profiles_started_total to be 2")
+	if !strings.Contains(body, "goal_models_started_total 2") {
+		t.Error("expected goal_models_started_total to be 2")
 	}
-	if !strings.Contains(body, "goal_profiles_stopped_total 1") {
-		t.Error("expected goal_profiles_stopped_total to be 1")
+	if !strings.Contains(body, "goal_models_stopped_total 1") {
+		t.Error("expected goal_models_stopped_total to be 1")
 	}
-	if !strings.Contains(body, "goal_profiles_failed_total 1") {
-		t.Error("expected goal_profiles_failed_total to be 1")
+	if !strings.Contains(body, "goal_models_failed_total 1") {
+		t.Error("expected goal_models_failed_total to be 1")
 	}
 }
 

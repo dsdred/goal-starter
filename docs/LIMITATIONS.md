@@ -1,6 +1,6 @@
 # Limitations
 
-This document lists the verified limitations of GoAl v1.0.0. Each item is either a deliberate design decision or a known gap.
+This document lists the verified limitations of GoAl 2.0. Each item is either a deliberate design decision or a known gap.
 
 ## Process lifecycle
 
@@ -28,7 +28,7 @@ If a process starts successfully but persistence fails, the process continues ru
 
 ### WebSocket is not wired
 
-`/ws` is implemented in `internal/webui/websocket/` but not registered in `routes.go`. WebSocket is **not** part of the V1 public API contract.
+`/ws` is implemented in `internal/webui/websocket/` but not registered in `routes.go`. WebSocket is **not** part of the public API contract.
 
 ### Historical logs are in-memory
 
@@ -44,9 +44,9 @@ If a process starts successfully but persistence fails, the process continues ru
 
 `GET /api/v1/runtimes/health` returns instance-based health (count and running instance details). The periodic TCP health checker (`HealthChecker` in `internal/webui/health/`) stores results internally but does not expose them via a separate API endpoint.
 
-### HTTP health check is profile/runtime only
+### HTTP health check is model/runtime only
 
-HTTP health checks use `ProfileHealthCheck` and `RuntimeHealthCheck` configuration. The checker targets `host:port` with optional `httpPath` and `httpStatus`.
+Health check configuration is available in the goal.json config format for both models and runtimes. The checker targets `host:port` with optional `httpPath` and `httpStatus`.
 
 ## Configuration
 
@@ -60,9 +60,9 @@ HTTP health checks use `ProfileHealthCheck` and `RuntimeHealthCheck` configurati
 
 Hot-reload is implemented (`internal/config/reload.go`) but not connected to main startup. The config file is read once at startup.
 
-### Schema migration v1 → v2 only
+### Schema migration
 
-Only one migration step exists: `1 -> 2` (add default health check config). Future schema changes require manual migration or recreation.
+Config schema: `1 -> 2` (add default health check config). Storage schema: `5 -> 6` (profiles become models, old physical models folded into args). Both run automatically at startup.
 
 ## Security
 
@@ -88,23 +88,23 @@ No SQLite, PostgreSQL, or other database backend. Single JSON file with atomic w
 
 `JSONRepository` uses a sync.Mutex for write protection. Concurrent writes from different processes (e.g., multiple GoAl instances pointing at the same `goal_repo.json`) may race.
 
-### No schema versioning
+### No schema versioning framework
 
-Schema version is tracked (`version` field) but no automatic schema migration framework exists beyond the single v1→v2 step.
+Schema version is tracked (`version` field) with automatic migrations for config (v1→v2) and storage (v5→v6). No general-purpose migration framework exists; future schema changes require code-level migration functions.
 
 ## Packaging
 
 ### Windows only via PowerShell service scripts
 
-`deploy/windows/install-service.ps1` and `uninstall-service.ps1` provide Windows service installation. No MSI installer or Chocolatey package in V1.
+`deploy/windows/install-service.ps1` and `uninstall-service.ps1` provide Windows service installation. No MSI installer or Chocolatey package.
 
 ### Linux only via systemd unit file
 
-`deploy/systemd/goal.service` provides systemd integration. No .deb/.rpm packages in V1.
+`deploy/systemd/goal.service` provides systemd integration. No .deb/.rpm packages.
 
 ## ARM64
 
-ARM64 is not tested in V1. Cross-compilation works (`GOOS=linux GOARCH=arm64`) but runtime behavior is unverified.
+ARM64 is not tested. Cross-compilation works (`GOOS=linux GOARCH=arm64`) but runtime behavior is unverified.
 
 ## Web UI
 
@@ -114,4 +114,4 @@ The Web UI is served from embedded filesystems. The binary must be self-containe
 
 ## Auto-update
 
-Auto-update via GitHub Releases API exists (`internal/updater/updater.go`) but is not wired into the Web UI in V1.
+Auto-update via GitHub Releases API exists (`internal/updater/updater.go`) but is not wired into the Web UI.

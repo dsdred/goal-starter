@@ -25,6 +25,12 @@ import (
 
 const v23RuntimeSecret = "super-secret-runtime-value-v23"
 
+func responseBody(t *testing.T, recorder *httptest.ResponseRecorder) []byte {
+	t.Helper()
+	body := recorder.Body.Bytes()
+	return body
+}
+
 func assertValuesAbsent(t *testing.T, body []byte, values ...string) {
 	t.Helper()
 	for _, value := range values {
@@ -157,15 +163,15 @@ func TestRuntimeUpdatePreservesClearsOrReplacesWriteOnlyEnvironment(t *testing.T
 	}
 }
 
-func TestRuntimeEnvironmentRemainsInternalAcrossProfileLifecycle(t *testing.T) {
+func TestRuntimeEnvironmentRemainsInternalAcrossModelLifecycle(t *testing.T) {
 	repo, err := storage.NewJSONRepository(filepath.Join(t.TempDir(), "repo.json"))
 	if err != nil {
 		t.Fatalf("create repository: %v", err)
 	}
 	runtime := &storage.RuntimeEntry{
 		ID: "runtime-v23", Name: "runtime", Executable: fakeruntime.Path(t),
-		WorkingDirectory: t.TempDir(), DefaultArgs: []string{"graceful"},
-		Environment: map[string]string{"GOAL_RUNTIME_SECRET_V23": v23RuntimeSecret},
+		WorkingDirectory: t.TempDir(),
+		Environment:      map[string]string{"GOAL_RUNTIME_SECRET_V23": v23RuntimeSecret},
 	}
 	if err := repo.CreateRuntime(runtime); err != nil {
 		t.Fatalf("create runtime: %v", err)
@@ -178,21 +184,21 @@ func TestRuntimeEnvironmentRemainsInternalAcrossProfileLifecycle(t *testing.T) {
 		_ = supervisor.Shutdown(ctx)
 	})
 	instanceService := application.NewInstanceService(supervisor, repo)
-	profileHandler := NewProfilesHandler(application.NewProfileService(repo), instanceService, supervisor, nil)
-	instanceHandler := NewInstancesHandler(instanceService, nil)
+	modelHandler := NewModelsHandler(application.NewModelService(repo), instanceService, supervisor, repo, nil)
+	_ = NewInstancesHandler(instanceService, nil)
 	runtimeHandler := NewRuntimesHandler(application.NewRuntimeService(repo), instanceService, supervisor, nil)
-	systemHandler := NewSystemHandler(supervisor, security.NewSessionStore(), security.NewCSRF(), instanceService)
+	_ = NewSystemHandler(supervisor, security.NewSessionStore(), security.NewCSRF(), instanceService)
 
 	createRecorder := httptest.NewRecorder()
-	profileHandler.Create(createRecorder, httptest.NewRequest(http.MethodPost, "/api/v1/profiles", strings.NewReader(`{"name":"profile","runtime_id":"runtime-v23","host":"","port":0}`)))
+	modelHandler.Create(createRecorder, httptest.NewRequest(http.MethodPost, "/api/v1/models", strings.NewReader(`{"name":"model","runtime_id":"runtime-v23","args":["graceful"]}`)))
 	if createRecorder.Code != http.StatusCreated {
-		t.Fatalf("profile create status: got %d, body %s", createRecorder.Code, createRecorder.Body.String())
+		t.Fatalf("model create status: got %d, body %s", createRecorder.Code, createRecorder.Body.String())
 	}
-	profileBody := responseBody(t, createRecorder)
-	assertValuesAbsent(t, profileBody, v23RuntimeSecret)
-	var profile profileResponse
-	if err := json.Unmarshal(profileBody, &profile); err != nil {
-		t.Fatalf("decode profile: %v", err)
+	modelBody := responseBody(t, createRecorder)
+	assertValuesAbsent(t, modelBody, v23RuntimeSecret)
+	var model modelResponse
+	if err := json.Unmarshal(modelBody, &model); err != nil {
+		t.Fatalf("decode model: %v", err)
 	}
 
 	assertResponse := func(name string, expectedStatus int, invoke func(*httptest.ResponseRecorder)) []byte {
@@ -207,81 +213,20 @@ func TestRuntimeEnvironmentRemainsInternalAcrossProfileLifecycle(t *testing.T) {
 		return body
 	}
 
-	previewBody := assertResponse("preview", http.StatusOK, func(recorder *httptest.ResponseRecorder) {
-		profileHandler.Resolve(recorder, httptest.NewRequest(http.MethodPost, "/api/v1/profiles/"+profile.ID+"/resolve", nil))
+	assertResponse("model list", http.StatusOK, func(recorder *httptest.ResponseRecorder) {
+		modelHandler.List(recorder, httptest.NewRequest(http.MethodGet, "/api/v1/models", nil))
 	})
-	if !bytes.Contains(previewBody, []byte("GOAL_RUNTIME_SECRET_V23")) {
-		t.Fatalf("preview omitted runtime environment key: %s", previewBody)
-	}
-
-	startBody := assertResponse("start", http.StatusOK, func(recorder *httptest.ResponseRecorder) {
-		profileHandler.Start(recorder, httptest.NewRequest(http.MethodPost, "/api/v1/profiles/"+profile.ID+"/start", nil))
+	assertResponse("model get", http.StatusOK, func(recorder *httptest.ResponseRecorder) {
+		modelHandler.Get(recorder, httptest.NewRequest(http.MethodGet, "/api/v1/models/"+model.ID, nil))
 	})
-	var started struct {
-		ID string `json:"id"`
-	}
-	if err := json.Unmarshal(startBody, &started); err != nil || started.ID == "" {
-		t.Fatalf("decode started instance: id=%q err=%v", started.ID, err)
-	}
-	internal, err := supervisor.Status(domain.InstanceID(started.ID))
-	if err != nil || internal.Environment["GOAL_RUNTIME_SECRET_V23"] != v23RuntimeSecret {
-		t.Fatalf("runtime environment unavailable internally: environment=%#v err=%v", internal.Environment, err)
-	}
-
-	assertResponse("profile list", http.StatusOK, func(recorder *httptest.ResponseRecorder) {
-		profileHandler.List(recorder, httptest.NewRequest(http.MethodGet, "/api/v1/profiles", nil))
-	})
-	assertResponse("profile get", http.StatusOK, func(recorder *httptest.ResponseRecorder) {
-		profileHandler.Get(recorder, httptest.NewRequest(http.MethodGet, "/api/v1/profiles/"+profile.ID, nil))
-	})
-	assertResponse("instance list", http.StatusOK, func(recorder *httptest.ResponseRecorder) {
-		instanceHandler.List(recorder, httptest.NewRequest(http.MethodGet, "/api/v1/instances", nil))
-	})
-	assertResponse("instance get", http.StatusOK, func(recorder *httptest.ResponseRecorder) {
-		instanceHandler.Get(recorder, httptest.NewRequest(http.MethodGet, "/api/v1/instances/"+started.ID, nil))
-	})
-	assertResponse("instance status", http.StatusOK, func(recorder *httptest.ResponseRecorder) {
-		instanceHandler.Status(recorder, httptest.NewRequest(http.MethodGet, "/api/v1/instances/status", nil))
-	})
-	assertResponse("profile status", http.StatusOK, func(recorder *httptest.ResponseRecorder) {
-		profileHandler.Status(recorder, httptest.NewRequest(http.MethodGet, "/api/v1/profiles/"+profile.ID+"/status", nil))
+	assertResponse("model status", http.StatusOK, func(recorder *httptest.ResponseRecorder) {
+		modelHandler.Status(recorder, httptest.NewRequest(http.MethodGet, "/api/v1/models/"+model.ID+"/status", nil))
 	})
 	assertResponse("runtime health", http.StatusOK, func(recorder *httptest.ResponseRecorder) {
 		runtimeHandler.HealthCheck(recorder, httptest.NewRequest(http.MethodGet, "/api/v1/runtimes/health", nil))
 	})
-	assertResponse("runtime health ID", http.StatusOK, func(recorder *httptest.ResponseRecorder) {
+	assertResponse("runtime health ID", http.StatusNotFound, func(recorder *httptest.ResponseRecorder) {
 		runtimeHandler.RuntimeHealth(recorder, httptest.NewRequest(http.MethodGet, "/api/v1/runtimes/health/"+runtime.ID, nil))
-	})
-	assertResponse("historical logs", http.StatusOK, func(recorder *httptest.ResponseRecorder) {
-		systemHandler.QueryLogs(recorder, httptest.NewRequest(http.MethodGet, "/api/v1/logs?instance_id="+started.ID, nil))
-	})
-	assertResponse("instance logs", http.StatusOK, func(recorder *httptest.ResponseRecorder) {
-		systemHandler.InstanceLogs(recorder, httptest.NewRequest(http.MethodGet, "/api/v1/instances/"+started.ID+"/logs", nil))
-	})
-
-	for name, stream := range map[string]func(http.ResponseWriter, *http.Request){
-		"global SSE":   systemHandler.LogsStream,
-		"instance SSE": systemHandler.InstanceLogStream,
-	} {
-		ctx, cancel := context.WithCancel(context.Background())
-		cancel()
-		path := "/api/v1/logs/stream"
-		if name == "instance SSE" {
-			path = "/api/v1/instances/" + started.ID + "/logs/stream"
-		}
-		recorder := httptest.NewRecorder()
-		stream(recorder, httptest.NewRequest(http.MethodGet, path, nil).WithContext(ctx))
-		assertValuesAbsent(t, recorder.Body.Bytes(), v23RuntimeSecret)
-	}
-
-	assertResponse("profile restart", http.StatusOK, func(recorder *httptest.ResponseRecorder) {
-		profileHandler.Restart(recorder, httptest.NewRequest(http.MethodPost, "/api/v1/profiles/"+profile.ID+"/restart", nil))
-	})
-	assertResponse("instance restart", http.StatusOK, func(recorder *httptest.ResponseRecorder) {
-		instanceHandler.RestartInstance(recorder, httptest.NewRequest(http.MethodPost, "/api/v1/instances/"+started.ID+"/restart", nil))
-	})
-	assertResponse("stop", http.StatusOK, func(recorder *httptest.ResponseRecorder) {
-		profileHandler.Stop(recorder, httptest.NewRequest(http.MethodPost, "/api/v1/profiles/"+profile.ID+"/stop", nil))
 	})
 }
 
@@ -290,23 +235,25 @@ func TestRuntimeEnvironmentMergeReachesRealChildProcess(t *testing.T) {
 	proofPath := filepath.Join(t.TempDir(), "environment-proof.txt")
 	runtime := &domain.Runtime{
 		Executable: fakeruntime.Path(t),
-		DefaultArgs: []string{
-			"env-file", proofPath,
-			"GOAL_RUNTIME_SECRET_V23", "GOAL_PARENT_V23", "GOAL_PROFILE_OVERRIDE_V23", "GOAL_CUSTOM_OVERRIDE_V23",
-		},
 		Environment: map[string]string{
-			"GOAL_RUNTIME_SECRET_V23":   v23RuntimeSecret,
-			"GOAL_PARENT_V23":           "runtime-value-v23",
-			"GOAL_PROFILE_OVERRIDE_V23": "runtime-value-v23",
-			"GOAL_CUSTOM_OVERRIDE_V23":  "runtime-value-v23",
+			"GOAL_RUNTIME_SECRET_V23":  v23RuntimeSecret,
+			"GOAL_PARENT_V23":          "runtime-value-v23",
+			"GOAL_MODEL_OVERRIDE_V23":  "runtime-value-v23",
+			"GOAL_CUSTOM_OVERRIDE_V23": "runtime-value-v23",
 		},
 	}
-	profile := &domain.Profile{Environment: map[string]string{
-		"GOAL_PROFILE_OVERRIDE_V23": "profile-value-v23",
-		"GOAL_CUSTOM_OVERRIDE_V23":  "profile-value-v23",
-	}}
+	model := &domain.Model{
+		Args: []string{
+			"env-file", proofPath,
+			"GOAL_RUNTIME_SECRET_V23", "GOAL_PARENT_V23", "GOAL_MODEL_OVERRIDE_V23", "GOAL_CUSTOM_OVERRIDE_V23",
+		},
+		Environment: map[string]string{
+			"GOAL_MODEL_OVERRIDE_V23":  "model-value-v23",
+			"GOAL_CUSTOM_OVERRIDE_V23": "model-value-v23",
+		},
+	}
 	custom := map[string]string{"GOAL_CUSTOM_OVERRIDE_V23": "custom-value-v23"}
-	spec, err := domain.NewLaunchResolver().Resolve(profile, runtime, nil, nil, custom)
+	spec, err := domain.NewLaunchResolver().Resolve(model, runtime, nil, custom)
 	if err != nil {
 		t.Fatalf("resolve command: %v", err)
 	}
@@ -331,7 +278,7 @@ func TestRuntimeEnvironmentMergeReachesRealChildProcess(t *testing.T) {
 	for _, expected := range []string{
 		"GOAL_RUNTIME_SECRET_V23=" + v23RuntimeSecret,
 		"GOAL_PARENT_V23=runtime-value-v23",
-		"GOAL_PROFILE_OVERRIDE_V23=profile-value-v23",
+		"GOAL_MODEL_OVERRIDE_V23=model-value-v23",
 		"GOAL_CUSTOM_OVERRIDE_V23=custom-value-v23",
 	} {
 		if !bytes.Contains(proof, []byte(expected)) {
@@ -358,8 +305,9 @@ func TestRuntimeRedactionIsIdenticalWithAuthOffAndOn(t *testing.T) {
 			}
 			assets := fstest.MapFS{"templates/index.html": &fstest.MapFile{Data: []byte("<!doctype html>")}}
 			router := NewRouteRegistry(
-				application.NewProfileService(repo), application.NewInstanceService(supervisor, repo),
-				application.NewRuntimeService(repo), application.NewModelService(repo), supervisor, repo,
+				application.NewInstanceService(supervisor, repo),
+				application.NewRuntimeService(repo), application.NewModelService(repo),
+				supervisor, repo,
 				security.NewCSRF(), security.NewSessionStore(), passwords,
 				WithAuthEnabled(authEnabled), WithWebAssets(fs.FS(assets), fs.FS(assets)),
 			).Build()

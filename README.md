@@ -1,14 +1,17 @@
 # GoAl
 
-GoAl is a lightweight, single-binary manager for local AI runtimes, models, and launch profiles. One executable for Windows amd64 and Linux amd64.
+GoAl is a lightweight, single-binary manager for local AI runtimes and models. One executable for Windows amd64 and Linux amd64.
+
+**Architecture:** Runtime ← Model → Instance. A Runtime is an execution engine (executable, working directory, environment). A Model is a configured launch definition (runtime + launch arguments + environment). An Instance is a concrete process launch (PID, state, logs). Physical GGUF/MMProj files are ordinary launch arguments, not separate entities.
 
 **Latest stable: v1.0.3** — [GitHub Releases](https://github.com/dsdred/goal-starter/releases/tag/v1.0.3)
 
 ## Key features
 
 - **Runtime CRUD** — configure Ollama, llama.cpp, vLLM, or custom inference servers
-- **Model management** — GGUF files, inline arguments, environment variables
-- **Profile-based launches** — combine Runtime + Model + custom args into reusable launch templates
+- **Model CRUD** — configured launch definitions (runtime + args + environment)
+- **Instance lifecycle** — start, stop, restart; multi-instance supervisor
+- **Launch command preview** — resolve and inspect the full command before starting
 - **Multi-instance supervisor** — run several processes concurrently with configurable concurrency limits
 - **Live logs** — SSE streaming with instance filtering and pagination
 - **Historical logs** — paginated, searchable query with time-range and stream filters
@@ -26,7 +29,7 @@ $env:GOAL_CONFIG = (Resolve-Path .\goal.json)
 go run .\cmd\goal
 ```
 
-Then open **http://127.0.0.1:9090** in your browser.
+Then open **http://127.0.0.1:8088** in your browser.
 
 ## Minimal configuration
 
@@ -34,12 +37,12 @@ Then open **http://127.0.0.1:9090** in your browser.
 {
   "version": 2,
   "listenAddress": "127.0.0.1",
-  "webPort": 9090,
+  "webPort": 8088,
   "dataDir": "./data"
 }
 ```
 
-No runtimes, models, or profiles are required to start. The Web UI lets you configure everything.
+No runtimes or models are required to start. The Web UI lets you configure everything.
 
 ## Platforms
 

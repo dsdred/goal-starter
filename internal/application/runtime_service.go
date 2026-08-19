@@ -49,13 +49,9 @@ func (s *RuntimeService) UpdateRuntime(ctx context.Context, entry *storage.Runti
 }
 
 // DeleteRuntime deletes a runtime by ID. Returns a conflict error if any model
-// or profile references this runtime.
+// references this runtime.
 func (s *RuntimeService) DeleteRuntime(ctx context.Context, id string) error {
 	models, err := s.repo.ListModels()
-	if err != nil {
-		return err
-	}
-	profiles, err := s.repo.ListProfiles()
 	if err != nil {
 		return err
 	}
@@ -65,14 +61,48 @@ func (s *RuntimeService) DeleteRuntime(ctx context.Context, id string) error {
 			dependents = append(dependents, "model: "+m.Name)
 		}
 	}
-	for _, p := range profiles {
-		if p.RuntimeID == id {
-			dependents = append(dependents, "profile: "+p.Name)
-		}
-	}
 	if len(dependents) > 0 {
 		return errors.NewAPIError(errors.CodeConflict,
 			"runtime is in use", dependents...)
 	}
 	return s.repo.DeleteRuntime(id)
+}
+
+// ReplaceRuntime atomically rebinds all models that reference oldID to newID,
+// then deletes oldID. Returns the number of models moved.
+func (s *RuntimeService) ReplaceRuntime(ctx context.Context, oldID, newID string) (int, error) {
+	if oldID == "" {
+		return 0, errors.ErrRuntimeNotFound("")
+	}
+	if newID == "" {
+		return 0, errors.ErrRuntimeNotFound("")
+	}
+	if _, err := s.repo.GetRuntime(oldID); err != nil {
+		return 0, errors.ErrRuntimeNotFound(oldID)
+	}
+	if _, err := s.repo.GetRuntime(newID); err != nil {
+		return 0, errors.ErrRuntimeNotFound(newID)
+	}
+	moved, err := s.repo.ReplaceRuntimeAndDelete(oldID, newID)
+	if err != nil {
+		return 0, err
+	}
+	return moved, nil
+}
+
+// CascadeDeleteRuntime atomically deletes the runtime and all models that
+// reference it. Instance history is preserved. Returns the number of models
+// deleted.
+func (s *RuntimeService) CascadeDeleteRuntime(ctx context.Context, id string) (int, error) {
+	if id == "" {
+		return 0, errors.ErrRuntimeNotFound("")
+	}
+	if _, err := s.repo.GetRuntime(id); err != nil {
+		return 0, errors.ErrRuntimeNotFound(id)
+	}
+	deleted, err := s.repo.CascadeDeleteRuntimeAndModels(id)
+	if err != nil {
+		return 0, err
+	}
+	return deleted, nil
 }

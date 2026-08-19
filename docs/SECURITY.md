@@ -1,6 +1,6 @@
 # Security
 
-This document describes the security model of GoAl v1.0.0 as implemented in production code.
+This document describes the security model of GoAl 2.0 as implemented in production code.
 
 ## Authentication
 
@@ -62,20 +62,20 @@ GoAl has a single admin user. There are no roles or permissions — if the user 
 | Session tokens | In-memory store | Yes (expiry-based) |
 | CSRF tokens | Cookie + header | Rotated on login |
 
-Runtime and profile process environment values can contain sensitive
+Runtime and model process environment values can contain sensitive
 configuration. They are stored in the local `goal_repo.json` without encryption
 and must be protected through filesystem permissions. They are write-only over
 the HTTP API: responses expose sorted environment variable names, never values.
 GoAl is not a secret vault.
 
-For runtime and profile updates, omitting `environment` preserves stored values,
+For runtime and model updates, omitting `environment` preserves stored values,
 an explicit empty object clears them, and an explicit map replaces them. The
 `AdminPassword` remains configured separately through `goal.json` or the Web UI.
 
-Profile environment values are treated as write-only API data. They remain in
-the authoritative local repository so the runtime can receive them, but profile
+Model environment values are treated as write-only API data. They remain in
+the authoritative local repository so the runtime can receive them, but model
 responses and browser previews expose only environment variable names. An
-unrelated profile update preserves existing values when `environment` is
+unrelated model update preserves existing values when `environment` is
 omitted; callers must send an explicit map to replace or clear them.
 
 Runtime environment values follow the same write-only response contract and
@@ -99,7 +99,7 @@ For network access:
 ```json
 {
   "listenAddress": "0.0.0.0",
-  "webPort": 9090,
+  "webPort": 8088,
   "authEnabled": true,
   "adminPassword": "secure_hash_or_plaintext"
 }

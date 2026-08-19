@@ -99,12 +99,12 @@ func (m *mockStore) List() ([]*domain.LaunchInstanceEntry, error) {
 	return result, nil
 }
 
-func (m *mockStore) ListByProfileID(profileID string) ([]*domain.LaunchInstanceEntry, error) {
+func (m *mockStore) ListByModelID(modelID string) ([]*domain.LaunchInstanceEntry, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	result := make([]*domain.LaunchInstanceEntry, 0)
 	for _, e := range m.instances {
-		if e.ProfileID == profileID {
+		if e.ModelID == modelID {
 			ec := *e
 			result = append(result, &ec)
 		}
@@ -316,11 +316,10 @@ func TestSupervisorStartFailureReleasesSlot(t *testing.T) {
 	sem := make(chan struct{}, 1)
 	sem <- struct{}{}
 	sup.semaphore = sem
-	profile := &domain.Profile{ID: "p1", Name: "test"}
+	model := &domain.Model{ID: "m1", Name: "test", RuntimeID: "rt1"}
 	rt := &domain.Runtime{ID: "rt1", Name: "test-rt", Executable: "/nonexistent/path"}
-	model := &domain.Model{ID: "m1", Name: "test-model"}
 	ctx := context.Background()
-	_, err := sup.Start(ctx, profile, rt, model, nil, nil)
+	_, err := sup.Start(ctx, model, rt, nil, nil)
 	if err == nil {
 		t.Fatal("expected error for invalid executable")
 	}
@@ -336,11 +335,10 @@ func TestSupervisorNaturalExitReleasesSlot(t *testing.T) {
 	store := newMockStore()
 	cfg := SupervisorConfig{MaxConcurrent: 1, LogBufferSize: 64}
 	sup := newTestSupervisor(t, store, cfg)
-	profile := &domain.Profile{ID: "p1", Name: "test"}
+	model := &domain.Model{ID: "m1", Name: "test", RuntimeID: "rt1"}
 	rt := &domain.Runtime{ID: "rt1", Name: "test-rt", Executable: buildFakeRuntimeForTest(t)}
-	model := &domain.Model{ID: "m1", Name: "test-model"}
 	ctx := context.Background()
-	inst, err := sup.Start(ctx, profile, rt, model, []string{"-sleep", "0"}, nil)
+	inst, err := sup.Start(ctx, model, rt, []string{"-sleep", "0"}, nil)
 	if err != nil {
 		t.Fatalf("start failed: %v", err)
 	}
@@ -371,11 +369,10 @@ func TestSupervisorStopReleasesSlot(t *testing.T) {
 	store := newMockStore()
 	cfg := SupervisorConfig{MaxConcurrent: 1, LogBufferSize: 64}
 	sup := newTestSupervisor(t, store, cfg)
-	profile := &domain.Profile{ID: "p1", Name: "test"}
+	model := &domain.Model{ID: "m1", Name: "test", RuntimeID: "rt1"}
 	rt := &domain.Runtime{ID: "rt1", Name: "test-rt", Executable: buildFakeRuntimeForTest(t)}
-	model := &domain.Model{ID: "m1", Name: "test-model"}
 	ctx := context.Background()
-	_, err := sup.Start(ctx, profile, rt, model, []string{"-sleep", "2"}, nil)
+	_, err := sup.Start(ctx, model, rt, []string{"-sleep", "2"}, nil)
 	if err != nil {
 		t.Fatalf("start failed: %v", err)
 	}
@@ -399,11 +396,10 @@ func TestSupervisorForceKillReleasesSlot(t *testing.T) {
 	store := newMockStore()
 	cfg := SupervisorConfig{MaxConcurrent: 1, LogBufferSize: 64}
 	sup := newTestSupervisor(t, store, cfg)
-	profile := &domain.Profile{ID: "p1", Name: "test"}
+	model := &domain.Model{ID: "m1", Name: "test", RuntimeID: "rt1"}
 	rt := &domain.Runtime{ID: "rt1", Name: "test-rt", Executable: buildFakeRuntimeForTest(t)}
-	model := &domain.Model{ID: "m1", Name: "test-model"}
 	ctx := context.Background()
-	_, err := sup.Start(ctx, profile, rt, model, []string{"-sleep", "2"}, nil)
+	_, err := sup.Start(ctx, model, rt, []string{"-sleep", "2"}, nil)
 	if err != nil {
 		t.Fatalf("start failed: %v", err)
 	}
@@ -440,11 +436,10 @@ func TestSupervisorRestartReusesSlot(t *testing.T) {
 	store := newMockStore()
 	cfg := SupervisorConfig{MaxConcurrent: 1, LogBufferSize: 64}
 	sup := newTestSupervisor(t, store, cfg)
-	profile := &domain.Profile{ID: "p1", Name: "test"}
+	model := &domain.Model{ID: "m1", Name: "test", RuntimeID: "rt1"}
 	rt := &domain.Runtime{ID: "rt1", Name: "test-rt", Executable: buildFakeRuntimeForTest(t)}
-	model := &domain.Model{ID: "m1", Name: "test-model"}
 	ctx := context.Background()
-	inst, err := sup.Start(ctx, profile, rt, model, []string{"-sleep", "0"}, nil)
+	inst, err := sup.Start(ctx, model, rt, []string{"-sleep", "0"}, nil)
 	if err != nil {
 		t.Fatalf("start failed: %v", err)
 	}
@@ -486,9 +481,9 @@ func TestControllerDoneClosesAfterFinalPersistence(t *testing.T) {
 	}
 
 	sup := newTestSupervisor(t, store, SupervisorConfig{LogBufferSize: 64})
-	profile := &domain.Profile{ID: "done-order", Name: "done-order"}
+	model := &domain.Model{ID: "done-order", Name: "done-order", RuntimeID: "runtime"}
 	runtime := &domain.Runtime{ID: "runtime", Name: "runtime", Executable: buildFakeRuntimeForTest(t)}
-	inst, err := sup.Start(context.Background(), profile, runtime, nil, []string{"exit-code", "0"}, nil)
+	inst, err := sup.Start(context.Background(), model, runtime, []string{"exit-code", "0"}, nil)
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -528,9 +523,9 @@ func TestRestartWaitsForTerminalRunCompletionBeforePublishingNextRun(t *testing.
 	}
 
 	sup := newTestSupervisor(t, store, SupervisorConfig{LogBufferSize: 64})
-	profile := &domain.Profile{ID: "restart-order", Name: "restart-order"}
+	model := &domain.Model{ID: "restart-order", Name: "restart-order", RuntimeID: "runtime"}
 	runtime := &domain.Runtime{ID: "runtime", Name: "runtime", Executable: buildFakeRuntimeForTest(t)}
-	inst, err := sup.Start(context.Background(), profile, runtime, nil, []string{"exit-code", "0"}, nil)
+	inst, err := sup.Start(context.Background(), model, runtime, []string{"exit-code", "0"}, nil)
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -581,9 +576,9 @@ func TestRestartWaitsForTerminalRunCompletionBeforePublishingNextRun(t *testing.
 func TestRestartHoldsConcurrencySlotAndUsesFreshDoneSignal(t *testing.T) {
 	store := newMockStore()
 	sup := newTestSupervisor(t, store, SupervisorConfig{MaxConcurrent: 1, LogBufferSize: 64})
-	profile := &domain.Profile{ID: "restart", Name: "restart"}
+	model := &domain.Model{ID: "restart", Name: "restart", RuntimeID: "runtime"}
 	runtime := &domain.Runtime{ID: "runtime", Name: "runtime", Executable: buildFakeRuntimeForTest(t)}
-	inst, err := sup.Start(context.Background(), profile, runtime, nil, []string{"-sleep", "30"}, nil)
+	inst, err := sup.Start(context.Background(), model, runtime, []string{"-sleep", "30"}, nil)
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -640,9 +635,9 @@ func TestSupervisorStreamsProcessOutputThroughBroker(t *testing.T) {
 	sup := newTestSupervisor(t, store, SupervisorConfig{LogBufferSize: 64})
 	sub := sup.SubscribeLogs("")
 	defer sub.Cancel()
-	profile := &domain.Profile{ID: "logs", Name: "logs"}
+	model := &domain.Model{ID: "logs", Name: "logs", RuntimeID: "runtime"}
 	runtime := &domain.Runtime{ID: "runtime", Name: "runtime", Executable: buildFakeRuntimeForTest(t)}
-	if _, err := sup.Start(context.Background(), profile, runtime, nil, []string{"stdout"}, nil); err != nil {
+	if _, err := sup.Start(context.Background(), model, runtime, []string{"stdout"}, nil); err != nil {
 		t.Fatalf("start: %v", err)
 	}
 	deadline := time.After(5 * time.Second)
@@ -663,11 +658,10 @@ func TestSupervisorRemoveTerminalDoesNotDoubleRelease(t *testing.T) {
 	store := newMockStore()
 	cfg := SupervisorConfig{MaxConcurrent: 1, LogBufferSize: 64}
 	sup := newTestSupervisor(t, store, cfg)
-	profile := &domain.Profile{ID: "p1", Name: "test"}
+	model := &domain.Model{ID: "m1", Name: "test", RuntimeID: "rt1"}
 	rt := &domain.Runtime{ID: "rt1", Name: "test-rt", Executable: buildFakeRuntimeForTest(t)}
-	model := &domain.Model{ID: "m1", Name: "test-model"}
 	ctx := context.Background()
-	_, err := sup.Start(ctx, profile, rt, model, []string{"-sleep", "2"}, nil)
+	_, err := sup.Start(ctx, model, rt, []string{"-sleep", "2"}, nil)
 	if err != nil {
 		t.Fatalf("start failed: %v", err)
 	}
@@ -709,16 +703,15 @@ func TestSupervisorConcurrentStartLimit(t *testing.T) {
 	store := newMockStore()
 	cfg := SupervisorConfig{MaxConcurrent: 2, LogBufferSize: 64}
 	sup := newTestSupervisor(t, store, cfg)
-	profile := &domain.Profile{ID: "p1", Name: "test"}
+	model := &domain.Model{ID: "m1", Name: "test", RuntimeID: "rt1"}
 	rt := &domain.Runtime{ID: "rt1", Name: "test-rt", Executable: buildFakeRuntimeForTest(t)}
-	model := &domain.Model{ID: "m1", Name: "test-model"}
 	ctx := context.Background()
 
-	first, err := sup.Start(ctx, profile, rt, model, []string{"-sleep", "1"}, nil)
+	first, err := sup.Start(ctx, model, rt, []string{"-sleep", "1"}, nil)
 	if err != nil {
 		t.Fatalf("start first instance: %v", err)
 	}
-	second, err := sup.Start(ctx, profile, rt, model, []string{"-sleep", "1"}, nil)
+	second, err := sup.Start(ctx, model, rt, []string{"-sleep", "1"}, nil)
 	if err != nil {
 		t.Fatalf("start second instance: %v", err)
 	}
@@ -731,7 +724,7 @@ func TestSupervisorConcurrentStartLimit(t *testing.T) {
 	thirdResult := make(chan startResult, 1)
 	go func() {
 		close(thirdAttempting)
-		inst, startErr := sup.Start(ctx, profile, rt, model, []string{"-sleep", "1"}, nil)
+		inst, startErr := sup.Start(ctx, model, rt, []string{"-sleep", "1"}, nil)
 		thirdResult <- startResult{instance: inst, err: startErr}
 	}()
 	<-thirdAttempting
@@ -773,9 +766,8 @@ func TestStartFailureJoinsPersistenceFailure(t *testing.T) {
 	store := newMockStore()
 	cfg := SupervisorConfig{MaxConcurrent: 1, LogBufferSize: 64}
 	sup := newTestSupervisor(t, store, cfg)
-	profile := &domain.Profile{ID: "p1", Name: "test"}
+	model := &domain.Model{ID: "m1", Name: "test", RuntimeID: "rt1"}
 	rt := &domain.Runtime{ID: "rt1", Name: "test-rt", Executable: buildFakeRuntimeForTest(t)}
-	model := &domain.Model{ID: "m1", Name: "test-model"}
 	ctx := context.Background()
 
 	// Override Update to fail after Create succeeds.
@@ -783,7 +775,7 @@ func TestStartFailureJoinsPersistenceFailure(t *testing.T) {
 	// then store.Update fails.
 	store.updateErr = testUpdateErr
 
-	_, err := sup.Start(ctx, profile, rt, model, []string{"-sleep", "999"}, nil)
+	_, err := sup.Start(ctx, model, rt, []string{"-sleep", "999"}, nil)
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -806,12 +798,11 @@ func TestRunningPersistenceFailureRollsBackOrDegrades(t *testing.T) {
 	}
 	cfg := SupervisorConfig{MaxConcurrent: 0, LogBufferSize: 64}
 	sup := newTestSupervisor(t, store, cfg)
-	profile := &domain.Profile{ID: "p1", Name: "test"}
+	model := &domain.Model{ID: "m1", Name: "test", RuntimeID: "rt1"}
 	rt := &domain.Runtime{ID: "rt1", Name: "test-rt", Executable: buildFakeRuntimeForTest(t)}
-	model := &domain.Model{ID: "m1", Name: "test-model"}
 	ctx := context.Background()
 	// With degraded success, Start returns nil error but sets LastError.
-	startInst, err := sup.Start(ctx, profile, rt, model, []string{"-sleep", "1"}, nil)
+	startInst, err := sup.Start(ctx, model, rt, []string{"-sleep", "1"}, nil)
 	if err != nil {
 		t.Fatalf("start failed: %v", err)
 	}
@@ -860,11 +851,10 @@ func TestNaturalExitPersistenceFailureObservable(t *testing.T) {
 	}
 	cfg := SupervisorConfig{MaxConcurrent: 0, LogBufferSize: 64}
 	sup := newTestSupervisor(t, store, cfg)
-	profile := &domain.Profile{ID: "p1", Name: "test"}
+	model := &domain.Model{ID: "m1", Name: "test", RuntimeID: "rt1"}
 	rt := &domain.Runtime{ID: "rt1", Name: "test-rt", Executable: buildFakeRuntimeForTest(t)}
-	model := &domain.Model{ID: "m1", Name: "test-model"}
 	ctx := context.Background()
-	inst, err := sup.Start(ctx, profile, rt, model, []string{"-sleep", "0"}, nil)
+	inst, err := sup.Start(ctx, model, rt, []string{"-sleep", "0"}, nil)
 	if err != nil {
 		t.Fatalf("start failed: %v", err)
 	}
@@ -910,11 +900,10 @@ func TestStopPersistenceFailureReturned(t *testing.T) {
 	}
 	cfg := SupervisorConfig{MaxConcurrent: 0, LogBufferSize: 64}
 	sup := newTestSupervisor(t, store, cfg)
-	profile := &domain.Profile{ID: "p1", Name: "test"}
+	model := &domain.Model{ID: "m1", Name: "test", RuntimeID: "rt1"}
 	rt := &domain.Runtime{ID: "rt1", Name: "test-rt", Executable: buildFakeRuntimeForTest(t)}
-	model := &domain.Model{ID: "m1", Name: "test-model"}
 	ctx := context.Background()
-	_, err := sup.Start(ctx, profile, rt, model, []string{"-sleep", "2"}, nil)
+	_, err := sup.Start(ctx, model, rt, []string{"-sleep", "2"}, nil)
 	if err != nil {
 		t.Fatalf("start failed: %v", err)
 	}
@@ -956,11 +945,10 @@ func TestRestartPersistenceFailureReturned(t *testing.T) {
 	}
 	cfg := SupervisorConfig{MaxConcurrent: 0, LogBufferSize: 64}
 	sup := newTestSupervisor(t, store, cfg)
-	profile := &domain.Profile{ID: "p1", Name: "test"}
+	model := &domain.Model{ID: "m1", Name: "test", RuntimeID: "rt1"}
 	rt := &domain.Runtime{ID: "rt1", Name: "test-rt", Executable: buildFakeRuntimeForTest(t)}
-	model := &domain.Model{ID: "m1", Name: "test-model"}
 	ctx := context.Background()
-	_, err := sup.Start(ctx, profile, rt, model, []string{"-sleep", "2"}, nil)
+	_, err := sup.Start(ctx, model, rt, []string{"-sleep", "2"}, nil)
 	if err != nil {
 		t.Fatalf("start failed: %v", err)
 	}
@@ -1005,11 +993,10 @@ func TestShutdownAggregatesPersistenceFailures(t *testing.T) {
 	}
 	cfg := SupervisorConfig{MaxConcurrent: 0, LogBufferSize: 64}
 	sup := newTestSupervisor(t, store, cfg)
-	profile := &domain.Profile{ID: "p1", Name: "test"}
+	model := &domain.Model{ID: "m1", Name: "test", RuntimeID: "rt1"}
 	rt := &domain.Runtime{ID: "rt1", Name: "test-rt", Executable: buildFakeRuntimeForTest(t)}
-	model := &domain.Model{ID: "m1", Name: "test-model"}
 	ctx := context.Background()
-	inst, err := sup.Start(ctx, profile, rt, model, []string{"-sleep", "1"}, nil)
+	inst, err := sup.Start(ctx, model, rt, []string{"-sleep", "1"}, nil)
 	if err != nil {
 		t.Fatalf("start failed: %v", err)
 	}
@@ -1044,9 +1031,9 @@ func TestRecoverAggregatesPersistenceFailures(t *testing.T) {
 	cfg := SupervisorConfig{MaxConcurrent: 0, LogBufferSize: 64}
 	sup := newTestSupervisor(t, store, cfg)
 	entry := &domain.LaunchInstanceEntry{
-		ID:        "inst-recover-test",
-		ProfileID: "p1",
-		State:     "pending",
+		ID:      "inst-recover-test",
+		ModelID: "m1",
+		State:   "pending",
 	}
 	store.Create(entry)
 	ctx := context.Background()
@@ -1070,11 +1057,10 @@ func TestPersistenceErrorVisibleInSnapshot(t *testing.T) {
 	}
 	cfg := SupervisorConfig{MaxConcurrent: 0, LogBufferSize: 64}
 	sup := NewSupervisorWithConfig(store, cfg)
-	profile := &domain.Profile{ID: "p1", Name: "test"}
+	model := &domain.Model{ID: "m1", Name: "test", RuntimeID: "rt1"}
 	rt := &domain.Runtime{ID: "rt1", Name: "test-rt", Executable: buildFakeRuntimeForTest(t)}
-	model := &domain.Model{ID: "m1", Name: "test-model"}
 	ctx := context.Background()
-	inst, err := sup.Start(ctx, profile, rt, model, []string{"-sleep", "0"}, nil)
+	inst, err := sup.Start(ctx, model, rt, []string{"-sleep", "0"}, nil)
 	if err != nil {
 		t.Fatalf("start failed: %v", err)
 	}

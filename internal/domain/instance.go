@@ -32,13 +32,12 @@ const (
 	InstanceExitSignaled InstanceExitClass = "signaled"
 )
 
-// LaunchInstance represents a running launch of a profile.
-// A Profile is a template; an Instance is an actual launched process.
+// LaunchInstance represents a running launch of a model.
+// A Model is a launch template; an Instance is an actual launched process.
 type LaunchInstance struct {
 	ID        InstanceID `json:"id"`
-	ProfileID string     `json:"profile_id"`
+	ModelID   string     `json:"model_id"`
 	RuntimeID string     `json:"runtime_id"`
-	ModelID   string     `json:"model_id,omitempty"`
 
 	// Process info populated at launch time.
 	PID       int           `json:"pid,omitempty"`
@@ -135,9 +134,8 @@ func ToStorageEntry(i *LaunchInstance) *LaunchInstanceEntry {
 	}
 	return &LaunchInstanceEntry{
 		ID:               string(i.ID),
-		ProfileID:        i.ProfileID,
-		RuntimeID:        i.RuntimeID,
 		ModelID:          i.ModelID,
+		RuntimeID:        i.RuntimeID,
 		Executable:       i.Executable,
 		Args:             i.Args,
 		WorkingDirectory: i.WorkingDirectory,
@@ -163,9 +161,8 @@ func ToDomain(e *LaunchInstanceEntry) *LaunchInstance {
 	}
 	return &LaunchInstance{
 		ID:               InstanceID(e.ID),
-		ProfileID:        e.ProfileID,
-		RuntimeID:        e.RuntimeID,
 		ModelID:          e.ModelID,
+		RuntimeID:        e.RuntimeID,
 		PID:              e.PID,
 		State:            InstanceState(e.State),
 		StartedAt:        e.StartedAt,
