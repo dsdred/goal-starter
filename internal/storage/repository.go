@@ -14,50 +14,9 @@ import (
 	"github.com/dsdred/goal/internal/domain"
 )
 
-// LaunchInstanceEntry is an alias for domain.LaunchInstanceEntry.
-// All persistence layers use this type for JSON serialization.
 type LaunchInstanceEntry = domain.LaunchInstanceEntry
-
-// RuntimeEntry represents a runtime definition.
-type RuntimeEntry struct {
-	ID               string            `json:"id"`
-	Name             string            `json:"name"`
-	Executable       string            `json:"executable"`
-	WorkingDirectory string            `json:"working_directory,omitempty"`
-	DefaultArgs      []string          `json:"default_args"`
-	Environment      map[string]string `json:"environment,omitempty"`
-	CreatedAt        time.Time         `json:"created_at"`
-	UpdatedAt        time.Time         `json:"updated_at"`
-}
-
-// ModelEntry represents a model definition.
-type ModelEntry struct {
-	ID        string    `json:"id"`
-	Name      string    `json:"name"`
-	Path      string    `json:"path"`
-	MMProj    string    `json:"mmproj,omitempty"`
-	Format    string    `json:"format,omitempty"`
-	Arguments []string  `json:"arguments,omitempty"`
-	RuntimeID string    `json:"runtime_id,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
-}
-
-// ProfileEntry represents a profile definition.
-type ProfileEntry struct {
-	ID             string            `json:"id"`
-	Name           string            `json:"name"`
-	RuntimeID      string            `json:"runtime_id"`
-	ModelID        string            `json:"model_id,omitempty"`
-	Host           string            `json:"host"`
-	Port           int               `json:"port"`
-	Args           []string          `json:"args,omitempty"`
-	Environment    map[string]string `json:"environment,omitempty"`
-	Active         bool              `json:"active"`
-	AutostartDelay int               `json:"autostart_delay,omitempty"`
-	CreatedAt      time.Time         `json:"created_at"`
-	UpdatedAt      time.Time         `json:"updated_at"`
-}
+type RuntimeEntry = domain.RuntimeEntry
+type ModelEntry = domain.ModelEntry
 
 // InstanceStore is a minimal interface for instance operations needed by supervisor.
 type InstanceStore interface {
@@ -66,59 +25,45 @@ type InstanceStore interface {
 	Update(e *LaunchInstanceEntry) error
 	Delete(id string) error
 	List() ([]*LaunchInstanceEntry, error)
-	ListByProfileID(profileID string) ([]*LaunchInstanceEntry, error)
+	ListByModelID(modelID string) ([]*LaunchInstanceEntry, error)
 }
 
 // Repository is the unified data store for all entities.
 type Repository interface {
-	// InstanceStore methods (delegated)
 	CreateInstance(e *LaunchInstanceEntry) error
 	GetInstance(id string) (*LaunchInstanceEntry, error)
 	UpdateInstance(e *LaunchInstanceEntry) error
 	DeleteInstance(id string) error
 	ListInstances() ([]*LaunchInstanceEntry, error)
-	// InstanceStore compatibility methods
 	Create(e *LaunchInstanceEntry) error
 	Get(id string) (*LaunchInstanceEntry, error)
 	Update(e *LaunchInstanceEntry) error
 	Delete(id string) error
 	List() ([]*LaunchInstanceEntry, error)
 
-	// Runtime operations
 	CreateRuntime(e *RuntimeEntry) error
 	GetRuntime(id string) (*RuntimeEntry, error)
 	UpdateRuntime(e *RuntimeEntry) error
 	DeleteRuntime(id string) error
 	ListRuntimes() ([]*RuntimeEntry, error)
 
-	// Model operations
 	CreateModel(e *ModelEntry) error
 	GetModel(id string) (*ModelEntry, error)
 	UpdateModel(e *ModelEntry) error
 	DeleteModel(id string) error
 	ListModels() ([]*ModelEntry, error)
 
-	// Profile operations
-	CreateProfile(e *ProfileEntry) error
-	GetProfile(id string) (*ProfileEntry, error)
-	UpdateProfile(e *ProfileEntry) error
-	DeleteProfile(id string) error
-	ListProfiles() ([]*ProfileEntry, error)
-
-	// Launch instance operations
 	CreateLaunchInstance(e *LaunchInstanceEntry) error
 	GetLaunchInstance(id string) (*LaunchInstanceEntry, error)
 	UpdateLaunchInstance(e *LaunchInstanceEntry) error
 	DeleteLaunchInstance(id string) error
 	ListLaunchInstances() ([]*LaunchInstanceEntry, error)
-	ListByProfileID(profileID string) ([]*LaunchInstanceEntry, error)
+	ListByModelID(modelID string) ([]*LaunchInstanceEntry, error)
 
-	// Schema management
 	SchemaVersion() int
 	Upgrade() error
 	SaveUnified(path string) error
 
-	// Utility
 	ValidateCrossReferences(ctx context.Context) error
 	CountActiveInstances() int
 }
@@ -129,12 +74,10 @@ type JSONRepository struct {
 	filePath    string
 	runtimes    []*RuntimeEntry
 	models      []*ModelEntry
-	profiles    []*ProfileEntry
 	instances   []*LaunchInstanceEntry
 	idGenerator func() string
 }
 
-// NewJSONRepository creates a new JSONRepository.
 func NewJSONRepository(filePath string) (Repository, error) {
 	dir := filepath.Dir(filePath)
 	if err := os.MkdirAll(dir, 0755); err != nil {
@@ -156,8 +99,73 @@ func NewJSONRepository(filePath string) (Repository, error) {
 	return r, nil
 }
 
-// load reads the JSON file into memory. If the main file is corrupted but a
-// valid .bak backup exists, load falls back to the backup automatically.
+// v5File represents the legacy v5 schema for migration.
+type v5File struct {
+	SchemaVersion int           `json:"schema_version"`
+	Runtimes      []*v5Runtime  `json:"runtimes"`
+	Models        []*v5Model    `json:"models"`
+	Profiles      []*v5Profile  `json:"profiles"`
+	Instances     []*v5Instance `json:"instances"`
+}
+
+type v5Runtime struct {
+	ID               string            `json:"id"`
+	Name             string            `json:"name"`
+	Executable       string            `json:"executable"`
+	WorkingDirectory string            `json:"working_directory,omitempty"`
+	DefaultArgs      []string          `json:"default_args"`
+	Environment      map[string]string `json:"environment,omitempty"`
+	CreatedAt        time.Time         `json:"created_at"`
+	UpdatedAt        time.Time         `json:"updated_at"`
+}
+
+type v5Model struct {
+	ID        string    `json:"id"`
+	Name      string    `json:"name"`
+	Path      string    `json:"path"`
+	MMProj    string    `json:"mmproj,omitempty"`
+	Format    string    `json:"format,omitempty"`
+	Arguments []string  `json:"arguments,omitempty"`
+	RuntimeID string    `json:"runtime_id,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+type v5Profile struct {
+	ID             string            `json:"id"`
+	Name           string            `json:"name"`
+	RuntimeID      string            `json:"runtime_id"`
+	ModelID        string            `json:"model_id,omitempty"`
+	Host           string            `json:"host"`
+	Port           int               `json:"port"`
+	Args           []string          `json:"args,omitempty"`
+	Environment    map[string]string `json:"environment,omitempty"`
+	Active         bool              `json:"active"`
+	AutostartDelay int               `json:"autostart_delay,omitempty"`
+	CreatedAt      time.Time         `json:"created_at"`
+	UpdatedAt      time.Time         `json:"updated_at"`
+}
+
+type v5Instance struct {
+	ID               string            `json:"id"`
+	ProfileID        string            `json:"profile_id"`
+	RuntimeID        string            `json:"runtime_id"`
+	ModelID          string            `json:"model_id,omitempty"`
+	Executable       string            `json:"executable,omitempty"`
+	Args             []string          `json:"args,omitempty"`
+	WorkingDirectory string            `json:"working_directory,omitempty"`
+	Environment      map[string]string `json:"environment,omitempty"`
+	State            string            `json:"state"`
+	PID              int               `json:"pid,omitempty"`
+	ExitCode         int               `json:"exit_code,omitempty"`
+	ExitClass        string            `json:"exit_class,omitempty"`
+	LastError        string            `json:"last_error,omitempty"`
+	StartedAt        time.Time         `json:"started_at,omitempty"`
+	StoppedAt        time.Time         `json:"stopped_at,omitempty"`
+	CreatedAt        time.Time         `json:"created_at"`
+	UpdatedAt        time.Time         `json:"updated_at"`
+}
+
 func (r *JSONRepository) load() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -167,73 +175,162 @@ func (r *JSONRepository) load() error {
 		if os.IsNotExist(err) {
 			return err
 		}
-		// Non-filesystem error reading main file — try backup.
 		data, err = r.tryBackup()
 		if err != nil {
 			return fmt.Errorf("load repository (main and backup failed): %w", err)
 		}
 	}
 
-	var unified struct {
-		SchemaVersion int                    `json:"schema_version"`
-		Runtimes      []*RuntimeEntry        `json:"runtimes"`
-		Models        []*ModelEntry          `json:"models"`
-		Profiles      []*ProfileEntry        `json:"profiles"`
-		Instances     []*LaunchInstanceEntry `json:"instances"`
+	// Detect schema version.
+	var versionCheck struct {
+		SchemaVersion int `json:"schema_version"`
 	}
-
-	if err := json.Unmarshal(data, &unified); err != nil {
-		// Main file corrupted — try backup.
+	if err := json.Unmarshal(data, &versionCheck); err != nil {
 		log.Printf("WARN: main file corrupted, trying backup: file=%s error=%v", r.filePath, err)
 		data, err = r.tryBackup()
 		if err != nil {
 			return fmt.Errorf("load repository (main and backup failed): %w", err)
 		}
-		if err := json.Unmarshal(data, &unified); err != nil {
+		if err := json.Unmarshal(data, &versionCheck); err != nil {
 			return fmt.Errorf("backup file also corrupted: %w", err)
 		}
 	}
 
-	r.runtimes = unified.Runtimes
-	r.models = unified.Models
-	r.profiles = unified.Profiles
-	r.instances = unified.Instances
+	if versionCheck.SchemaVersion <= 5 {
+		if err := r.migrateV5(data); err != nil {
+			return fmt.Errorf("migrate v5 to v6: %w", err)
+		}
+	} else {
+		var unified struct {
+			SchemaVersion int                    `json:"schema_version"`
+			Runtimes      []*RuntimeEntry        `json:"runtimes"`
+			Models        []*ModelEntry          `json:"models"`
+			Instances     []*LaunchInstanceEntry `json:"instances"`
+		}
+		if err := json.Unmarshal(data, &unified); err != nil {
+			return fmt.Errorf("unmarshal v6: %w", err)
+		}
+		r.runtimes = unified.Runtimes
+		r.models = unified.Models
+		r.instances = unified.Instances
+	}
 
 	return nil
 }
 
-// tryBackup reads and validates the .bak backup file.
+// migrateV5 converts a v5 repository file to v6 in memory.
+func (r *JSONRepository) migrateV5(data []byte) error {
+	var v5 v5File
+	if err := json.Unmarshal(data, &v5); err != nil {
+		return fmt.Errorf("unmarshal v5: %w", err)
+	}
+
+	// Migrate runtimes (unchanged).
+	r.runtimes = make([]*RuntimeEntry, 0, len(v5.Runtimes))
+	for _, rt := range v5.Runtimes {
+		r.runtimes = append(r.runtimes, &RuntimeEntry{
+			ID:               rt.ID,
+			Name:             rt.Name,
+			Executable:       rt.Executable,
+			WorkingDirectory: rt.WorkingDirectory,
+			DefaultArgs:      rt.DefaultArgs,
+			Environment:      rt.Environment,
+			CreatedAt:        rt.CreatedAt,
+			UpdatedAt:        rt.UpdatedAt,
+		})
+	}
+
+	// Build old model lookup.
+	modelMap := make(map[string]*v5Model)
+	for _, m := range v5.Models {
+		modelMap[m.ID] = m
+	}
+
+	// Migrate profiles → new models.
+	r.models = make([]*ModelEntry, 0, len(v5.Profiles))
+	for _, p := range v5.Profiles {
+		args := make([]string, 0, len(p.Args)+8)
+		args = append(args, p.Args...)
+		if p.ModelID != "" {
+			if m, ok := modelMap[p.ModelID]; ok {
+				if m.Path != "" {
+					args = append(args, "-m", m.Path)
+				}
+				if m.MMProj != "" {
+					args = append(args, "--mmproj", m.MMProj)
+				}
+				args = append(args, m.Arguments...)
+			}
+		}
+
+		updatedAt := p.UpdatedAt
+		if p.ModelID != "" {
+			if m, ok := modelMap[p.ModelID]; ok && m.UpdatedAt.After(updatedAt) {
+				updatedAt = m.UpdatedAt
+			}
+		}
+
+		r.models = append(r.models, &ModelEntry{
+			ID:             p.ID,
+			Name:           p.Name,
+			RuntimeID:      p.RuntimeID,
+			Args:           args,
+			Host:           p.Host,
+			Port:           p.Port,
+			Environment:    p.Environment,
+			Active:         p.Active,
+			AutostartDelay: p.AutostartDelay,
+			CreatedAt:      p.CreatedAt,
+			UpdatedAt:      updatedAt,
+		})
+	}
+
+	// Migrate instances: profile_id → model_id.
+	r.instances = make([]*LaunchInstanceEntry, 0, len(v5.Instances))
+	for _, inst := range v5.Instances {
+		r.instances = append(r.instances, &LaunchInstanceEntry{
+			ID:               inst.ID,
+			ModelID:          inst.ProfileID,
+			RuntimeID:        inst.RuntimeID,
+			Executable:       inst.Executable,
+			Args:             inst.Args,
+			WorkingDirectory: inst.WorkingDirectory,
+			Environment:      inst.Environment,
+			State:            inst.State,
+			PID:              inst.PID,
+			ExitCode:         inst.ExitCode,
+			ExitClass:        inst.ExitClass,
+			LastError:        inst.LastError,
+			StartedAt:        inst.StartedAt,
+			StoppedAt:        inst.StoppedAt,
+			CreatedAt:        inst.CreatedAt,
+			UpdatedAt:        inst.UpdatedAt,
+		})
+	}
+
+	return nil
+}
+
 func (r *JSONRepository) tryBackup() ([]byte, error) {
 	bakPath := r.filePath + ".bak"
 	data, err := os.ReadFile(bakPath)
 	if err != nil {
 		return nil, fmt.Errorf("read backup: %w", err)
 	}
-	var unified struct {
+	var check struct {
 		SchemaVersion int
 	}
-	if err := json.Unmarshal(data, &unified); err != nil {
+	if err := json.Unmarshal(data, &check); err != nil {
 		return nil, fmt.Errorf("validate backup: %w", err)
 	}
 	return data, nil
 }
 
-// saveLocked writes the data to disk atomically with backup/recovery and fsync.
-// The caller must hold r.mu (read or write lock).
-//
-// Atomicity strategy:
-// 1. Marshal to temp file in same directory
-// 2. Sync temp file
-// 3. Close and validate temp file by reading it back
-// 4. Save previous good version as .bak
-// 5. Atomic rename temp to target
-// 6. Sync parent directory (where supported)
 func (r *JSONRepository) saveLocked() error {
 	unified := map[string]interface{}{
-		"schema_version": 5,
+		"schema_version": 6,
 		"runtimes":       r.runtimes,
 		"models":         r.models,
-		"profiles":       r.profiles,
 		"instances":      r.instances,
 	}
 
@@ -243,13 +340,10 @@ func (r *JSONRepository) saveLocked() error {
 	}
 
 	tmp := r.filePath + ".tmp"
-
-	// Write temp file.
 	if err := os.WriteFile(tmp, data, 0600); err != nil {
 		return fmt.Errorf("write temp file: %w", err)
 	}
 
-	// Sync to ensure data is flushed to disk.
 	f, syncErr := os.OpenFile(tmp, os.O_WRONLY, 0)
 	if syncErr != nil {
 		_ = os.Remove(tmp)
@@ -265,22 +359,17 @@ func (r *JSONRepository) saveLocked() error {
 		return fmt.Errorf("close temp file: %w", err)
 	}
 
-	// Validate by reading back the temp file.
 	validateData, err := os.ReadFile(tmp)
 	if err != nil {
 		_ = os.Remove(tmp)
 		return fmt.Errorf("validate temp file: %w", err)
 	}
-	// Quick validity check - parse as JSON.
 	var validated map[string]interface{}
 	if err := json.Unmarshal(validateData, &validated); err != nil {
 		_ = os.Remove(tmp)
 		return fmt.Errorf("validate temp file JSON: %w", err)
 	}
 
-	// Save previous good version as .bak if it exists.
-	// Contract: if main file exists, backup MUST succeed — this ensures we can
-	// recover from corruption. If backup fails, the main file is not replaced.
 	if _, err := os.Stat(r.filePath); err == nil {
 		bakPath := r.filePath + ".bak"
 		if err = copyFile(r.filePath, bakPath); err != nil {
@@ -289,107 +378,76 @@ func (r *JSONRepository) saveLocked() error {
 		}
 	}
 
-	// Atomic rename.
 	if err := os.Rename(tmp, r.filePath); err != nil {
 		_ = os.Remove(tmp)
 		return fmt.Errorf("rename temp file: %w", err)
 	}
 
-	// Sync parent directory (best effort, Linux/macOS only).
 	dir := filepath.Dir(r.filePath)
-	if err := syncDir(dir); err != nil {
-		// Non-fatal for Windows.
-		_ = err
-	}
+	_ = syncDir(dir)
 
 	return nil
 }
 
-// save writes the data to disk atomically.
-// This method acquires its own lock and should be used
-// when the caller does NOT already hold the mutex (e.g., initial save).
 func (r *JSONRepository) save() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-
 	return r.saveLocked()
 }
 
-// SchemaVersion returns the current schema version.
-func (r *JSONRepository) SchemaVersion() int {
-	return 5
-}
+func (r *JSONRepository) SchemaVersion() int { return 6 }
 
-// Upgrade migrates from older schema versions to the current version.
-// v4 → v5: adds autostart_delay field to profiles (backward compatible;
-// existing profiles without the field default to 0).
-func (r *JSONRepository) Upgrade() error {
-	return r.save()
-}
+func (r *JSONRepository) Upgrade() error { return r.save() }
 
-// SaveUnified writes the data to the specified path atomically.
 func (r *JSONRepository) SaveUnified(path string) error {
 	data, err := json.MarshalIndent(map[string]interface{}{
-		"schema_version": 5,
+		"schema_version": 6,
 		"runtimes":       r.runtimes,
 		"models":         r.models,
-		"profiles":       r.profiles,
 		"instances":      r.instances,
 	}, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal JSON: %w", err)
 	}
-
 	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, data, 0644); err != nil {
 		return fmt.Errorf("write temp file: %w", err)
 	}
-
 	if err := os.Rename(tmp, path); err != nil {
 		_ = os.Remove(tmp)
-		return fmt.Errorf("rename temp file: %w", err)
+		return fmt.Errorf("rename: %w", err)
 	}
-
 	return nil
 }
 
-// ---------- Runtime operations ----------
+// ─── Runtime CRUD ───
 
 func (r *JSONRepository) CreateRuntime(e *RuntimeEntry) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-
 	if e.ID == "" {
-		id, err := r.allocateID("runtime")
-		if err != nil {
-			return err
-		}
-		e.ID = id
-	} else if r.idExistsIn("runtime", e.ID) {
-		return fmt.Errorf("runtime id already exists: %s", e.ID)
+		e.ID = r.idGenerator()
 	}
-
-	e.CreatedAt = time.Now()
-	e.UpdatedAt = time.Now()
-
-	r.runtimes = append(r.runtimes, e)
+	now := time.Now()
+	e.CreatedAt = now
+	e.UpdatedAt = now
+	for _, x := range r.runtimes {
+		if x.ID == e.ID {
+			return fmt.Errorf("runtime already exists: %s", e.ID)
+		}
+	}
+	cp := *e
+	r.runtimes = append(r.runtimes, &cp)
 	return r.saveLocked()
 }
 
 func (r *JSONRepository) GetRuntime(id string) (*RuntimeEntry, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-
 	for _, e := range r.runtimes {
 		if e.ID == id {
-			ec := *e
-			ec.Environment = make(map[string]string)
-			for k, v := range e.Environment {
-				ec.Environment[k] = v
-			}
-			ec.DefaultArgs = make([]string, len(e.DefaultArgs))
-			copy(ec.DefaultArgs, e.DefaultArgs)
-			return &ec, nil
+			cp := *e
+			return &cp, nil
 		}
 	}
 	return nil, fmt.Errorf("runtime not found: %s", id)
@@ -398,11 +456,11 @@ func (r *JSONRepository) GetRuntime(id string) (*RuntimeEntry, error) {
 func (r *JSONRepository) UpdateRuntime(e *RuntimeEntry) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-
-	for i, existing := range r.runtimes {
-		if existing.ID == e.ID {
-			r.runtimes[i] = e
+	for i, x := range r.runtimes {
+		if x.ID == e.ID {
 			e.UpdatedAt = time.Now()
+			cp := *e
+			r.runtimes[i] = &cp
 			return r.saveLocked()
 		}
 	}
@@ -412,7 +470,6 @@ func (r *JSONRepository) UpdateRuntime(e *RuntimeEntry) error {
 func (r *JSONRepository) DeleteRuntime(id string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-
 	for i, e := range r.runtimes {
 		if e.ID == id {
 			r.runtimes = append(r.runtimes[:i], r.runtimes[i+1:]...)
@@ -425,52 +482,42 @@ func (r *JSONRepository) DeleteRuntime(id string) error {
 func (r *JSONRepository) ListRuntimes() ([]*RuntimeEntry, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-
-	result := make([]*RuntimeEntry, 0, len(r.runtimes))
-	for _, e := range r.runtimes {
-		ec := *e
-		ec.Environment = make(map[string]string)
-		for k, v := range e.Environment {
-			ec.Environment[k] = v
-		}
-		ec.DefaultArgs = make([]string, len(e.DefaultArgs))
-		copy(ec.DefaultArgs, e.DefaultArgs)
-		result = append(result, &ec)
+	out := make([]*RuntimeEntry, len(r.runtimes))
+	for i, e := range r.runtimes {
+		cp := *e
+		out[i] = &cp
 	}
-	return result, nil
+	return out, nil
 }
 
-// ---------- Model operations ----------
+// ─── Model CRUD ───
 
 func (r *JSONRepository) CreateModel(e *ModelEntry) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-
 	if e.ID == "" {
-		id, err := r.allocateID("model")
-		if err != nil {
-			return err
-		}
-		e.ID = id
-	} else if r.idExistsIn("model", e.ID) {
-		return fmt.Errorf("model id already exists: %s", e.ID)
+		e.ID = r.idGenerator()
 	}
-
-	e.CreatedAt = time.Now()
-	e.UpdatedAt = time.Now()
-
-	r.models = append(r.models, e)
+	now := time.Now()
+	e.CreatedAt = now
+	e.UpdatedAt = now
+	for _, x := range r.models {
+		if x.ID == e.ID {
+			return fmt.Errorf("model already exists: %s", e.ID)
+		}
+	}
+	cp := *e
+	r.models = append(r.models, &cp)
 	return r.saveLocked()
 }
 
 func (r *JSONRepository) GetModel(id string) (*ModelEntry, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-
 	for _, e := range r.models {
 		if e.ID == id {
-			ec := *e
-			return &ec, nil
+			cp := *e
+			return &cp, nil
 		}
 	}
 	return nil, fmt.Errorf("model not found: %s", id)
@@ -479,11 +526,11 @@ func (r *JSONRepository) GetModel(id string) (*ModelEntry, error) {
 func (r *JSONRepository) UpdateModel(e *ModelEntry) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-
-	for i, existing := range r.models {
-		if existing.ID == e.ID {
-			r.models[i] = e
+	for i, x := range r.models {
+		if x.ID == e.ID {
 			e.UpdatedAt = time.Now()
+			cp := *e
+			r.models[i] = &cp
 			return r.saveLocked()
 		}
 	}
@@ -493,7 +540,6 @@ func (r *JSONRepository) UpdateModel(e *ModelEntry) error {
 func (r *JSONRepository) DeleteModel(id string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-
 	for i, e := range r.models {
 		if e.ID == id {
 			r.models = append(r.models[:i], r.models[i+1:]...)
@@ -506,458 +552,192 @@ func (r *JSONRepository) DeleteModel(id string) error {
 func (r *JSONRepository) ListModels() ([]*ModelEntry, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-
-	result := make([]*ModelEntry, 0, len(r.models))
-	for _, e := range r.models {
-		ec := *e
-		result = append(result, &ec)
+	out := make([]*ModelEntry, len(r.models))
+	for i, e := range r.models {
+		cp := *e
+		out[i] = &cp
 	}
-	return result, nil
+	return out, nil
 }
 
-// ---------- Profile operations ----------
+// ─── Instance CRUD ───
 
-func (r *JSONRepository) CreateProfile(e *ProfileEntry) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	if e.ID == "" {
-		id, err := r.allocateID("profile")
-		if err != nil {
-			return err
-		}
-		e.ID = id
-	} else if r.idExistsIn("profile", e.ID) {
-		return fmt.Errorf("profile id already exists: %s", e.ID)
-	}
-
-	e.CreatedAt = time.Now()
-	e.UpdatedAt = time.Now()
-
-	r.profiles = append(r.profiles, e)
-	return r.saveLocked()
+func (r *JSONRepository) CreateInstance(e *LaunchInstanceEntry) error {
+	return r.Create(e)
 }
 
-func (r *JSONRepository) GetProfile(id string) (*ProfileEntry, error) {
+func (r *JSONRepository) GetInstance(id string) (*LaunchInstanceEntry, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-
-	for _, e := range r.profiles {
-		if e.ID == id {
-			ec := *e
-			ec.Environment = make(map[string]string)
-			for k, v := range e.Environment {
-				ec.Environment[k] = v
-			}
-			ec.Args = make([]string, len(e.Args))
-			copy(ec.Args, e.Args)
-			return &ec, nil
-		}
-	}
-	return nil, fmt.Errorf("profile not found: %s", id)
-}
-
-func (r *JSONRepository) UpdateProfile(e *ProfileEntry) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	for i, existing := range r.profiles {
-		if existing.ID == e.ID {
-			r.profiles[i] = e
-			e.UpdatedAt = time.Now()
-			return r.saveLocked()
-		}
-	}
-	return fmt.Errorf("profile not found: %s", e.ID)
-}
-
-func (r *JSONRepository) DeleteProfile(id string) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	for i, e := range r.profiles {
-		if e.ID == id {
-			r.profiles = append(r.profiles[:i], r.profiles[i+1:]...)
-			return r.saveLocked()
-		}
-	}
-	return fmt.Errorf("profile not found: %s", id)
-}
-
-func (r *JSONRepository) ListProfiles() ([]*ProfileEntry, error) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
-	result := make([]*ProfileEntry, 0, len(r.profiles))
-	for _, e := range r.profiles {
-		ec := *e
-		ec.Environment = make(map[string]string)
-		for k, v := range e.Environment {
-			ec.Environment[k] = v
-		}
-		ec.Args = make([]string, len(e.Args))
-		copy(ec.Args, e.Args)
-		result = append(result, &ec)
-	}
-	return result, nil
-}
-
-// ---------- Launch Instance operations ----------
-
-func (r *JSONRepository) CreateLaunchInstance(e *LaunchInstanceEntry) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	// ID is generated exactly once by the caller (Supervisor / Resolver).
-	// Do not overwrite an existing ID.
-	if e.ID == "" {
-		id, err := r.allocateID("instance")
-		if err != nil {
-			return err
-		}
-		e.ID = id
-	} else if r.idExistsIn("instance", e.ID) {
-		return fmt.Errorf("instance id already exists: %s", e.ID)
-	}
-
-	e.CreatedAt = time.Now()
-	e.UpdatedAt = time.Now()
-
-	r.instances = append(r.instances, e)
-	return r.saveLocked()
-}
-
-func (r *JSONRepository) GetLaunchInstance(id string) (*LaunchInstanceEntry, error) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
 	for _, e := range r.instances {
 		if e.ID == id {
-			ec := *e
-			ec.Environment = make(map[string]string)
-			for k, v := range e.Environment {
-				ec.Environment[k] = v
-			}
-			ec.Args = make([]string, len(e.Args))
-			copy(ec.Args, e.Args)
-			return &ec, nil
+			cp := *e
+			return &cp, nil
 		}
 	}
-	return nil, fmt.Errorf("launch instance not found: %s", id)
+	return nil, fmt.Errorf("instance not found: %s", id)
 }
 
-func (r *JSONRepository) UpdateLaunchInstance(e *LaunchInstanceEntry) error {
+func (r *JSONRepository) UpdateInstance(e *LaunchInstanceEntry) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-
-	for i, existing := range r.instances {
-		if existing.ID == e.ID {
-			r.instances[i] = e
-			e.UpdatedAt = time.Now()
+	for i, x := range r.instances {
+		if x.ID == e.ID {
+			cp := *e
+			r.instances[i] = &cp
 			return r.saveLocked()
 		}
 	}
-	return fmt.Errorf("launch instance not found: %s", e.ID)
+	return fmt.Errorf("instance not found: %s", e.ID)
 }
 
-func (r *JSONRepository) DeleteLaunchInstance(id string) error {
+func (r *JSONRepository) DeleteInstance(id string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-
 	for i, e := range r.instances {
 		if e.ID == id {
 			r.instances = append(r.instances[:i], r.instances[i+1:]...)
 			return r.saveLocked()
 		}
 	}
-	return fmt.Errorf("launch instance not found: %s", id)
+	return fmt.Errorf("instance not found: %s", id)
+}
+
+func (r *JSONRepository) ListInstances() ([]*LaunchInstanceEntry, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make([]*LaunchInstanceEntry, len(r.instances))
+	for i, e := range r.instances {
+		cp := *e
+		out[i] = &cp
+	}
+	return out, nil
+}
+
+// ─── InstanceStore compatibility ───
+
+func (r *JSONRepository) Create(e *LaunchInstanceEntry) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if e.ID == "" {
+		e.ID = r.idGenerator()
+	}
+	for i, x := range r.instances {
+		if x.ID == e.ID {
+			cp := *e
+			r.instances[i] = &cp
+			return r.saveLocked()
+		}
+	}
+	cp := *e
+	r.instances = append(r.instances, &cp)
+	return r.saveLocked()
+}
+
+func (r *JSONRepository) Get(id string) (*LaunchInstanceEntry, error) {
+	return r.GetInstance(id)
+}
+
+func (r *JSONRepository) Update(e *LaunchInstanceEntry) error {
+	return r.UpdateInstance(e)
+}
+
+func (r *JSONRepository) Delete(id string) error {
+	return r.DeleteInstance(id)
+}
+
+func (r *JSONRepository) List() ([]*LaunchInstanceEntry, error) {
+	return r.ListInstances()
+}
+
+func (r *JSONRepository) ListByModelID(modelID string) ([]*LaunchInstanceEntry, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	var out []*LaunchInstanceEntry
+	for _, e := range r.instances {
+		if e.ModelID == modelID {
+			cp := *e
+			out = append(out, &cp)
+		}
+	}
+	return out, nil
+}
+
+// ─── Launch instance aliases ───
+
+func (r *JSONRepository) CreateLaunchInstance(e *LaunchInstanceEntry) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if e.ID == "" {
+		e.ID = r.idGenerator()
+	}
+	now := time.Now()
+	e.CreatedAt = now
+	e.UpdatedAt = now
+	for _, x := range r.instances {
+		if x.ID == e.ID {
+			return fmt.Errorf("instance already exists: %s", e.ID)
+		}
+	}
+	cp := *e
+	r.instances = append(r.instances, &cp)
+	return r.saveLocked()
+}
+
+func (r *JSONRepository) GetLaunchInstance(id string) (*LaunchInstanceEntry, error) {
+	return r.Get(id)
+}
+
+func (r *JSONRepository) UpdateLaunchInstance(e *LaunchInstanceEntry) error {
+	return r.Update(e)
+}
+
+func (r *JSONRepository) DeleteLaunchInstance(id string) error {
+	return r.Delete(id)
 }
 
 func (r *JSONRepository) ListLaunchInstances() ([]*LaunchInstanceEntry, error) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
-	result := make([]*LaunchInstanceEntry, 0, len(r.instances))
-	for _, e := range r.instances {
-		ec := *e
-		ec.Environment = make(map[string]string)
-		for k, v := range e.Environment {
-			ec.Environment[k] = v
-		}
-		ec.Args = make([]string, len(e.Args))
-		copy(ec.Args, e.Args)
-		result = append(result, &ec)
-	}
-	return result, nil
+	return r.List()
 }
 
-func (r *JSONRepository) ListByProfileID(profileID string) ([]*LaunchInstanceEntry, error) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
+// ─── Utility ───
 
-	result := make([]*LaunchInstanceEntry, 0)
-	for _, e := range r.instances {
-		if e.ProfileID == profileID {
-			ec := *e
-			ec.Environment = make(map[string]string)
-			for k, v := range e.Environment {
-				ec.Environment[k] = v
-			}
-			ec.Args = make([]string, len(e.Args))
-			copy(ec.Args, e.Args)
-			result = append(result, &ec)
-		}
-	}
-	return result, nil
-}
-
-// generateID creates a unique ID.
-func generateID() string {
-	return fmt.Sprintf("inst_%d", time.Now().UnixNano())
-}
-
-var idExhaustedErr = fmt.Errorf("could not obtain a unique repository ID")
-
-// idExistsIn checks whether the given ID exists in the entity slice.
-// Must be called while holding the repository lock.
-func (r *JSONRepository) idExistsIn(ns string, id string) bool {
-	var list interface{}
-	switch ns {
-	case "runtime":
-		list = r.runtimes
-	case "model":
-		list = r.models
-	case "profile":
-		list = r.profiles
-	case "instance":
-		list = r.instances
-	default:
-		return false
-	}
-
-	switch items := list.(type) {
-	case []*RuntimeEntry:
-		for _, item := range items {
-			if item.ID == id {
-				return true
-			}
-		}
-	case []*ModelEntry:
-		for _, item := range items {
-			if item.ID == id {
-				return true
-			}
-		}
-	case []*ProfileEntry:
-		for _, item := range items {
-			if item.ID == id {
-				return true
-			}
-		}
-	case []*LaunchInstanceEntry:
-		for _, item := range items {
-			if item.ID == id {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-// allocateID generates a unique ID for the given namespace.
-// It retries until a non-colliding ID is found or a bound is exhausted.
-func (r *JSONRepository) allocateID(ns string) (string, error) {
-	for attempt := 0; attempt < 10; attempt++ {
-		id := r.idGenerator()
-		if !r.idExistsIn(ns, id) {
-			return id, nil
-		}
-	}
-	return "", idExhaustedErr
-}
-
-// copyFile copies a file from src to dst atomically with validation.
-//
-// Atomicity strategy:
-// 1. Read and validate src
-// 2. Write dst.tmp
-// 3. Sync dst.tmp
-// 4. Close dst.tmp
-// 5. Validate dst.tmp by reading back
-// 6. Atomic rename dst.tmp → dst
-// 7. Sync parent directory
-//
-// If any step fails, dst.tmp is cleaned up and the original dst is preserved.
-func copyFile(src, dst string) error {
-	// Step 1: Read and validate src.
-	data, err := os.ReadFile(src)
-	if err != nil {
-		return err
-	}
-	if len(data) == 0 {
-		return fmt.Errorf("src file is empty")
-	}
-
-	tmp := dst + ".tmp"
-
-	// Step 2: Write temp file.
-	if err := os.WriteFile(tmp, data, 0600); err != nil {
-		return fmt.Errorf("write temp file: %w", err)
-	}
-
-	// Step 3: Sync temp file to ensure data is flushed to disk.
-	f, syncErr := os.OpenFile(tmp, os.O_WRONLY, 0)
-	if syncErr != nil {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("open temp file for sync: %w", syncErr)
-	}
-	if err := f.Sync(); err != nil {
-		f.Close()
-		_ = os.Remove(tmp)
-		return fmt.Errorf("sync temp file: %w", err)
-	}
-	if err := f.Close(); err != nil {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("close temp file: %w", err)
-	}
-
-	// Step 4: Validate temp file by reading it back.
-	validateData, err := os.ReadFile(tmp)
-	if err != nil {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("validate temp file: %w", err)
-	}
-	if len(validateData) == 0 || len(validateData) != len(data) {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("temp file validation failed: expected %d bytes, got %d", len(data), len(validateData))
-	}
-	// Parse as JSON to ensure structural validity.
-	var validated map[string]interface{}
-	if err := json.Unmarshal(validateData, &validated); err != nil {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("temp file JSON validation: %w", err)
-	}
-
-	// Step 5: Atomic rename.
-	if err := os.Rename(tmp, dst); err != nil {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("rename temp file: %w", err)
-	}
-
-	// Step 6: Sync parent directory (best effort, platform-aware).
-	dir := filepath.Dir(dst)
-	if err := syncDir(dir); err != nil {
-		// Non-fatal for Windows.
-		_ = err
-	}
-
-	return nil
-}
-
-// syncDir syncs the parent directory metadata. Platform-aware.
-func syncDir(dir string) error {
-	if runtime.GOOS == "windows" {
-		// On Windows, os.File.Sync() works reliably but Sync is a no-op.
-		// We try to open and sync the directory.
-		f, err := os.Open(dir)
-		if err != nil {
-			return err
-		}
-		defer f.Close()
-		return f.Sync()
-	}
-	// Unix/Linux: fsync the directory.
-	f, err := os.Open(dir)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	return f.Sync()
-}
-
-// CreateInstance delegates to CreateLaunchInstance for InstanceStore compatibility.
-func (r *JSONRepository) CreateInstance(e *LaunchInstanceEntry) error {
-	return r.CreateLaunchInstance(e)
-}
-
-// GetInstance delegates to GetLaunchInstance for InstanceStore compatibility.
-func (r *JSONRepository) GetInstance(id string) (*LaunchInstanceEntry, error) {
-	return r.GetLaunchInstance(id)
-}
-
-// UpdateInstance delegates to UpdateLaunchInstance for InstanceStore compatibility.
-func (r *JSONRepository) UpdateInstance(e *LaunchInstanceEntry) error {
-	return r.UpdateLaunchInstance(e)
-}
-
-// DeleteInstance delegates to DeleteLaunchInstance for InstanceStore compatibility.
-func (r *JSONRepository) DeleteInstance(id string) error {
-	return r.DeleteLaunchInstance(id)
-}
-
-// ListInstances delegates to ListLaunchInstances for InstanceStore compatibility.
-func (r *JSONRepository) ListInstances() ([]*LaunchInstanceEntry, error) {
-	return r.ListLaunchInstances()
-}
-
-// ValidateCrossReferences checks that all references are valid.
 func (r *JSONRepository) ValidateCrossReferences(ctx context.Context) error {
-	runtimeIDs := make(map[string]bool)
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	rtSet := make(map[string]bool, len(r.runtimes))
 	for _, rt := range r.runtimes {
-		runtimeIDs[rt.ID] = true
+		rtSet[rt.ID] = true
 	}
 
-	modelIDs := make(map[string]bool)
 	for _, m := range r.models {
-		modelIDs[m.ID] = true
-	}
-
-	for _, p := range r.profiles {
-		if !runtimeIDs[p.RuntimeID] {
-			return fmt.Errorf("profile %s references non-existent runtime %s", p.ID, p.RuntimeID)
-		}
-		if p.ModelID != "" && !modelIDs[p.ModelID] {
-			return fmt.Errorf("profile %s references non-existent model %s", p.ID, p.ModelID)
+		if !rtSet[m.RuntimeID] {
+			return fmt.Errorf("model %s references missing runtime %s", m.ID, m.RuntimeID)
 		}
 	}
 
 	return nil
 }
 
-// CountActiveInstances returns the number of active instances.
 func (r *JSONRepository) CountActiveInstances() int {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	count := 0
 	for _, e := range r.instances {
-		if e.State == "running" || e.State == "starting" {
+		switch e.State {
+		case "running", "starting", "stopping", "pending":
 			count++
 		}
 	}
 	return count
 }
 
-// InstanceStore adapter methods - convert between domain.LaunchInstance and LaunchInstanceEntry.
+// ─── ID generation ───
 
-// Create adapts LaunchInstanceEntry to domain.LaunchInstance interface.
-func (r *JSONRepository) Create(e *LaunchInstanceEntry) error {
-	return r.CreateLaunchInstance(e)
-}
-
-// Get retrieves a launch instance by ID.
-func (r *JSONRepository) Get(id string) (*LaunchInstanceEntry, error) {
-	return r.GetLaunchInstance(id)
-}
-
-// Update updates a launch instance.
-func (r *JSONRepository) Update(e *LaunchInstanceEntry) error {
-	return r.UpdateLaunchInstance(e)
-}
-
-// Delete removes a launch instance by ID.
-func (r *JSONRepository) Delete(id string) error {
-	return r.DeleteLaunchInstance(id)
-}
-
-// List returns all launch instances.
-func (r *JSONRepository) List() ([]*LaunchInstanceEntry, error) {
-	return r.ListLaunchInstances()
+func generateID() string {
+	if runtime.GOOS == "windows" {
+		return fmt.Sprintf("ent_%d", time.Now().UnixNano())
+	}
+	return fmt.Sprintf("ent_%d", time.Now().UnixNano())
 }

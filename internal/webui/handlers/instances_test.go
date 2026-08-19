@@ -44,12 +44,12 @@ func newTestInstanceStore(t *testing.T) *store.InstanceStoreJSON {
 
 // mockInstanceStore implements process.InstanceStore with configurable behavior.
 type mockInstanceStore struct {
-	CreateFunc          func(e *domain.LaunchInstanceEntry) error
-	GetFunc             func(id string) (*domain.LaunchInstanceEntry, error)
-	UpdateFunc          func(e *domain.LaunchInstanceEntry) error
-	DeleteFunc          func(id string) error
-	ListFunc            func() ([]*domain.LaunchInstanceEntry, error)
-	ListByProfileIDFunc func(profileID string) ([]*domain.LaunchInstanceEntry, error)
+	CreateFunc        func(e *domain.LaunchInstanceEntry) error
+	GetFunc           func(id string) (*domain.LaunchInstanceEntry, error)
+	UpdateFunc        func(e *domain.LaunchInstanceEntry) error
+	DeleteFunc        func(id string) error
+	ListFunc          func() ([]*domain.LaunchInstanceEntry, error)
+	ListByModelIDFunc func(modelID string) ([]*domain.LaunchInstanceEntry, error)
 }
 
 func (m *mockInstanceStore) Create(e *domain.LaunchInstanceEntry) error {
@@ -87,9 +87,9 @@ func (m *mockInstanceStore) List() ([]*domain.LaunchInstanceEntry, error) {
 	return nil, nil
 }
 
-func (m *mockInstanceStore) ListByProfileID(profileID string) ([]*domain.LaunchInstanceEntry, error) {
-	if m.ListByProfileIDFunc != nil {
-		return m.ListByProfileIDFunc(profileID)
+func (m *mockInstanceStore) ListByModelID(modelID string) ([]*domain.LaunchInstanceEntry, error) {
+	if m.ListByModelIDFunc != nil {
+		return m.ListByModelIDFunc(modelID)
 	}
 	return nil, nil
 }
@@ -99,15 +99,15 @@ func newTestSupervisor(t *testing.T) *process.Supervisor {
 	return process.NewSupervisor(&mockInstanceStore{})
 }
 
-func insertProfileEntry(t *testing.T, repo storage.Repository, pid string) {
+func insertModelEntry(t *testing.T, repo storage.Repository, mid string) {
 	t.Helper()
-	err := repo.CreateProfile(&storage.ProfileEntry{
-		ID:        pid,
-		Name:      "test-profile",
+	err := repo.CreateModel(&storage.ModelEntry{
+		ID:        mid,
+		Name:      "test-model",
 		RuntimeID: "rt-1",
 	})
 	if err != nil {
-		t.Fatalf("create profile: %v", err)
+		t.Fatalf("create model: %v", err)
 	}
 }
 
@@ -170,49 +170,49 @@ func TestInstancesHandler_Get(t *testing.T) {
 	}
 }
 
-func TestInstancesHandler_StartProfile(t *testing.T) {
+func TestInstancesHandler_StartModel(t *testing.T) {
 	repo := newTestRepo(t)
 	sup := newTestSupervisor(t)
 	insSvc := application.NewInstanceService(sup, repo)
 	h := NewInstancesHandler(insSvc, nil)
 
-	insertProfileEntry(t, repo, "profile-1")
+	insertModelEntry(t, repo, "model-1")
 	insertRuntimeEntry(t, repo, "rt-1")
 
 	// --- valid start ---
-	body := `{"profile_id": "profile-1"}`
+	body := `{"model_id": "model-1"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/instances/start", bytes.NewBufferString(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
-	h.StartProfile(w, req)
+	h.StartModel(w, req)
 	resp := w.Result()
 	defer resp.Body.Close()
 
-	// StartProfile may return 201 (success), 400 (validation error), or 500 (runtime not found)
+	// StartModel may return 201 (success), 400 (validation error), or 500 (runtime not found)
 	// since fake-runtime may not exist on the test system
 	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusBadRequest && resp.StatusCode != http.StatusInternalServerError {
-		t.Errorf("StartProfile valid: expected 201, 400, or 500, got %d", resp.StatusCode)
+		t.Errorf("StartModel valid: expected 201, 400, or 500, got %d", resp.StatusCode)
 	}
 
 	// --- invalid JSON ---
 	req = httptest.NewRequest(http.MethodPost, "/api/v1/instances/start", bytes.NewBufferString("{invalid"))
 	w = httptest.NewRecorder()
-	h.StartProfile(w, req)
+	h.StartModel(w, req)
 	resp = w.Result()
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
-		t.Errorf("StartProfile invalid JSON: expected 400, got %d", resp.StatusCode)
+		t.Errorf("StartModel invalid JSON: expected 400, got %d", resp.StatusCode)
 	}
 
-	// --- empty profile_id ---
-	body = `{"profile_id": ""}`
+	// --- empty model_id ---
+	body = `{"model_id": ""}`
 	req = httptest.NewRequest(http.MethodPost, "/api/v1/instances/start", bytes.NewBufferString(body))
 	w = httptest.NewRecorder()
-	h.StartProfile(w, req)
+	h.StartModel(w, req)
 	resp = w.Result()
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
-		t.Errorf("StartProfile empty profile_id: expected 400, got %d", resp.StatusCode)
+		t.Errorf("StartModel empty model_id: expected 400, got %d", resp.StatusCode)
 	}
 }
 
@@ -271,12 +271,11 @@ func TestRouteRegistry_Build(t *testing.T) {
 	sup := newTestSupervisor(t)
 
 	insSvc := application.NewInstanceService(sup, repo)
-	profSvc := application.NewProfileService(repo)
 	rtSvc := application.NewRuntimeService(repo)
 	modelSvc := application.NewModelService(repo)
 
 	reg := NewRouteRegistry(
-		profSvc, insSvc, rtSvc, modelSvc,
+		insSvc, rtSvc, modelSvc,
 		sup, repo, csrf, sessionStore, passwordStore,
 	)
 
@@ -294,12 +293,11 @@ func TestRouteRegistry_AuthEndpoints_NoAuthRequired(t *testing.T) {
 	sup := newTestSupervisor(t)
 
 	insSvc := application.NewInstanceService(sup, repo)
-	profSvc := application.NewProfileService(repo)
 	rtSvc := application.NewRuntimeService(repo)
 	modelSvc := application.NewModelService(repo)
 
 	reg := NewRouteRegistry(
-		profSvc, insSvc, rtSvc, modelSvc,
+		insSvc, rtSvc, modelSvc,
 		sup, repo, csrf, sessionStore, passwordStore,
 	)
 
@@ -324,7 +322,7 @@ func TestInstanceStoreJSON_CreateGetUpdateDelete(t *testing.T) {
 
 	inst := &domain.LaunchInstance{
 		ID:        domain.InstanceID("test-1"),
-		ProfileID: "p1",
+		ModelID:   "m1",
 		RuntimeID: "r1",
 		State:     domain.InstanceStatePending,
 	}
@@ -383,9 +381,9 @@ func TestInstanceStoreJSON_CreateDuplicate(t *testing.T) {
 	s := newTestInstanceStore(t)
 
 	inst := &domain.LaunchInstance{
-		ID:        domain.InstanceID("dup-1"),
-		ProfileID: "p1",
-		State:     domain.InstanceStatePending,
+		ID:      domain.InstanceID("dup-1"),
+		ModelID: "m1",
+		State:   domain.InstanceStatePending,
 	}
 
 	if err := s.Create(inst); err != nil {
@@ -408,39 +406,39 @@ func TestInstanceStoreJSON_CreateDuplicate(t *testing.T) {
 	}
 }
 
-func TestInstanceStoreJSON_ListByProfileID(t *testing.T) {
+func TestInstanceStoreJSON_ListByModelID(t *testing.T) {
 	s := newTestInstanceStore(t)
 
-	i1 := &domain.LaunchInstance{ID: domain.InstanceID("i1"), ProfileID: "profile-A", State: domain.InstanceStateRunning}
-	i2 := &domain.LaunchInstance{ID: domain.InstanceID("i2"), ProfileID: "profile-B", State: domain.InstanceStatePending}
-	i3 := &domain.LaunchInstance{ID: domain.InstanceID("i3"), ProfileID: "profile-A", State: domain.InstanceStateExited}
+	i1 := &domain.LaunchInstance{ID: domain.InstanceID("i1"), ModelID: "model-A", State: domain.InstanceStateRunning}
+	i2 := &domain.LaunchInstance{ID: domain.InstanceID("i2"), ModelID: "model-B", State: domain.InstanceStatePending}
+	i3 := &domain.LaunchInstance{ID: domain.InstanceID("i3"), ModelID: "model-A", State: domain.InstanceStateExited}
 
 	s.Create(i1)
 	s.Create(i2)
 	s.Create(i3)
 
-	byA, err := s.FindByProfileID("profile-A")
+	byA, err := s.FindByModelID("model-A")
 	if err != nil {
-		t.Fatalf("FindByProfileID: %v", err)
+		t.Fatalf("FindByModelID: %v", err)
 	}
 	if len(byA) != 2 {
-		t.Errorf("FindByProfileID A: expected 2, got %d", len(byA))
+		t.Errorf("FindByModelID A: expected 2, got %d", len(byA))
 	}
 
-	byB, err := s.FindByProfileID("profile-B")
+	byB, err := s.FindByModelID("model-B")
 	if err != nil {
-		t.Fatalf("FindByProfileID: %v", err)
+		t.Fatalf("FindByModelID: %v", err)
 	}
 	if len(byB) != 1 {
-		t.Errorf("FindByProfileID B: expected 1, got %d", len(byB))
+		t.Errorf("FindByModelID B: expected 1, got %d", len(byB))
 	}
 
-	byNone, err := s.FindByProfileID("profile-none")
+	byNone, err := s.FindByModelID("model-none")
 	if err != nil {
-		t.Fatalf("FindByProfileID: %v", err)
+		t.Fatalf("FindByModelID: %v", err)
 	}
 	if len(byNone) != 0 {
-		t.Errorf("FindByProfileID none: expected 0, got %d", len(byNone))
+		t.Errorf("FindByModelID none: expected 0, got %d", len(byNone))
 	}
 }
 
@@ -452,9 +450,9 @@ func TestInstanceStoreJSON_ConcurrentWrites(t *testing.T) {
 	for i := 0; i < n; i++ {
 		go func(idx int) {
 			inst := &domain.LaunchInstance{
-				ID:        domain.InstanceID("concurrent-" + string(rune('A'+idx))),
-				ProfileID: "concurrent-profile",
-				State:     domain.InstanceStatePending,
+				ID:      domain.InstanceID("concurrent-" + string(rune('A'+idx))),
+				ModelID: "concurrent-model",
+				State:   domain.InstanceStatePending,
 			}
 			s.Create(inst)
 			done <- true
@@ -481,27 +479,27 @@ func TestInstancesHandler_List_StripsEnvironment(t *testing.T) {
 	insSvc := application.NewInstanceService(sup, repo)
 	h := NewInstancesHandler(insSvc, nil)
 
-	// Start a profile to create an instance with environment
-	insertProfileEntry(t, repo, "profile-env")
+	// Start a model to create an instance with environment
+	insertModelEntry(t, repo, "model-env")
 	insertRuntimeEntry(t, repo, "rt-env")
 
-	body := `{"profile_id": "profile-env"}`
+	body := `{"model_id": "model-env"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/instances/start", bytes.NewBufferString(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
-	h.StartProfile(w, req)
+	h.StartModel(w, req)
 	resp := w.Result()
 
 	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusAccepted && resp.StatusCode != http.StatusInternalServerError {
-		t.Logf("StartProfile: got %d (201, 202, or 500 acceptable on test systems without fake-runtime)", resp.StatusCode)
+		t.Logf("StartModel: got %d (201, 202, or 500 acceptable on test systems without fake-runtime)", resp.StatusCode)
 	}
 	startBody, err := io.ReadAll(resp.Body)
 	resp.Body.Close()
 	if err != nil {
-		t.Fatalf("StartProfile: read response body: %v", err)
+		t.Fatalf("StartModel: read response body: %v", err)
 	}
 	if bytes.Contains(startBody, []byte("super-secret-value")) {
-		t.Error("StartProfile: environment value leaked in response")
+		t.Error("StartModel: environment value leaked in response")
 	}
 
 	// Now verify List strips environment
@@ -523,9 +521,9 @@ func TestInstancesHandler_List_StripsEnvironment(t *testing.T) {
 	}
 
 	// Verify Get strips environment
-	// Use a synthetic ID; if instance exists from StartProfile, env will be stripped.
-	// If no instance exists (500 on StartProfile), Get will 404 which is acceptable.
-	instanceID := "profile-env"
+	// Use a synthetic ID; if instance exists from StartModel, env will be stripped.
+	// If no instance exists (500 on StartModel), Get will 404 which is acceptable.
+	instanceID := "model-env"
 	req = httptest.NewRequest(http.MethodGet, "/api/v1/instances/"+instanceID, nil)
 	w = httptest.NewRecorder()
 	h.Get(w, req)

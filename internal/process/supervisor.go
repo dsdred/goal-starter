@@ -21,15 +21,15 @@ type SupervisorStatus struct {
 
 // InstanceSummary is a lightweight summary of an instance state.
 type InstanceSummary struct {
-	ID        string `json:"id"`
-	ProfileID string `json:"profile_id"`
-	State     string `json:"state"`
-	PID       int    `json:"pid,omitempty"`
+	ID      string `json:"id"`
+	ModelID string `json:"model_id"`
+	State   string `json:"state"`
+	PID     int    `json:"pid,omitempty"`
 }
 
 // Supervisor manages multiple launch instances.
 // Each instance has its own process.Manager, allowing concurrent or sequential
-// launches of different profiles.
+// launches of different models.
 //
 // Concurrency limiting uses a single buffered semaphore channel as the sole
 // source of truth. Each acquired token is wrapped in a slotReservation with
@@ -53,7 +53,7 @@ type InstanceStore interface {
 	Update(e *domain.LaunchInstanceEntry) error
 	Delete(id string) error
 	List() ([]*domain.LaunchInstanceEntry, error)
-	ListByProfileID(profileID string) ([]*domain.LaunchInstanceEntry, error)
+	ListByModelID(modelID string) ([]*domain.LaunchInstanceEntry, error)
 }
 
 // SupervisorConfig holds configuration for Supervisor.
@@ -148,19 +148,14 @@ func (s *Supervisor) Resolver() *domain.LaunchResolver {
 	return s.resolver
 }
 
-// Resolve returns a resolved CommandSpec for the given profile, runtime, and model.
-func (s *Supervisor) Resolve(profile *domain.Profile, runtime *domain.Runtime, model *domain.Model, customArgs []string, customEnv map[string]string) (*domain.CommandSpec, error) {
-	return s.resolver.Resolve(profile, runtime, model, customArgs, customEnv)
+// Resolve returns a resolved CommandSpec for the given model and runtime.
+func (s *Supervisor) Resolve(model *domain.Model, runtime *domain.Runtime, customArgs []string, customEnv map[string]string) (*domain.CommandSpec, error) {
+	return s.resolver.Resolve(model, runtime, customArgs, customEnv)
 }
 
 // ResolvePreview returns a resolved CommandSpec without creating an instance.
-func (s *Supervisor) ResolvePreview(profile *domain.Profile, runtime *domain.Runtime, model *domain.Model, customArgs []string, customEnv map[string]string) (*domain.CommandSpec, error) {
-	spec, err := s.resolver.Resolve(profile, runtime, model, customArgs, customEnv)
-	if err != nil {
-		return nil, err
-	}
-	s.resolver.AddModelArgs(spec, model)
-	return spec, nil
+func (s *Supervisor) ResolvePreview(model *domain.Model, runtime *domain.Runtime, customArgs []string, customEnv map[string]string) (*domain.CommandSpec, error) {
+	return s.resolver.Preview(model, runtime, customArgs, customEnv)
 }
 
 // RuntimeToDomain converts storage.RuntimeEntry to domain.Runtime.
@@ -216,8 +211,8 @@ func (r *slotReservation) Release() {
 //     restart, remove, or supervisor shutdown
 //   - Restart releases the old run's reservation and acquires a fresh one
 //   - No double release (sync.Once)
-func (s *Supervisor) Start(ctx context.Context, profile *domain.Profile, runtime *domain.Runtime, model *domain.Model, customArgs []string, customEnv map[string]string) (*domain.LaunchInstance, error) {
-	inst, err := s.resolver.ResolveToInstance(profile, runtime, model, customArgs, customEnv)
+func (s *Supervisor) Start(ctx context.Context, model *domain.Model, runtime *domain.Runtime, customArgs []string, customEnv map[string]string) (*domain.LaunchInstance, error) {
+	inst, err := s.resolver.ResolveToInstance(model, runtime, customArgs, customEnv)
 	if err != nil {
 		return nil, fmt.Errorf("resolve instance: %w", err)
 	}
@@ -351,12 +346,12 @@ func (s *Supervisor) ListActive() ([]*domain.LaunchInstance, error) {
 	return result, nil
 }
 
-// ListByProfileID returns instances for a specific profile.
-func (s *Supervisor) ListByProfileID(profileID string) ([]*domain.LaunchInstance, error) {
+// ListByModelID returns instances for a specific model.
+func (s *Supervisor) ListByModelID(modelID string) ([]*domain.LaunchInstance, error) {
 	if s.store == nil {
 		return nil, nil
 	}
-	entries, err := s.store.ListByProfileID(profileID)
+	entries, err := s.store.ListByModelID(modelID)
 	if err != nil {
 		return nil, err
 	}
@@ -979,7 +974,7 @@ func (ic *InstanceController) forwardLogs(events <-chan LogEvent) {
 	for event := range events {
 		ic.broker.Publish(LogStreamEvent{
 			InstanceID: string(ic.instanceID),
-			ProfileID:  ic.instance.ProfileID,
+			ModelID:    ic.instance.ModelID,
 			Stream:     LogStream(event.Stream),
 			Message:    event.Message,
 			Timestamp:  event.Time,
@@ -994,7 +989,7 @@ func (ic *InstanceController) publishBrokerEvent(stream LogStream, message strin
 	}
 	ic.broker.Publish(LogStreamEvent{
 		InstanceID: string(ic.instanceID),
-		ProfileID:  ic.instance.ProfileID,
+		ModelID:    ic.instance.ModelID,
 		Stream:     stream,
 		Message:    message,
 		Timestamp:  time.Now(),

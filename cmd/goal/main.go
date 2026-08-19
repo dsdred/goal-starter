@@ -91,8 +91,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Autostart: launch active profiles after recovery.
-	autostartProfiles(appCtx, repo, supervisor)
+	// Autostart: launch active models after recovery.
+	autostartModels(appCtx, repo, supervisor)
 
 	// Create and initialize the web UI app.
 	app, err := webui.NewApp(&cfg, repo, supervisor)
@@ -127,47 +127,59 @@ func main() {
 	}
 }
 
-// autostartProfiles starts all profiles marked as Active after recovery.
-// Order is deterministic (repository order). A failure in one profile does not
-// block the rest. Each profile may have an optional AutostartDelay in seconds.
-func autostartProfiles(ctx context.Context, repo storage.Repository, supervisor *process.Supervisor) {
-	profiles, err := repo.ListProfiles()
+// autostartModels starts all models marked as Active after recovery.
+// Order is deterministic (repository order). A failure in one model does not
+// block the rest. Each model may have an optional AutostartDelay in seconds.
+func autostartModels(ctx context.Context, repo storage.Repository, supervisor *process.Supervisor) {
+	models, err := repo.ListModels()
 	if err != nil {
-		slog.Warn("autostart: list profiles", "error", err)
+		slog.Warn("autostart: list models", "error", err)
 		return
 	}
 
-	for _, p := range profiles {
-		if !p.Active {
+	for _, m := range models {
+		if !m.Active {
 			continue
 		}
 		if ctx.Err() != nil {
 			return
 		}
-		// Duplicate guard: if a non-terminal instance already exists for this
-		// profile (e.g., started earlier in this session), skip.
-		if hasActiveInstance(repo, p.ID) {
-			slog.Info("autostart: skipping (active instance exists)", "profile", p.Name)
+		if hasActiveInstance(repo, m.ID) {
+			slog.Info("autostart: skipping (active instance exists)", "model", m.Name)
 			continue
 		}
-		if p.AutostartDelay > 0 {
+		if m.AutostartDelay > 0 {
 			select {
-			case <-time.After(time.Duration(p.AutostartDelay) * time.Second):
+			case <-time.After(time.Duration(m.AutostartDelay) * time.Second):
 			case <-ctx.Done():
 				return
 			}
 		}
-		slog.Info("autostart: starting profile", "name", p.Name, "id", p.ID)
-		if _, err := supervisor.Start(ctx, profileToDomain(p), runtimeFromRepo(repo, p.RuntimeID), modelFromRepo(repo, p.ModelID), nil, nil); err != nil {
-			slog.Error("autostart: start failed", "profile", p.Name, "error", err)
+		slog.Info("autostart: starting model", "name", m.Name, "id", m.ID)
+		domainModel := domain.ModelEntryToDomain(m)
+		runtimeEntry, err := repo.GetRuntime(m.RuntimeID)
+		if err != nil {
+			slog.Error("autostart: runtime not found", "model", m.Name, "error", err)
+			continue
+		}
+		domainRuntime := &domain.Runtime{
+			ID:               runtimeEntry.ID,
+			Name:             runtimeEntry.Name,
+			Executable:       runtimeEntry.Executable,
+			WorkingDirectory: runtimeEntry.WorkingDirectory,
+			DefaultArgs:      runtimeEntry.DefaultArgs,
+			Environment:      runtimeEntry.Environment,
+		}
+		if _, err := supervisor.Start(ctx, domainModel, domainRuntime, nil, nil); err != nil {
+			slog.Error("autostart: start failed", "model", m.Name, "error", err)
 		}
 	}
 }
 
-// hasActiveInstance returns true if the profile has any instance in a
+// hasActiveInstance returns true if the model has any instance in a
 // non-terminal state (running, starting, stopping, pending) in the repository.
-func hasActiveInstance(repo storage.Repository, profileID string) bool {
-	instances, err := repo.ListByProfileID(profileID)
+func hasActiveInstance(repo storage.Repository, modelID string) bool {
+	instances, err := repo.ListByModelID(modelID)
 	if err != nil {
 		return false
 	}
@@ -178,52 +190,4 @@ func hasActiveInstance(repo storage.Repository, profileID string) bool {
 		}
 	}
 	return false
-}
-
-func profileToDomain(p *storage.ProfileEntry) *domain.Profile {
-	return &domain.Profile{
-		ID:          p.ID,
-		Name:        p.Name,
-		RuntimeID:   p.RuntimeID,
-		ModelID:     p.ModelID,
-		Host:        p.Host,
-		Port:        p.Port,
-		Args:        p.Args,
-		Environment: p.Environment,
-		Active:      p.Active,
-	}
-}
-
-func runtimeFromRepo(repo storage.Repository, id string) *domain.Runtime {
-	rte, err := repo.GetRuntime(id)
-	if err != nil {
-		return nil
-	}
-	return &domain.Runtime{
-		ID:               rte.ID,
-		Name:             rte.Name,
-		Executable:       rte.Executable,
-		WorkingDirectory: rte.WorkingDirectory,
-		DefaultArgs:      rte.DefaultArgs,
-		Environment:      rte.Environment,
-	}
-}
-
-func modelFromRepo(repo storage.Repository, id string) *domain.Model {
-	if id == "" {
-		return nil
-	}
-	mde, err := repo.GetModel(id)
-	if err != nil {
-		return nil
-	}
-	return &domain.Model{
-		ID:        mde.ID,
-		Name:      mde.Name,
-		Path:      mde.Path,
-		MMProj:    mde.MMProj,
-		Format:    mde.Format,
-		Arguments: mde.Arguments,
-		RuntimeID: mde.RuntimeID,
-	}
 }

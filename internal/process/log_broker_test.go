@@ -13,7 +13,7 @@ func TestLogBrokerSubscribePublish(t *testing.T) {
 
 	ev := LogStreamEvent{
 		InstanceID: "inst-1",
-		ProfileID:  "prof-1",
+		ModelID:    "prof-1",
 		Stream:     LogStreamStdout,
 		Message:    "test message",
 		Timestamp:  time.Now(),

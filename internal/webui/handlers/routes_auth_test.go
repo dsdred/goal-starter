@@ -32,7 +32,6 @@ func newAuthenticatedTestRouter(t *testing.T) http.Handler {
 		"static/app.js":        &fstest.MapFile{Data: []byte("'use strict';")},
 	}
 	return NewRouteRegistry(
-		application.NewProfileService(repo),
 		application.NewInstanceService(supervisor, repo),
 		application.NewRuntimeService(repo),
 		application.NewModelService(repo),

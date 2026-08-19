@@ -17,9 +17,8 @@ type CommandSpec struct {
 	Environment      []string
 }
 
-// LaunchResolver resolves a Profile + Runtime + Model into a CommandSpec.
+// LaunchResolver resolves a Model + Runtime into a CommandSpec.
 type LaunchResolver struct {
-	// envCaseInsensitive forces lowercase keys on Windows for merge.
 	envCaseInsensitive bool
 }
 
@@ -33,22 +32,19 @@ func NewLaunchResolver() *LaunchResolver {
 	}
 }
 
-// Resolve builds a CommandSpec from profile, runtime, and model.
+// Resolve builds a CommandSpec from model and runtime.
 func (r *LaunchResolver) Resolve(
-	profile *Profile,
-	runtime *Runtime,
 	model *Model,
+	runtime *Runtime,
 	customArgs []string,
 	customEnv map[string]string,
 ) (*CommandSpec, error) {
-	if profile == nil {
-		return nil, fmt.Errorf("profile is required")
+	if model == nil {
+		return nil, fmt.Errorf("model is required")
 	}
 	if runtime == nil {
 		return nil, fmt.Errorf("runtime is required")
 	}
-
-	// Validate runtime executable exists.
 	if runtime.Executable == "" {
 		return nil, fmt.Errorf("runtime executable is empty")
 	}
@@ -57,14 +53,14 @@ func (r *LaunchResolver) Resolve(
 		return nil, fmt.Errorf("runtime executable does not exist: %s: %w", exePath, err)
 	}
 
-	// Build args: runtime default args + model-specific args + profile args + custom args.
-	args := make([]string, 0, len(runtime.DefaultArgs)+len(profile.Args)+len(customArgs)+4)
+	// Build args: runtime default args + model args + custom args.
+	args := make([]string, 0, len(runtime.DefaultArgs)+len(model.Args)+len(customArgs)+4)
 	args = append(args, runtime.DefaultArgs...)
-	args = append(args, profile.Args...)
+	args = append(args, model.Args...)
 	args = append(args, customArgs...)
 
-	// Add host/port if not already present (same logic as BuildCommandSpecForPreview).
-	if profile.Host != "" {
+	// Add host/port if not already present.
+	if model.Host != "" {
 		hasHostFlag := false
 		for _, arg := range args {
 			if arg == "--host" || arg == "-a" {
@@ -73,11 +69,11 @@ func (r *LaunchResolver) Resolve(
 			}
 		}
 		if !hasHostFlag {
-			args = append(args, "--host", profile.Host)
+			args = append(args, "--host", model.Host)
 		}
 	}
 
-	if profile.Port > 0 {
+	if model.Port > 0 {
 		hasPortFlag := false
 		for _, arg := range args {
 			if arg == "--port" {
@@ -86,54 +82,44 @@ func (r *LaunchResolver) Resolve(
 			}
 		}
 		if !hasPortFlag {
-			args = append(args, "--port", fmt.Sprintf("%d", profile.Port))
+			args = append(args, "--port", fmt.Sprintf("%d", model.Port))
 		}
 	}
 
-	// Build environment.
+	// Build environment: parent → runtime → model → custom.
 	envMap := make(map[string]string)
-	// Start with parent process environment.
 	for _, ev := range os.Environ() {
 		k, v, ok := strings.Cut(ev, "=")
 		if !ok {
 			continue
 		}
-		key := r.normalizeKey(k)
-		envMap[key] = v
+		envMap[r.normalizeKey(k)] = v
 	}
-	// Add runtime environment.
 	for k, v := range runtime.Environment {
 		envMap[r.normalizeKey(k)] = v
 	}
-	// Add profile environment (overrides runtime).
-	for k, v := range profile.Environment {
+	for k, v := range model.Environment {
 		envMap[r.normalizeKey(k)] = v
 	}
-	// Add custom environment (overrides all).
 	for k, v := range customEnv {
 		envMap[r.normalizeKey(k)] = v
 	}
 
-	// Convert map to []string.
 	env := make([]string, 0, len(envMap))
 	for k, v := range envMap {
 		env = append(env, k+"="+v)
 	}
 
-	spec := &CommandSpec{
+	return &CommandSpec{
 		Executable:       exePath,
 		Args:             args,
 		WorkingDirectory: runtime.WorkingDirectory,
 		Environment:      env,
-	}
-
-	return spec, nil
+	}, nil
 }
 
 // resolveExecutablePath resolves a relative executable path against the
-// runtime's WorkingDirectory. If the path is already absolute, it is returned
-// unchanged. If WorkingDirectory is empty, the path is resolved against the
-// current working directory.
+// runtime's WorkingDirectory.
 func resolveExecutablePath(executable, workingDir string) string {
 	if filepath.IsAbs(executable) {
 		return executable
@@ -144,33 +130,7 @@ func resolveExecutablePath(executable, workingDir string) string {
 	return executable
 }
 
-// resolveModelArgs adds model-specific arguments to the spec.
-// This is applied after Resolve when model info is available.
-func (r *LaunchResolver) resolveModelArgs(spec *CommandSpec, model *Model) {
-	if model == nil {
-		return
-	}
-	// llama.cpp style: -m <path>
-	if model.Path != "" {
-		spec.Args = append(spec.Args, "-m", model.Path)
-	}
-	if model.MMProj != "" {
-		spec.Args = append(spec.Args, "--mmproj", model.MMProj)
-	}
-	// Inline arguments (new-style models).
-	if len(model.Arguments) > 0 {
-		spec.Args = append(spec.Args, model.Arguments...)
-	}
-}
-
-// AddModelArgs adds the same model-specific arguments used by process launch.
-// It is exported so preview can share the exact launch composition.
-func (r *LaunchResolver) AddModelArgs(spec *CommandSpec, model *Model) {
-	r.resolveModelArgs(spec, model)
-}
-
 // normalizeKey returns the environment key in a consistent case.
-// On Windows, environment variable names are case-insensitive.
 func (r *LaunchResolver) normalizeKey(key string) string {
 	if r.envCaseInsensitive {
 		return strings.ToUpper(key)
@@ -186,14 +146,13 @@ type ResolveError struct {
 
 // Validate checks that all required fields are populated and references are valid.
 func (r *LaunchResolver) Validate(
-	profile *Profile,
-	runtime *Runtime,
 	model *Model,
+	runtime *Runtime,
 ) []ResolveError {
 	var errs []ResolveError
 
-	if profile == nil {
-		errs = append(errs, ResolveError{Field: "profile", Message: "profile is required"})
+	if model == nil {
+		errs = append(errs, ResolveError{Field: "model", Message: "model is required"})
 	}
 	if runtime == nil {
 		errs = append(errs, ResolveError{Field: "runtime", Message: "runtime is required"})
@@ -204,79 +163,68 @@ func (r *LaunchResolver) Validate(
 		errs = append(errs, ResolveError{Field: "runtime.executable", Message: "runtime executable is empty"})
 	}
 
-	if profile.RuntimeID != runtime.ID {
-		errs = append(errs, ResolveError{Field: "profile.runtime_id", Message: fmt.Sprintf("profile references runtime %s, but runtime is %s", profile.RuntimeID, runtime.ID)})
-	}
-
-	if model != nil {
-		if profile.ModelID != "" && model.ID != profile.ModelID {
-			errs = append(errs, ResolveError{Field: "profile.model_id", Message: fmt.Sprintf("profile references model %s, but model is %s", profile.ModelID, model.ID)})
-		}
-
-		// Validate model paths exist.
-		if model.Path != "" {
-			if _, err := os.Stat(model.Path); err != nil {
-				errs = append(errs, ResolveError{Field: "model.path", Message: fmt.Sprintf("model path does not exist: %s", model.Path)})
-			}
-		}
-
-		if model.MMProj != "" {
-			if _, err := os.Stat(model.MMProj); err != nil {
-				errs = append(errs, ResolveError{Field: "model.mmproj", Message: fmt.Sprintf("mmproj path does not exist: %s", model.MMProj)})
-			}
-		}
+	if model.RuntimeID != runtime.ID {
+		errs = append(errs, ResolveError{Field: "model.runtime_id", Message: fmt.Sprintf("model references runtime %s, but runtime is %s", model.RuntimeID, runtime.ID)})
 	}
 
 	return errs
 }
 
 // Preview returns a CommandSpec without validating executable existence.
-// This is used for the /profiles/{id}/resolve endpoint to show what would be launched.
 func (r *LaunchResolver) Preview(
-	profile *Profile,
-	runtime *Runtime,
 	model *Model,
+	runtime *Runtime,
 	customArgs []string,
 	customEnv map[string]string,
 ) (*CommandSpec, error) {
-	if profile == nil {
-		return nil, fmt.Errorf("profile is required")
+	if model == nil {
+		return nil, fmt.Errorf("model is required")
 	}
 	if runtime == nil {
 		return nil, fmt.Errorf("runtime is required")
 	}
-
 	if runtime.Executable == "" {
 		return nil, fmt.Errorf("runtime executable is empty")
 	}
 
 	exePath := resolveExecutablePath(runtime.Executable, runtime.WorkingDirectory)
 
-	// Build args: runtime default args + model args + profile args + custom args.
-	args := make([]string, 0, len(runtime.DefaultArgs)+len(profile.Args)+len(customArgs))
+	args := make([]string, 0, len(runtime.DefaultArgs)+len(model.Args)+len(customArgs))
 	args = append(args, runtime.DefaultArgs...)
-	args = append(args, profile.Args...)
+	args = append(args, model.Args...)
 	args = append(args, customArgs...)
 
-	// Add model-specific args.
-	if model != nil {
-		if model.Path != "" {
-			args = append(args, "-m", model.Path)
+	if model.Host != "" {
+		hasHostFlag := false
+		for _, arg := range args {
+			if arg == "--host" || arg == "-a" {
+				hasHostFlag = true
+				break
+			}
 		}
-		if model.MMProj != "" {
-			args = append(args, "--mmproj", model.MMProj)
-		}
-		if len(model.Arguments) > 0 {
-			args = append(args, model.Arguments...)
+		if !hasHostFlag {
+			args = append(args, "--host", model.Host)
 		}
 	}
 
-	// Build environment.
+	if model.Port > 0 {
+		hasPortFlag := false
+		for _, arg := range args {
+			if arg == "--port" {
+				hasPortFlag = true
+				break
+			}
+		}
+		if !hasPortFlag {
+			args = append(args, "--port", fmt.Sprintf("%d", model.Port))
+		}
+	}
+
 	envMap := make(map[string]string)
 	for k, v := range runtime.Environment {
 		envMap[r.normalizeKey(k)] = v
 	}
-	for k, v := range profile.Environment {
+	for k, v := range model.Environment {
 		envMap[r.normalizeKey(k)] = v
 	}
 	for k, v := range customEnv {
@@ -298,21 +246,16 @@ func (r *LaunchResolver) Preview(
 
 // ResolveToInstance fills a LaunchInstance with resolved launch details.
 func (r *LaunchResolver) ResolveToInstance(
-	profile *Profile,
-	runtime *Runtime,
 	model *Model,
+	runtime *Runtime,
 	customArgs []string,
 	customEnv map[string]string,
 ) (*LaunchInstance, error) {
-	spec, err := r.Resolve(profile, runtime, model, customArgs, customEnv)
+	spec, err := r.Resolve(model, runtime, customArgs, customEnv)
 	if err != nil {
 		return nil, err
 	}
 
-	// Resolve model-specific args into spec.
-	r.resolveModelArgs(spec, model)
-
-	// Convert env map for storage.
 	envMap := make(map[string]string)
 	for _, ev := range spec.Environment {
 		k, v, ok := strings.Cut(ev, "=")
@@ -321,13 +264,12 @@ func (r *LaunchResolver) ResolveToInstance(
 		}
 	}
 
-	id := InstanceID(fmt.Sprintf("%s-%d", profile.ID, timeNow().UnixNano()))
+	id := InstanceID(fmt.Sprintf("%s-%d", model.ID, timeNow().UnixNano()))
 
-	inst := &LaunchInstance{
+	return &LaunchInstance{
 		ID:               id,
-		ProfileID:        profile.ID,
+		ModelID:          model.ID,
 		RuntimeID:        runtime.ID,
-		ModelID:          modelIDOrDefault(model),
 		State:            InstanceStatePending,
 		Executable:       spec.Executable,
 		Args:             spec.Args,
@@ -335,14 +277,5 @@ func (r *LaunchResolver) ResolveToInstance(
 		Environment:      envMap,
 		CreatedAt:        timeNow(),
 		UpdatedAt:        timeNow(),
-	}
-
-	return inst, nil
-}
-
-func modelIDOrDefault(m *Model) string {
-	if m == nil {
-		return ""
-	}
-	return m.ID
+	}, nil
 }

@@ -31,7 +31,6 @@ var staticFS embed.FS
 type App struct {
 	cfg           *config.Config
 	supervisor    *process.Supervisor
-	profileSvc    *application.ProfileService
 	instanceSvc   *application.InstanceService
 	runtimeSvc    *application.RuntimeService
 	modelSvc      *application.ModelService
@@ -46,7 +45,6 @@ type App struct {
 
 // NewApp creates server dependencies.
 func NewApp(cfg *config.Config, repo storage.Repository, supervisor *process.Supervisor) (*App, error) {
-	profileSvc := application.NewProfileService(repo)
 	instanceSvc := application.NewInstanceService(supervisor, repo)
 	runtimeSvc := application.NewRuntimeService(repo)
 	modelSvc := application.NewModelService(repo)
@@ -54,7 +52,6 @@ func NewApp(cfg *config.Config, repo storage.Repository, supervisor *process.Sup
 	a := &App{
 		cfg:           cfg,
 		supervisor:    supervisor,
-		profileSvc:    profileSvc,
 		instanceSvc:   instanceSvc,
 		runtimeSvc:    runtimeSvc,
 		modelSvc:      modelSvc,
@@ -104,7 +101,6 @@ func (a *App) Router() http.Handler {
 // InitRegistry creates the route registry.
 func (a *App) InitRegistry() {
 	a.reg = handlers.NewRouteRegistry(
-		a.profileSvc,
 		a.instanceSvc,
 		a.runtimeSvc,
 		a.modelSvc,
@@ -150,14 +146,14 @@ func (a *App) buildRuntimeDefs() []health.RuntimeDef {
 			Port: 0,
 		}
 	}
-	profiles, _ := a.repo.ListProfiles()
-	for _, p := range profiles {
-		if def, ok := defsMap[p.RuntimeID]; ok {
-			defsMap[p.RuntimeID] = health.RuntimeDef{
-				ID:   p.RuntimeID,
+	models, _ := a.repo.ListModels()
+	for _, m := range models {
+		if def, ok := defsMap[m.RuntimeID]; ok {
+			defsMap[m.RuntimeID] = health.RuntimeDef{
+				ID:   m.RuntimeID,
 				Name: def.Name,
-				Host: p.Host,
-				Port: p.Port,
+				Host: m.Host,
+				Port: m.Port,
 			}
 		}
 	}

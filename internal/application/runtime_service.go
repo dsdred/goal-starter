@@ -49,13 +49,9 @@ func (s *RuntimeService) UpdateRuntime(ctx context.Context, entry *storage.Runti
 }
 
 // DeleteRuntime deletes a runtime by ID. Returns a conflict error if any model
-// or profile references this runtime.
+// references this runtime.
 func (s *RuntimeService) DeleteRuntime(ctx context.Context, id string) error {
 	models, err := s.repo.ListModels()
-	if err != nil {
-		return err
-	}
-	profiles, err := s.repo.ListProfiles()
 	if err != nil {
 		return err
 	}
@@ -63,11 +59,6 @@ func (s *RuntimeService) DeleteRuntime(ctx context.Context, id string) error {
 	for _, m := range models {
 		if m.RuntimeID == id {
 			dependents = append(dependents, "model: "+m.Name)
-		}
-	}
-	for _, p := range profiles {
-		if p.RuntimeID == id {
-			dependents = append(dependents, "profile: "+p.Name)
 		}
 	}
 	if len(dependents) > 0 {

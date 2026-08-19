@@ -102,7 +102,7 @@ func TestSpecificErrors(t *testing.T) {
 		{"ErrInvalidPortDetail", ErrInvalidPortDetail("out of range"), CodeInvalidPort},
 		{"ErrInvalidHostDetail", ErrInvalidHostDetail("invalid format"), CodeInvalidHost},
 		{"ErrInvalidAddressDetail", ErrInvalidAddressDetail("bad host", "bad port"), CodeInvalidAddress},
-		{"ErrProfileNotFound", ErrProfileNotFound("id_123"), CodeInvalidProfile},
+
 		{"ErrRuntimeNotFound", ErrRuntimeNotFound("id_456"), CodeInvalidRuntime},
 		{"ErrModelNotFound", ErrModelNotFound("id_789"), CodeInvalidModel},
 	}

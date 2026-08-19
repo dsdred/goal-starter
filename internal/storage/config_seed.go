@@ -6,10 +6,10 @@ import (
 	"github.com/dsdred/goal/internal/config"
 )
 
-// SeedFromConfig seeds the repository with runtimes, models, and profiles from
-// the configuration file. Entries that already exist in the repository are
-// skipped (matched by ID). This allows the config file to act as an initial
-// seed without overwriting any subsequent edits via the API.
+// SeedFromConfig seeds the repository with runtimes and models from
+// the configuration file. In v6, old config profiles become models,
+// and old config models (physical files) are folded into model args.
+// Entries that already exist are skipped (matched by ID).
 func SeedFromConfig(repo Repository, cfg *config.Config) {
 	// Runtimes
 	for _, rt := range cfg.Runtimes {
@@ -30,43 +30,40 @@ func SeedFromConfig(repo Repository, cfg *config.Config) {
 		}
 	}
 
-	// Models
-	for _, m := range cfg.Models {
-		if _, err := repo.GetModel(m.ID); err == nil {
-			slog.Debug("seed skip existing model", "id", m.ID)
-			continue
-		}
-		entry := &ModelEntry{
-			ID:        m.ID,
-			Name:      m.Name,
-			Path:      m.Path,
-			Arguments: m.Arguments,
-			RuntimeID: m.RuntimeID,
-		}
-		if err := repo.CreateModel(entry); err != nil {
-			slog.Warn("seed model failed", "id", m.ID, "error", err)
-		}
+	// Build old model lookup for folding into model args.
+	oldModelMap := make(map[string]*config.Model)
+	for i := range cfg.Models {
+		oldModelMap[cfg.Models[i].ID] = &cfg.Models[i]
 	}
 
-	// Profiles
+	// Profiles → new Models (folding old model path/mmproj/args)
 	for _, p := range cfg.Profiles {
-		if _, err := repo.GetProfile(p.ID); err == nil {
-			slog.Debug("seed skip existing profile", "id", p.ID)
+		if _, err := repo.GetModel(p.ID); err == nil {
+			slog.Debug("seed skip existing model", "id", p.ID)
 			continue
 		}
-		entry := &ProfileEntry{
+		args := make([]string, 0, len(p.Args)+8)
+		args = append(args, p.Args...)
+		if p.ModelID != "" {
+			if m, ok := oldModelMap[p.ModelID]; ok {
+				if m.Path != "" {
+					args = append(args, "-m", m.Path)
+				}
+				args = append(args, m.Arguments...)
+			}
+		}
+		entry := &ModelEntry{
 			ID:          p.ID,
 			Name:        p.Name,
 			RuntimeID:   p.RuntimeID,
-			ModelID:     p.ModelID,
 			Host:        p.Host,
 			Port:        p.Port,
-			Args:        p.Args,
+			Args:        args,
 			Environment: p.Environment,
 			Active:      true,
 		}
-		if err := repo.CreateProfile(entry); err != nil {
-			slog.Warn("seed profile failed", "id", p.ID, "error", err)
+		if err := repo.CreateModel(entry); err != nil {
+			slog.Warn("seed model failed", "id", p.ID, "error", err)
 		}
 	}
 }

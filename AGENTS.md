@@ -20,7 +20,7 @@ Before completing a task, run:
 - Store and pass process arguments as `[]string`.
 - Each `exec.Cmd` has exactly one owner calling `Wait`.
 - HTTP handlers must not manage `exec.Cmd` directly.
-- Merge profile environment variables with the parent process environment.
+- Merge model environment variables with the parent process environment.
 - Keep the application distributable as one binary.
 - Do not expose administration on LAN before authentication and CSRF protection exist.
 - Platform-specific behavior belongs in `internal/platform`.

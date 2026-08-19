@@ -17,7 +17,6 @@ const (
 	CodeInvalidPort    Code = "invalid_port"
 	CodeInvalidHost    Code = "invalid_host"
 	CodeInvalidAddress Code = "invalid_address"
-	CodeInvalidProfile Code = "invalid_profile"
 	CodeInvalidRuntime Code = "invalid_runtime"
 	CodeInvalidModel   Code = "invalid_model"
 	CodeInternalServer Code = "internal_server_error"
@@ -88,11 +87,6 @@ func ErrInvalidHostDetail(msg string) *APIError {
 // ErrInvalidAddress creates an address validation error.
 func ErrInvalidAddressDetail(hostMsg, portMsg string) *APIError {
 	return NewAPIError(CodeInvalidAddress, "invalid address", "host: "+hostMsg, "port: "+portMsg)
-}
-
-// ErrProfileNotFound creates a profile not found error.
-func ErrProfileNotFound(id string) *APIError {
-	return NewAPIError(CodeInvalidProfile, "profile not found: "+id)
 }
 
 // ErrRuntimeNotFound creates a runtime not found error.

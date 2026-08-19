@@ -1,6 +1,6 @@
 # GoAl — User Guide
 
-GoAl is a lightweight cross-platform manager for local AI runtimes, models, and launch profiles. One binary for Windows and Linux.
+GoAl is a lightweight cross-platform manager for local AI runtimes and models. One binary for Windows and Linux.
 
 ---
 
@@ -12,15 +12,14 @@ GoAl is a lightweight cross-platform manager for local AI runtimes, models, and 
 4. [Web Interface](#web-interface)
 5. [API](#api)
 6. [Instance Management](#instance-management)
-7. [Launch Profiles](#launch-profiles)
+7. [Models](#models)
 8. [Runtimes](#runtimes)
-9. [Models](#models)
-10. [Logs](#logs)
-11. [Runtime Health](#runtime-health)
-12. [Security](#security)
-13. [Install as Service (Linux systemd)](#install-as-service-linux-systemd)
-14. [Install as Service (Windows)](#install-as-service-windows)
-15. [FAQ](#faq)
+9. [Logs](#logs)
+10. [Runtime Health](#runtime-health)
+11. [Security](#security)
+12. [Install as Service (Linux systemd)](#install-as-service-linux-systemd)
+13. [Install as Service (Windows)](#install-as-service-windows)
+14. [FAQ](#faq)
 
 ---
 
@@ -258,9 +257,8 @@ After starting, GoAl is available at: **http://127.0.0.1:9090**
 
 - **Dashboard** — overview of all instances and their statuses
 - **Instance Management** — start, stop, restart
-- **Profile CRUD** — create, edit, delete profiles
 - **Runtime CRUD** — configure AI runtimes
-- **Model CRUD** — configure models
+- **Model CRUD** — configure launch definitions (runtime + launch args + environment)
 - **Health Monitoring** — check runtime availability
 - **Metrics** — built-in application metrics
 
@@ -298,26 +296,30 @@ All API calls start with: `http://127.0.0.1:9090`
 | POST | `/api/v1/instances/{id}/stop` | Stop instance |
 | POST | `/api/v1/instances/{id}/restart` | Restart instance |
 
-### Profiles
+### Models
+
+Models are configured launch definitions combining a runtime with launch arguments,
+host, port, and environment.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/api/v1/profiles` | List profiles |
-| GET | `/api/v1/profiles/{id}` | Get profile |
-| POST | `/api/v1/profiles` | Create profile |
-| PUT | `/api/v1/profiles/{id}` | Update profile |
-| DELETE | `/api/v1/profiles/{id}` | Delete profile |
-| POST | `/api/v1/profiles/{id}/start` | Start by profile |
-| POST | `/api/v1/profiles/{id}/stop` | Stop all processes of profile |
-| POST | `/api/v1/profiles/{id}/restart` | Restart profile processes |
-| GET | `/api/v1/profiles/{id}/status` | Processes status |
-| POST | `/api/v1/profiles/{id}/activate` | Activate |
-| POST | `/api/v1/profiles/{id}/deactivate` | Deactivate |
+| GET | `/api/v1/models` | List models |
+| GET | `/api/v1/models/{id}` | Get model |
+| POST | `/api/v1/models` | Create model |
+| PUT | `/api/v1/models/{id}` | Update model |
+| DELETE | `/api/v1/models/{id}` | Delete model |
+| POST | `/api/v1/models/{id}/start` | Start an instance |
+| POST | `/api/v1/models/{id}/stop` | Stop active instances |
+| POST | `/api/v1/models/{id}/restart` | Restart |
+| GET | `/api/v1/models/{id}/status` | Instance status |
+| POST | `/api/v1/models/{id}/activate` | Enable autostart |
+| POST | `/api/v1/models/{id}/deactivate` | Disable autostart |
+| POST | `/api/v1/models/{id}/resolve` | Preview resolved command |
 
-Profile environment values are write-only. The API and Web UI show only their
-keys. Editing other profile fields preserves the stored environment when the
+Model environment values are write-only. The API and Web UI show only their
+keys. Editing other model fields preserves the stored environment when the
 `environment` field is omitted. Send an explicit replacement map to change the
-environment, or `{}` to remove all profile environment entries.
+environment, or `{}` to remove all model environment entries.
 
 ### Runtimes
 
@@ -338,16 +340,6 @@ this file is not an encrypted secret vault.
 | GET | `/api/v1/runtimes/health` | Health of all runtimes |
 | GET | `/api/v1/runtimes/health/{id}` | Health of specific runtime |
 
-### Models
-
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/api/v1/models` | List models |
-| GET | `/api/v1/models/{id}` | Get model |
-| POST | `/api/v1/models` | Create model |
-| PUT | `/api/v1/models/{id}` | Update model |
-| DELETE | `/api/v1/models/{id}` | Delete model |
-
 ### Health Check and Version
 
 | Method | Path | Description |
@@ -364,10 +356,10 @@ this file is not an encrypted secret vault.
 
 ### What is an Instance?
 
-- **Profile** — launch template (configuration)
+- **Model** — configured launch definition (runtime reference + launch args + environment)
 - **Instance** — running process (runtime entity)
 
-One profile can create multiple instances. Stopping an instance does not delete the profile. Restart creates a new instance.
+One model can create multiple instances. Stopping an instance does not delete the model. Restart creates a new instance.
 
 ### CLI Management
 
@@ -393,32 +385,34 @@ curl -X POST http://127.0.0.1:9090/api/v1/instances/INSTANCE_ID/restart
 
 ---
 
-## Launch Profiles
+## Models
 
-### Creating a Profile
+A **Model** is a configured launch definition: a runtime reference, launch arguments,
+host/port, and environment. Physical model files (GGUF, MMProj) are not separate
+entities — they are ordinary launch arguments (e.g., `-m <path>`, `--mmproj <path>`).
+
+### Creating a Model
 
 **Via Web Interface:**
 
-1. Go to **Profiles** section
-2. Click **Create Profile**
+1. Go to the **Мои модели** section
+2. Click **+ Добавить модель**
 3. Fill in the fields:
-   - Profile name
+   - Model name
    - Select runtime
-   - Select model (optional)
-   - Specify arguments (optional)
+   - Specify launch arguments (optional)
    - Specify environment variables (optional)
 4. Click **Save**
 
 **Via API:**
 
 ```bash
-curl -X POST http://127.0.0.1:9090/api/v1/profiles \
+curl -X POST http://127.0.0.1:9090/api/v1/models \
   -H "Content-Type: application/json" \
   -d '{
-    "id": "my-profile",
-    "name": "My Profile",
+    "id": "my-model",
+    "name": "My Model",
     "runtimeId": "ollama",
-    "modelId": "llama3",
     "active": true
   }'
 ```
@@ -426,7 +420,7 @@ curl -X POST http://127.0.0.1:9090/api/v1/profiles \
 ### Launch Command Preview
 
 ```bash
-curl -X POST http://127.0.0.1:9090/api/v1/profiles/my-profile/resolve \
+curl -X POST http://127.0.0.1:9090/api/v1/models/my-model/resolve \
   -H "Content-Type: application/json"
 ```
 
@@ -499,24 +493,6 @@ curl http://127.0.0.1:9090/api/v1/runtimes/health
 
 # Health of specific runtime
 curl http://127.0.0.1:9090/api/v1/runtimes/health/ollama
-```
-
----
-
-## Models
-
-### Creating a Model
-
-```bash
-curl -X POST http://127.0.0.1:9090/api/v1/models \
-  -H "Content-Type: application/json" \
-  -d '{
-    "id": "llama3",
-    "name": "Llama 3",
-    "runtimeId": "ollama",
-    "model": "llama3:8b",
-    "active": true
-  }'
 ```
 
 ---

@@ -66,8 +66,7 @@
             <div class="wizard-steps">
                 <div class="wizard-step active" data-step="1"><span>1</span> Название</div>
                 <div class="wizard-step" data-step="2"><span>2</span> Runtime</div>
-                <div class="wizard-step" data-step="3"><span>3</span> Модель</div>
-                <div class="wizard-step" data-step="4"><span>4</span> Запуск</div>
+                <div class="wizard-step" data-step="3"><span>3</span> Запуск</div>
             </div>
             <form id="wizard-form">
                 <!-- Step 1: Name -->
@@ -115,24 +114,13 @@
                         </div>
                     </div>
                 </div>
-                <!-- Step 3: Model -->
+                <!-- Step 3: Launch config -->
                 <div class="wizard-panel" data-panel="3">
                     <div class="form-group">
-                        <label>GGUF файл</label>
-                        <input type="text" id="wiz-model-path" placeholder="E:\models\qwen\Qwen3.8-27B-Q4_K_M.gguf">
+                        <label>Аргументы запуска *</label>
+                        <textarea id="wiz-args" rows="5" placeholder="-m E:\models\model.gguf&#10;--mmproj E:\models\mmproj.gguf&#10;-ngl 99&#10;-c 131072&#10;--temp 1.0"></textarea>
+                        <small class="hint">По одному аргументу в строке. Путь к GGUF (--m) и MMProj (--mmproj) — обычные аргументы.</small>
                     </div>
-                    <div class="form-group">
-                        <label>MMProj (опционально)</label>
-                        <input type="text" id="wiz-model-mmproj" placeholder="E:\models\qwen\mmproj-F16.gguf">
-                    </div>
-                    <div class="form-group">
-                        <label>Параметры модели</label>
-                        <textarea id="wiz-model-args" rows="4" placeholder="-ngl 999&#10;-c 200000&#10;-np 1&#10;-ctk q8_0&#10;-ctv q8_0&#10;-fa on&#10;--jinja"></textarea>
-                        <small class="hint">По одному параметру в строке</small>
-                    </div>
-                </div>
-                <!-- Step 4: Launch config -->
-                <div class="wizard-panel" data-panel="4">
                     <div class="form-row">
                         <div class="form-group">
                             <label>Host</label>
@@ -144,8 +132,8 @@
                         </div>
                     </div>
                     <div class="form-group">
-                        <label>Дополнительные аргументы запуска</label>
-                        <textarea id="wiz-profile-args" rows="2" placeholder="Дополнительные args для этого запуска (опционально)"></textarea>
+                        <label>Дополнительные аргументы</label>
+                        <textarea id="wiz-extra-args" rows="2" placeholder="Дополнительные args для этого запуска (опционально)"></textarea>
                     </div>
                     <div class="form-group">
                         <label>Переменные окружения</label>
@@ -221,8 +209,6 @@
             <div class="sidebar-label">РАСШИРЕННО</div>
             <nav class="sidebar-nav">
                 <button class="nav-item nav-adv" data-view="adv-runtimes" onclick="navigate('adv-runtimes')">Рантаймы</button>
-                <button class="nav-item nav-adv" data-view="adv-models" onclick="navigate('adv-models')">Модели (сущ.)</button>
-                <button class="nav-item nav-adv" data-view="adv-profiles" onclick="navigate('adv-profiles')">Профили</button>
                 <button class="nav-item nav-adv" data-view="adv-instances" onclick="navigate('adv-instances')">Экземпляры</button>
                 <button class="nav-item nav-adv" data-view="adv-autostart" onclick="navigate('adv-autostart')">Автозапуск</button>
                 <button class="nav-item nav-adv" data-view="adv-settings" onclick="navigate('adv-settings')">Настройки</button>
@@ -312,36 +298,6 @@
                 </table>
             </section>
 
-            <!-- View: Advanced - Models -->
-            <section class="view" id="view-adv-models">
-                <div class="view-header">
-                    <h1>Модели (сущ.)</h1>
-                    <button class="btn btn-primary" onclick="showCreateModelModal()">+ Добавить</button>
-                </div>
-                <div class="empty-state" id="models-adv-empty" style="display:none;">
-                    <p>Модели не добавлены.</p>
-                </div>
-                <table class="data-table">
-                    <thead><tr><th>Имя</th><th>Runtime</th><th>Путь</th><th>MMProj</th><th>Формат</th><th></th></tr></thead>
-                    <tbody id="adv-models-body"></tbody>
-                </table>
-            </section>
-
-            <!-- View: Advanced - Profiles -->
-            <section class="view" id="view-adv-profiles">
-                <div class="view-header">
-                    <h1>Профили</h1>
-                    <button class="btn btn-primary" onclick="showCreateProfileModal()">+ Добавить</button>
-                </div>
-                <div class="empty-state" id="profiles-adv-empty" style="display:none;">
-                    <p>Профили не добавлены.</p>
-                </div>
-                <table class="data-table">
-                    <thead><tr><th>Имя</th><th>Runtime</th><th>Модель</th><th>Адрес:Порт</th><th>Аргументы</th><th></th></tr></thead>
-                    <tbody id="adv-profiles-body"></tbody>
-                </table>
-            </section>
-
             <!-- View: Advanced - Instances -->
             <section class="view" id="view-adv-instances">
                 <div class="view-header">
@@ -352,7 +308,7 @@
                     <small class="hint-text">Запустите модель из «Мои модели», чтобы увидеть экземпляр здесь.</small>
                 </div>
                 <table class="data-table">
-                    <thead><tr><th>ID</th><th>Профиль</th><th>Состояние</th><th>PID</th><th>Запущен</th><th>Остановлен</th><th>Exit</th><th></th></tr></thead>
+                    <thead><tr><th>ID</th><th>Модель</th><th>Состояние</th><th>PID</th><th>Запущен</th><th>Остановлен</th><th>Exit</th><th></th></tr></thead>
                     <tbody id="adv-instances-body"></tbody>
                 </table>
             </section>
@@ -396,42 +352,11 @@
         <div class="modal-box">
             <div class="modal-header"><h2>Создать Runtime</h2><button class="modal-close" onclick="closeModal('create-runtime-modal')">&times;</button></div>
             <form onsubmit="return handleCreateRuntime(event)">
-                <div class="form-group"><label>Имя *</label><input type="text" name="name" required></div>
-                <div class="form-group"><label>Executable *</label><input type="text" name="executable" required></div>
-                <div class="form-group"><label>Working Directory</label><input type="text" name="working_directory"></div>
-                <div class="form-group"><label>Default Args (space-separated)</label><textarea name="default_args" rows="2"></textarea></div>
+                <div class="form-group"><label>Название *</label><input type="text" name="name" required></div>
+                <div class="form-group"><label>Исполняемый файл *</label><input type="text" name="executable" required></div>
+                <div class="form-group"><label>Рабочая папка</label><input type="text" name="working_directory"></div>
+                <div class="form-group"><label>Дополнительные параметры Runtime</label><textarea name="default_args" rows="2"></textarea><small class="hint">Обычно оставьте пустым. Здесь задаются параметры движка, общие для моделей, использующих этот Runtime.</small></div>
                 <div class="modal-actions"><button type="submit" class="btn btn-primary">Создать</button><button type="button" class="btn btn-ghost" onclick="closeModal('create-runtime-modal')">Отмена</button></div>
-            </form>
-        </div>
-    </div>
-
-    <div id="create-model-modal" class="modal-overlay" style="display:none;">
-        <div class="modal-box">
-            <div class="modal-header"><h2>Создать Model</h2><button class="modal-close" onclick="closeModal('create-model-modal')">&times;</button></div>
-            <form onsubmit="return handleCreateModel(event)">
-                <div class="form-group"><label>Имя *</label><input type="text" name="name" required></div>
-                <div class="form-group"><label>Runtime *</label><select name="runtime_id" required><option value="">—</option></select></div>
-                <div class="form-group"><label>Тип *</label><select name="kind" required onchange="toggleModelKind(this)"><option value="">—</option><option value="path">Path (GGUF)</option><option value="arguments">Arguments</option></select></div>
-                <div class="form-group" data-kind="path"><label>Path *</label><input type="text" name="path"></div>
-                <div class="form-group" data-kind="arguments" style="display:none;"><label>Arguments</label><textarea name="arguments" rows="3"></textarea></div>
-                <div class="modal-actions"><button type="submit" class="btn btn-primary">Создать</button><button type="button" class="btn btn-ghost" onclick="closeModal('create-model-modal')">Отмена</button></div>
-            </form>
-        </div>
-    </div>
-
-    <div id="create-profile-modal" class="modal-overlay" style="display:none;">
-        <div class="modal-box">
-            <div class="modal-header"><h2>Создать Profile</h2><button class="modal-close" onclick="closeModal('create-profile-modal')">&times;</button></div>
-            <form onsubmit="return handleCreateProfile(event)">
-                <div class="form-group"><label>Имя *</label><input type="text" name="name" required></div>
-                <div class="form-group"><label>Runtime *</label><select name="runtime_id" required></select></div>
-                <div class="form-group"><label>Model</label><select name="model_id"></select></div>
-                <div class="form-row">
-                    <div class="form-group"><label>Host</label><input type="text" name="host" value="127.0.0.1"></div>
-                    <div class="form-group"><label>Port</label><input type="number" name="port" min="1" max="65535"></div>
-                </div>
-                <div class="form-group"><label>Args (space-separated)</label><textarea name="args" rows="2"></textarea></div>
-                <div class="modal-actions"><button type="submit" class="btn btn-primary">Создать</button><button type="button" class="btn btn-ghost" onclick="closeModal('create-profile-modal')">Отмена</button></div>
             </form>
         </div>
     </div>
@@ -441,44 +366,11 @@
             <div class="modal-header"><h2>Редактировать Runtime</h2><button class="modal-close" onclick="closeModal('edit-runtime-modal')">&times;</button></div>
             <form onsubmit="return handleEditRuntime(event)">
                 <input type="hidden" name="id">
-                <div class="form-group"><label>Имя *</label><input type="text" name="name" required></div>
-                <div class="form-group"><label>Executable *</label><input type="text" name="executable" required></div>
-                <div class="form-group"><label>Working Directory</label><input type="text" name="working_directory"></div>
-                <div class="form-group"><label>Default Args</label><textarea name="default_args" rows="2"></textarea></div>
+                <div class="form-group"><label>Название *</label><input type="text" name="name" required></div>
+                <div class="form-group"><label>Исполняемый файл *</label><input type="text" name="executable" required></div>
+                <div class="form-group"><label>Рабочая папка</label><input type="text" name="working_directory"></div>
+                <div class="form-group"><label>Дополнительные параметры Runtime</label><textarea name="default_args" rows="2"></textarea><small class="hint">Обычно оставьте пустым. Здесь задаются параметры движка, общие для моделей, использующих этот Runtime.</small></div>
                 <div class="modal-actions"><button type="submit" class="btn btn-primary">Сохранить</button><button type="button" class="btn btn-ghost" onclick="closeModal('edit-runtime-modal')">Отмена</button></div>
-            </form>
-        </div>
-    </div>
-
-    <div id="edit-model-modal" class="modal-overlay" style="display:none;">
-        <div class="modal-box">
-            <div class="modal-header"><h2>Редактировать Model</h2><button class="modal-close" onclick="closeModal('edit-model-modal')">&times;</button></div>
-            <form onsubmit="return handleEditModel(event)">
-                <input type="hidden" name="id">
-                <div class="form-group"><label>Имя *</label><input type="text" name="name" required></div>
-                <div class="form-group"><label>Runtime *</label><select name="runtime_id" required></select></div>
-                <div class="form-group"><label>Тип *</label><select name="kind" required onchange="toggleModelKind(this)"><option value="path">Path</option><option value="arguments">Arguments</option></select></div>
-                <div class="form-group" data-kind="path"><label>Path *</label><input type="text" name="path"></div>
-                <div class="form-group" data-kind="arguments" style="display:none;"><label>Arguments</label><textarea name="arguments" rows="3"></textarea></div>
-                <div class="modal-actions"><button type="submit" class="btn btn-primary">Сохранить</button><button type="button" class="btn btn-ghost" onclick="closeModal('edit-model-modal')">Отмена</button></div>
-            </form>
-        </div>
-    </div>
-
-    <div id="edit-profile-modal" class="modal-overlay" style="display:none;">
-        <div class="modal-box">
-            <div class="modal-header"><h2>Редактировать Profile</h2><button class="modal-close" onclick="closeModal('edit-profile-modal')">&times;</button></div>
-            <form onsubmit="return handleEditProfile(event)">
-                <input type="hidden" name="id">
-                <div class="form-group"><label>Имя *</label><input type="text" name="name" required></div>
-                <div class="form-group"><label>Runtime *</label><select name="runtime_id" required></select></div>
-                <div class="form-group"><label>Model</label><select name="model_id"></select></div>
-                <div class="form-row">
-                    <div class="form-group"><label>Host</label><input type="text" name="host"></div>
-                    <div class="form-group"><label>Port</label><input type="number" name="port" min="1" max="65535"></div>
-                </div>
-                <div class="form-group"><label>Args</label><textarea name="args" rows="2"></textarea></div>
-                <div class="modal-actions"><button type="submit" class="btn btn-primary">Сохранить</button><button type="button" class="btn btn-ghost" onclick="closeModal('edit-profile-modal')">Отмена</button></div>
             </form>
         </div>
     </div>

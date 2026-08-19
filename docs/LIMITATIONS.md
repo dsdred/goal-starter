@@ -44,9 +44,9 @@ If a process starts successfully but persistence fails, the process continues ru
 
 `GET /api/v1/runtimes/health` returns instance-based health (count and running instance details). The periodic TCP health checker (`HealthChecker` in `internal/webui/health/`) stores results internally but does not expose them via a separate API endpoint.
 
-### HTTP health check is profile/runtime only
+### HTTP health check is model/runtime only
 
-HTTP health checks use `ProfileHealthCheck` and `RuntimeHealthCheck` configuration. The checker targets `host:port` with optional `httpPath` and `httpStatus`.
+Health check configuration is available in the goal.json config format for both models and runtimes. The checker targets `host:port` with optional `httpPath` and `httpStatus`.
 
 ## Configuration
 

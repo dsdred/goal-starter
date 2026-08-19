@@ -207,7 +207,7 @@ type LogStreamEvent struct {
 	Sequence   uint64    `json:"sequence"`
 	Timestamp  time.Time `json:"time"`
 	InstanceID string    `json:"instance_id"`
-	ProfileID  string    `json:"profile_id"`
+	ModelID    string    `json:"model_id"`
 	Stream     LogStream `json:"stream"`
 	Message    string    `json:"message"`
 }

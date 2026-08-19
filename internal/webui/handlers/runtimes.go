@@ -208,7 +208,7 @@ func (h *RuntimesHandler) Action(w http.ResponseWriter, r *http.Request) {
 	case "start":
 		for _, inst := range instances {
 			if inst.RuntimeID == id && inst.IsActive() {
-				inst, err := h.instances.StartProfile(r.Context(), inst.ProfileID)
+				inst, err := h.instances.StartModel(r.Context(), inst.ModelID)
 				if err != nil {
 					writeError(w, 500, err.Error())
 					return

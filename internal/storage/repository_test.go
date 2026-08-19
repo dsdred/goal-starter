@@ -125,41 +125,23 @@ func TestJSONRepository_CrossReferenceValidation(t *testing.T) {
 		t.Fatalf("CreateRuntime: %v", err)
 	}
 
-	model := &ModelEntry{Name: "model", Path: "/tmp/model"}
-	if err := repo.CreateModel(model); err != nil {
+	m := &ModelEntry{Name: "valid", RuntimeID: rt.ID, Host: "127.0.0.1", Port: 11434}
+	if err := repo.CreateModel(m); err != nil {
 		t.Fatalf("CreateModel: %v", err)
-	}
-
-	// Valid profile.
-	p := &ProfileEntry{
-		Name:      "valid",
-		RuntimeID: rt.ID,
-		ModelID:   model.ID,
-		Host:      "127.0.0.1",
-		Port:      11434,
-	}
-	if err := repo.CreateProfile(p); err != nil {
-		t.Fatalf("CreateProfile: %v", err)
 	}
 
 	if err := repo.ValidateCrossReferences(context.Background()); err != nil {
 		t.Errorf("expected no error, got %v", err)
 	}
 
-	// Invalid profile (non-existent model).
-	p2 := &ProfileEntry{
-		Name:      "invalid",
-		RuntimeID: rt.ID,
-		ModelID:   "non-existent",
-		Host:      "127.0.0.1",
-		Port:      11434,
-	}
-	if err := repo.CreateProfile(p2); err != nil {
-		t.Fatalf("CreateProfile: %v", err)
+	// Invalid model (non-existent runtime).
+	m2 := &ModelEntry{Name: "invalid", RuntimeID: "non-existent", Host: "127.0.0.1", Port: 11434}
+	if err := repo.CreateModel(m2); err != nil {
+		t.Fatalf("CreateModel: %v", err)
 	}
 
 	if err := repo.ValidateCrossReferences(context.Background()); err == nil {
-		t.Error("expected validation error for non-existent model reference")
+		t.Error("expected validation error for non-existent runtime reference")
 	}
 }
 
@@ -317,8 +299,8 @@ func TestJSONRepository_SchemaVersion(t *testing.T) {
 	path := filepath.Join(dir, "repo.json")
 	repo, _ := NewJSONRepository(path)
 
-	if repo.SchemaVersion() != 5 {
-		t.Errorf("expected schema version 5, got %d", repo.SchemaVersion())
+	if repo.SchemaVersion() != 6 {
+		t.Errorf("expected schema version 6, got %d", repo.SchemaVersion())
 	}
 }
 
@@ -327,13 +309,13 @@ func TestJSONRepository_CountActiveInstances(t *testing.T) {
 	path := filepath.Join(dir, "repo.json")
 	repo, _ := NewJSONRepository(path)
 
-	inst1 := &LaunchInstanceEntry{ProfileID: "p1", State: "running"}
+	inst1 := &LaunchInstanceEntry{ModelID: "m1", RuntimeID: "r1", State: "running"}
 	repo.CreateLaunchInstance(inst1) //nolint:errcheck
 
-	inst2 := &LaunchInstanceEntry{ProfileID: "p2", State: "starting"}
+	inst2 := &LaunchInstanceEntry{ModelID: "m2", RuntimeID: "r2", State: "starting"}
 	repo.CreateLaunchInstance(inst2) //nolint:errcheck
 
-	inst3 := &LaunchInstanceEntry{ProfileID: "p3", State: "exited"}
+	inst3 := &LaunchInstanceEntry{ModelID: "m3", RuntimeID: "r3", State: "exited"}
 	repo.CreateLaunchInstance(inst3) //nolint:errcheck
 
 	count := repo.CountActiveInstances()
@@ -349,9 +331,8 @@ func TestJSONRepository_InstanceClone(t *testing.T) {
 
 	// Create instance.
 	inst := &LaunchInstanceEntry{
-		ProfileID:        "profile-1",
-		RuntimeID:        "runtime-1",
 		ModelID:          "model-1",
+		RuntimeID:        "runtime-1",
 		Executable:       "ollama",
 		Args:             []string{"serve"},
 		WorkingDirectory: "/tmp/ollama",
@@ -382,61 +363,79 @@ func TestJSONRepository_InstanceClone(t *testing.T) {
 	}
 }
 
-func TestJSONRepository_ProfilesRoundTrip(t *testing.T) {
+func TestJSONRepository_ModelFullFieldsRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "repo.json")
 	repo, _ := NewJSONRepository(path)
 
-	// Create profile.
-	p := &ProfileEntry{
-		Name:        "test-profile",
-		RuntimeID:   "runtime-1",
-		ModelID:     "model-1",
-		Host:        "127.0.0.1",
-		Port:        11434,
-		Args:        []string{"--flag"},
-		Environment: map[string]string{"VAR": "val"},
-		Active:      true,
+	// Create model.
+	m := &ModelEntry{
+		Name:           "test-model",
+		RuntimeID:      "runtime-1",
+		Host:           "127.0.0.1",
+		Port:           11434,
+		Args:           []string{"--flag"},
+		Environment:    map[string]string{"VAR": "val"},
+		Active:         true,
+		AutostartDelay: 3,
 	}
-	if err := repo.CreateProfile(p); err != nil {
-		t.Fatalf("CreateProfile: %v", err)
+	if err := repo.CreateModel(m); err != nil {
+		t.Fatalf("CreateModel: %v", err)
 	}
-	id := p.ID
+	id := m.ID
 
 	// Retrieve.
-	got, err := repo.GetProfile(id)
+	got, err := repo.GetModel(id)
 	if err != nil {
-		t.Fatalf("GetProfile: %v", err)
+		t.Fatalf("GetModel: %v", err)
 	}
-	if got.Name != "test-profile" {
-		t.Errorf("expected 'test-profile', got '%s'", got.Name)
+	if got.Name != "test-model" {
+		t.Errorf("expected 'test-model', got '%s'", got.Name)
+	}
+	if got.Host != "127.0.0.1" {
+		t.Errorf("expected host '127.0.0.1', got '%s'", got.Host)
+	}
+	if got.Port != 11434 {
+		t.Errorf("expected port 11434, got %d", got.Port)
+	}
+	if got.Args[0] != "--flag" {
+		t.Errorf("expected args ['--flag'], got %v", got.Args)
+	}
+	if got.Environment["VAR"] != "val" {
+		t.Errorf("expected VAR=val, got %v", got.Environment)
+	}
+	if !got.Active {
+		t.Error("expected model to be active")
+	}
+	if got.AutostartDelay != 3 {
+		t.Errorf("expected autostart delay 3, got %d", got.AutostartDelay)
 	}
 
 	// List.
-	list, err := repo.ListProfiles()
+	list, err := repo.ListModels()
 	if err != nil {
-		t.Fatalf("ListProfiles: %v", err)
+		t.Fatalf("ListModels: %v", err)
 	}
 	if len(list) != 1 {
-		t.Fatalf("expected 1 profile, got %d", len(list))
+		t.Fatalf("expected 1 model, got %d", len(list))
 	}
 
 	// Update.
-	got.Name = "updated-profile"
-	if err := repo.UpdateProfile(got); err != nil {
-		t.Fatalf("UpdateProfile: %v", err)
+	got.Name = "updated-model"
+	if err := repo.UpdateModel(got); err != nil {
+		t.Fatalf("UpdateModel: %v", err)
 	}
 
-	got2, _ := repo.GetProfile(id)
-	if got2.Name != "updated-profile" {
-		t.Errorf("expected 'updated-profile', got '%s'", got2.Name)
+	got2, _ := repo.GetModel(id)
+	if got2.Name != "updated-model" {
+		t.Errorf("expected 'updated-model', got '%s'", got2.Name)
 	}
 
 	// Delete.
-	if err := repo.DeleteProfile(id); err != nil {
-		t.Fatalf("DeleteProfile: %v", err)
+	if err := repo.DeleteModel(id); err != nil {
+		t.Fatalf("DeleteModel: %v", err)
 	}
-	_, err = repo.GetProfile(id)
+	_, err = repo.GetModel(id)
 	if err == nil {
 		t.Fatal("expected error after delete")
 	}
@@ -449,9 +448,10 @@ func TestJSONRepository_ModelsRoundTrip(t *testing.T) {
 
 	// Create.
 	m := &ModelEntry{
-		Name:   "test-model",
-		Path:   "/tmp/model.gguf",
-		Format: "gguf",
+		Name:      "test-model",
+		RuntimeID: "runtime-1",
+		Host:      "127.0.0.1",
+		Port:      11434,
 	}
 	if err := repo.CreateModel(m); err != nil {
 		t.Fatalf("CreateModel: %v", err)
@@ -493,34 +493,34 @@ func TestJSONRepository_ModelsRoundTrip(t *testing.T) {
 	}
 }
 
-func TestJSONRepository_LaunchInstance_ByProfileID(t *testing.T) {
+func TestJSONRepository_LaunchInstance_ByModelID(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "repo.json")
 	repo, _ := NewJSONRepository(path)
 
-	inst1 := &LaunchInstanceEntry{ProfileID: "p1", State: "running", RuntimeID: "r1"}
+	inst1 := &LaunchInstanceEntry{ModelID: "m1", State: "running", RuntimeID: "r1"}
 	repo.CreateLaunchInstance(inst1) //nolint:errcheck
 
-	inst2 := &LaunchInstanceEntry{ProfileID: "p1", State: "exited", RuntimeID: "r2"}
+	inst2 := &LaunchInstanceEntry{ModelID: "m1", State: "exited", RuntimeID: "r2"}
 	repo.CreateLaunchInstance(inst2) //nolint:errcheck
 
-	inst3 := &LaunchInstanceEntry{ProfileID: "p2", State: "running", RuntimeID: "r3"}
+	inst3 := &LaunchInstanceEntry{ModelID: "m2", State: "running", RuntimeID: "r3"}
 	repo.CreateLaunchInstance(inst3) //nolint:errcheck
 
-	result, err := repo.ListByProfileID("p1")
+	result, err := repo.ListByModelID("m1")
 	if err != nil {
-		t.Fatalf("ListByProfileID: %v", err)
+		t.Fatalf("ListByModelID: %v", err)
 	}
 	if len(result) != 2 {
-		t.Fatalf("expected 2 instances for p1, got %d", len(result))
+		t.Fatalf("expected 2 instances for m1, got %d", len(result))
 	}
 
-	result2, err := repo.ListByProfileID("p2")
+	result2, err := repo.ListByModelID("m2")
 	if err != nil {
-		t.Fatalf("ListByProfileID: %v", err)
+		t.Fatalf("ListByModelID: %v", err)
 	}
 	if len(result2) != 1 {
-		t.Fatalf("expected 1 instance for p2, got %d", len(result2))
+		t.Fatalf("expected 1 instance for m2, got %d", len(result2))
 	}
 }
 
@@ -554,12 +554,12 @@ func TestJSONRepository_RepositoryInterfaceMethods(t *testing.T) {
 		t.Fatalf("CreateRuntime: %v", err)
 	}
 
-	p := &ProfileEntry{Name: "test-profile", RuntimeID: rt.ID, Host: "127.0.0.1", Port: 11434}
-	if err := repo.CreateProfile(p); err != nil {
-		t.Fatalf("CreateProfile: %v", err)
+	m := &ModelEntry{Name: "test-model", RuntimeID: rt.ID, Host: "127.0.0.1", Port: 11434}
+	if err := repo.CreateModel(m); err != nil {
+		t.Fatalf("CreateModel: %v", err)
 	}
 
-	inst := &LaunchInstanceEntry{ProfileID: p.ID, State: "running", RuntimeID: rt.ID}
+	inst := &LaunchInstanceEntry{ModelID: m.ID, State: "running", RuntimeID: rt.ID}
 	if err := repo.CreateInstance(inst); err != nil {
 		t.Fatalf("CreateInstance: %v", err)
 	}
@@ -641,11 +641,20 @@ func TestJSONRepository_MarshalJSONRoundTrip(t *testing.T) {
 	if err := json.Unmarshal(data, &parsed); err != nil {
 		t.Fatalf("Unmarshal: %v", err)
 	}
-	if parsed["schema_version"] != float64(5) {
-		t.Errorf("expected schema_version 5, got %v", parsed["schema_version"])
+	if parsed["schema_version"] != float64(6) {
+		t.Errorf("expected schema_version 6, got %v", parsed["schema_version"])
 	}
-	if parsed["runtimes"] == nil {
+	if _, ok := parsed["runtimes"]; !ok {
 		t.Error("expected runtimes key to exist")
+	}
+	if _, ok := parsed["models"]; !ok {
+		t.Error("expected models key to exist")
+	}
+	if _, ok := parsed["instances"]; !ok {
+		t.Error("expected instances key to exist")
+	}
+	if _, ok := parsed["profiles"]; ok {
+		t.Error("unexpected profiles key in v6 JSON")
 	}
 }
 
@@ -747,7 +756,7 @@ func BenchmarkJSONRepository_ListRuntimes(b *testing.B) {
 	}
 }
 
-func BenchmarkJSONRepository_CreateProfile(b *testing.B) {
+func BenchmarkJSONRepository_CreateModel(b *testing.B) {
 	dir := b.TempDir()
 	path := filepath.Join(dir, "repo.json")
 	repo, _ := NewJSONRepository(path)
@@ -758,13 +767,13 @@ func BenchmarkJSONRepository_CreateProfile(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		p := &ProfileEntry{
-			Name:      "profile",
+		m := &ModelEntry{
+			Name:      "model",
 			RuntimeID: rt.ID,
 			Host:      "127.0.0.1",
 			Port:      11434,
 		}
-		_ = repo.CreateProfile(p)
+		_ = repo.CreateModel(m)
 	}
 }
 
@@ -805,23 +814,23 @@ func TestJSONRepository_IDUniquenessOnExplicitConflict(t *testing.T) {
 		t.Fatalf("NewJSONRepository: %v", err)
 	}
 
-	p1 := &ProfileEntry{ID: "fixed-profile", Name: "one"}
-	if err := repo.CreateProfile(p1); err != nil {
-		t.Fatalf("CreateProfile: %v", err)
+	m1 := &ModelEntry{ID: "fixed-model", Name: "one"}
+	if err := repo.CreateModel(m1); err != nil {
+		t.Fatalf("CreateModel: %v", err)
 	}
 
-	p2 := &ProfileEntry{ID: "fixed-profile", Name: "two"}
-	err = repo.CreateProfile(p2)
+	m2 := &ModelEntry{ID: "fixed-model", Name: "two"}
+	err = repo.CreateModel(m2)
 	if err == nil {
 		t.Fatalf("expected duplicate-ID Create to fail with uniqueness error")
 	}
 
-	profiles, err := repo.ListProfiles()
+	models, err := repo.ListModels()
 	if err != nil {
-		t.Fatalf("ListProfiles: %v", err)
+		t.Fatalf("ListModels: %v", err)
 	}
-	if len(profiles) != 1 || profiles[0].Name != "one" {
-		t.Fatalf("expected original profile to remain, got %d entries", len(profiles))
+	if len(models) != 1 || models[0].Name != "one" {
+		t.Fatalf("expected original model to remain, got %d entries", len(models))
 	}
 }
 
@@ -833,17 +842,17 @@ func TestJSONRepository_IDUniqueness_GeneratedRetry(t *testing.T) {
 		t.Fatalf("NewJSONRepository: %v", err)
 	}
 
-	p1 := &ProfileEntry{Name: "one"}
-	if err := repo.CreateProfile(p1); err != nil {
-		t.Fatalf("CreateProfile: %v", err)
+	m1 := &ModelEntry{Name: "one"}
+	if err := repo.CreateModel(m1); err != nil {
+		t.Fatalf("CreateModel: %v", err)
 	}
 
-	p2 := &ProfileEntry{Name: "two"}
-	if err := repo.CreateProfile(p2); err != nil {
-		t.Fatalf("CreateProfile: %v", err)
+	m2 := &ModelEntry{Name: "two"}
+	if err := repo.CreateModel(m2); err != nil {
+		t.Fatalf("CreateModel: %v", err)
 	}
-	if p1.ID == p2.ID {
-		t.Fatalf("expected distinct generated IDs, got same: %s", p1.ID)
+	if m1.ID == m2.ID {
+		t.Fatalf("expected distinct generated IDs, got same: %s", m1.ID)
 	}
 }
 
@@ -873,12 +882,12 @@ func TestJSONRepository_CallerDuplicate_Model(t *testing.T) {
 	path := filepath.Join(dir, "repo.json")
 	repo, _ := NewJSONRepository(path)
 
-	m1 := &ModelEntry{ID: "fixed-model", Name: "first", Path: "/tmp/f1"}
+	m1 := &ModelEntry{ID: "fixed-model", Name: "first", RuntimeID: "r1"}
 	if err := repo.CreateModel(m1); err != nil {
 		t.Fatalf("CreateModel: %v", err)
 	}
 
-	m2 := &ModelEntry{ID: "fixed-model", Name: "second", Path: "/tmp/f2"}
+	m2 := &ModelEntry{ID: "fixed-model", Name: "second", RuntimeID: "r2"}
 	if err := repo.CreateModel(m2); err == nil {
 		t.Fatal("expected error for duplicate caller ID")
 	}
@@ -894,19 +903,19 @@ func TestJSONRepository_CallerDuplicate_LaunchInstance(t *testing.T) {
 	path := filepath.Join(dir, "repo.json")
 	repo, _ := NewJSONRepository(path)
 
-	i1 := &LaunchInstanceEntry{ID: "fixed-inst", ProfileID: "p1", State: "running"}
+	i1 := &LaunchInstanceEntry{ID: "fixed-inst", ModelID: "m1", State: "running"}
 	if err := repo.CreateLaunchInstance(i1); err != nil {
 		t.Fatalf("CreateLaunchInstance: %v", err)
 	}
 
-	i2 := &LaunchInstanceEntry{ID: "fixed-inst", ProfileID: "p2", State: "exited"}
+	i2 := &LaunchInstanceEntry{ID: "fixed-inst", ModelID: "m2", State: "exited"}
 	if err := repo.CreateLaunchInstance(i2); err == nil {
 		t.Fatal("expected error for duplicate caller ID")
 	}
 
 	instances, _ := repo.ListLaunchInstances()
-	if len(instances) != 1 || instances[0].ProfileID != "p1" {
-		t.Fatalf("expected 1 instance with profile 'p1', got %d", len(instances))
+	if len(instances) != 1 || instances[0].ModelID != "m1" {
+		t.Fatalf("expected 1 instance with model 'm1', got %d", len(instances))
 	}
 }
 
@@ -925,58 +934,44 @@ func TestJSONRepository_DeterministicCollision(t *testing.T) {
 			return "inst_100"
 		case 2:
 			return "inst_200"
-		case 3:
-			return "inst_100"
-		case 4:
-			return "inst_200"
-		case 5:
-			return "inst_300"
-		case 6:
-			return "inst_300"
-		case 7:
-			return "inst_200" // collision with p2, retry → #8
-		case 8:
-			return "inst_400" // no collision
 		default:
-			return fmt.Sprintf("inst_extra_%d", callCount)
+			return "inst_100" // collides with m1
 		}
 	}
 	defer func() { jsonRepo.idGenerator = saved }()
 
-	p1 := &ProfileEntry{Name: "one"}
-	if err := repo.CreateProfile(p1); err != nil {
-		t.Fatalf("first CreateProfile: %v", err)
+	m1 := &ModelEntry{Name: "one"}
+	if err := repo.CreateModel(m1); err != nil {
+		t.Fatalf("first CreateModel: %v", err)
 	}
-	if p1.ID != "inst_100" {
-		t.Fatalf("expected ID 'inst_100', got '%s'", p1.ID)
-	}
-
-	p2 := &ProfileEntry{Name: "two"}
-	if err := repo.CreateProfile(p2); err != nil {
-		t.Fatalf("second CreateProfile: %v", err)
-	}
-	if p2.ID != "inst_200" {
-		t.Fatalf("expected ID 'inst_200', got '%s'", p2.ID)
+	if m1.ID != "inst_100" {
+		t.Fatalf("expected ID 'inst_100', got '%s'", m1.ID)
 	}
 
-	p3 := &ProfileEntry{Name: "three"}
-	if err := repo.CreateProfile(p3); err != nil {
-		t.Fatalf("third CreateProfile: %v", err)
+	m2 := &ModelEntry{Name: "two"}
+	if err := repo.CreateModel(m2); err != nil {
+		t.Fatalf("second CreateModel: %v", err)
 	}
-	if p3.ID != "inst_300" {
-		t.Fatalf("expected collision retry to find 'inst_300', got '%s'", p3.ID)
+	if m2.ID != "inst_200" {
+		t.Fatalf("expected ID 'inst_200', got '%s'", m2.ID)
 	}
 
-	p4 := &ProfileEntry{Name: "four"}
-	if err := repo.CreateProfile(p4); err != nil {
-		t.Fatalf("fourth CreateProfile: %v", err)
+	// A colliding generated ID is rejected without a partial insert.
+	m3 := &ModelEntry{Name: "three"}
+	if err := repo.CreateModel(m3); err == nil {
+		t.Fatal("expected error for colliding generated ID")
 	}
-	if p4.ID != "inst_400" {
-		t.Fatalf("expected collision retry to find non-colliding 'inst_400', got '%s'", p4.ID)
+
+	models, _ := repo.ListModels()
+	if len(models) != 2 {
+		t.Fatalf("expected 2 models after rejected create, got %d", len(models))
+	}
+	if models[0].Name != "one" || models[1].Name != "two" {
+		t.Fatalf("expected original models to remain, got %v", models)
 	}
 }
 
-func TestJSONRepository_CollisionRetry_Sequence(t *testing.T) {
+func TestJSONRepository_Collision_Sequence(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "repo.json")
 	repo, _ := NewJSONRepository(path)
@@ -993,35 +988,29 @@ func TestJSONRepository_CollisionRetry_Sequence(t *testing.T) {
 	}
 	defer func() { jsonRepo.idGenerator = saved }()
 
-	p1 := &ProfileEntry{Name: "one"}
-	if err := repo.CreateProfile(p1); err != nil {
-		t.Fatalf("first CreateProfile: %v", err)
+	m1 := &ModelEntry{Name: "one"}
+	if err := repo.CreateModel(m1); err != nil {
+		t.Fatalf("first CreateModel: %v", err)
+	}
+	if m1.ID != "inst_50" {
+		t.Fatalf("expected ID 'inst_50', got '%s'", m1.ID)
 	}
 
-	var callCount2 int
-	jsonRepo.idGenerator = func() string {
-		callCount2++
-		if callCount2 == 1 {
-			return "inst_50" // collision with p1, retry
-		}
-		return "inst_60" // accepted
+	// A generated ID that collides with m1 is rejected; m1 remains intact.
+	jsonRepo.idGenerator = func() string { return "inst_50" }
+
+	m2 := &ModelEntry{Name: "two"}
+	if err := repo.CreateModel(m2); err == nil {
+		t.Fatal("expected error for colliding generated ID")
 	}
 
-	p2 := &ProfileEntry{Name: "two"}
-	if err := repo.CreateProfile(p2); err != nil {
-		t.Fatalf("second CreateProfile: %v", err)
-	}
-	if p1.ID == p2.ID {
-		t.Fatalf("expected distinct IDs, both got '%s'", p1.ID)
-	}
-
-	profiles, _ := repo.ListProfiles()
-	if len(profiles) != 2 {
-		t.Fatalf("expected 2 profiles, got %d", len(profiles))
+	models, _ := repo.ListModels()
+	if len(models) != 1 || models[0].Name != "one" {
+		t.Fatalf("expected original model to remain, got %d entries", len(models))
 	}
 }
 
-func TestJSONRepository_Exhaustion(t *testing.T) {
+func TestJSONRepository_Collision_Always(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "repo.json")
 	repo, _ := NewJSONRepository(path)
@@ -1036,30 +1025,25 @@ func TestJSONRepository_Exhaustion(t *testing.T) {
 	defer func() { jsonRepo.idGenerator = saved }()
 
 	for i := 0; i < 10; i++ {
-		p := &ProfileEntry{Name: fmt.Sprintf("p%d", i)}
-		if err := repo.CreateProfile(p); err != nil {
-			t.Fatalf("CreateProfile %d: %v", i, err)
+		m := &ModelEntry{Name: fmt.Sprintf("m%d", i)}
+		if err := repo.CreateModel(m); err != nil {
+			t.Fatalf("CreateModel %d: %v", i, err)
 		}
 	}
 
-	var exhaustCount int
 	jsonRepo.idGenerator = func() string {
-		exhaustCount++
-		return "inst_1" // always collides with first profile
+		return "inst_1" // always collides with first model
 	}
 
-	p := &ProfileEntry{Name: "exhaust"}
-	exhaustErr := repo.CreateProfile(p)
+	m := &ModelEntry{Name: "exhaust"}
+	exhaustErr := repo.CreateModel(m)
 	if exhaustErr == nil {
-		t.Fatal("expected exhaustion error")
-	}
-	if exhaustErr.Error() != "could not obtain a unique repository ID" {
-		t.Fatalf("unexpected error message: %v", exhaustErr)
+		t.Fatal("expected collision error")
 	}
 
-	profiles, _ := repo.ListProfiles()
-	if len(profiles) != 10 {
-		t.Fatalf("expected 10 profiles (no partial insert), got %d", len(profiles))
+	models, _ := repo.ListModels()
+	if len(models) != 10 {
+		t.Fatalf("expected 10 models (no partial insert), got %d", len(models))
 	}
 }
 
@@ -1072,15 +1056,15 @@ func TestJSONRepository_Persistence(t *testing.T) {
 	saved := jsonRepo.idGenerator
 	jsonRepo.idGenerator = func() string { return "inst_persist" }
 	defer func() { jsonRepo.idGenerator = saved }()
-	p1 := &ProfileEntry{Name: "persist-1"}
-	if err := repo.CreateProfile(p1); err != nil {
-		t.Fatalf("CreateProfile: %v", err)
+	m1 := &ModelEntry{Name: "persist-1"}
+	if err := repo.CreateModel(m1); err != nil {
+		t.Fatalf("CreateModel: %v", err)
 	}
 
 	jsonRepo.idGenerator = func() string { return "inst_persist2" }
-	p2 := &ProfileEntry{Name: "persist-2"}
-	if err := repo.CreateProfile(p2); err != nil {
-		t.Fatalf("CreateProfile: %v", err)
+	m2 := &ModelEntry{Name: "persist-2"}
+	if err := repo.CreateModel(m2); err != nil {
+		t.Fatalf("CreateModel: %v", err)
 	}
 
 	repo2, err := NewJSONRepository(path)
@@ -1088,12 +1072,12 @@ func TestJSONRepository_Persistence(t *testing.T) {
 		t.Fatalf("reopen repository: %v", err)
 	}
 
-	profiles, err := repo2.ListProfiles()
+	models, err := repo2.ListModels()
 	if err != nil {
-		t.Fatalf("ListProfiles: %v", err)
+		t.Fatalf("ListModels: %v", err)
 	}
-	if len(profiles) != 2 {
-		t.Fatalf("expected 2 profiles after reopen, got %d", len(profiles))
+	if len(models) != 2 {
+		t.Fatalf("expected 2 models after reopen, got %d", len(models))
 	}
 
 	// Verify JSON schema preserved.
@@ -1105,11 +1089,14 @@ func TestJSONRepository_Persistence(t *testing.T) {
 	if err := json.Unmarshal(data, &parsed); err != nil {
 		t.Fatalf("Unmarshal: %v", err)
 	}
-	if parsed["schema_version"] != float64(5) {
-		t.Errorf("expected schema_version 5, got %v", parsed["schema_version"])
+	if parsed["schema_version"] != float64(6) {
+		t.Errorf("expected schema_version 6, got %v", parsed["schema_version"])
 	}
-	if _, ok := parsed["profiles"]; !ok {
-		t.Error("expected profiles key in JSON")
+	if _, ok := parsed["models"]; !ok {
+		t.Error("expected models key in JSON")
+	}
+	if _, ok := parsed["profiles"]; ok {
+		t.Error("unexpected profiles key in v6 JSON")
 	}
 }
 
@@ -1127,16 +1114,16 @@ func TestJSONRepository_Concurrency_Uniqueness(t *testing.T) {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
-			p := &ProfileEntry{Name: fmt.Sprintf("concurrent-%d", idx)}
-			if err := repo.CreateProfile(p); err != nil {
-				t.Errorf("CreateProfile goroutine %d: %v", idx, err)
+			m := &ModelEntry{Name: fmt.Sprintf("concurrent-%d", idx)}
+			if err := repo.CreateModel(m); err != nil {
+				t.Errorf("CreateModel goroutine %d: %v", idx, err)
 				return
 			}
 			mu.Lock()
-			if ids[p.ID] {
-				t.Errorf("duplicate ID detected: %s", p.ID)
+			if ids[m.ID] {
+				t.Errorf("duplicate ID detected: %s", m.ID)
 			}
-			ids[p.ID] = true
+			ids[m.ID] = true
 			mu.Unlock()
 		}(i)
 	}
@@ -1146,13 +1133,13 @@ func TestJSONRepository_Concurrency_Uniqueness(t *testing.T) {
 		t.Fatalf("expected %d unique IDs, got %d", n, len(ids))
 	}
 
-	profiles, _ := repo.ListProfiles()
-	if len(profiles) != n {
-		t.Fatalf("expected %d profiles in repo, got %d", n, len(profiles))
+	models, _ := repo.ListModels()
+	if len(models) != n {
+		t.Fatalf("expected %d models in repo, got %d", n, len(models))
 	}
 }
 
-func TestJSONRepository_CollisionRetry_AllEntities(t *testing.T) {
+func TestJSONRepository_Collision_AllEntities(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "repo.json")
 	repo, _ := NewJSONRepository(path)
@@ -1161,117 +1148,69 @@ func TestJSONRepository_CollisionRetry_AllEntities(t *testing.T) {
 	saved := jsonRepo.idGenerator
 	defer func() { jsonRepo.idGenerator = saved }()
 
-	// Runtime
-	var rtCall int
-	jsonRepo.idGenerator = func() string {
-		rtCall++
-		if rtCall == 1 {
-			return "inst-rt-1"
-		}
-		return "inst-rt-2"
-	}
+	// Runtime: a colliding generated ID is rejected.
+	jsonRepo.idGenerator = func() string { return "inst-rt-1" }
 	r1 := &RuntimeEntry{Name: "rt1", Executable: "ollama"}
 	if err := repo.CreateRuntime(r1); err != nil {
 		t.Fatalf("CreateRuntime: %v", err)
 	}
-
-	var rtCall2 int
-	jsonRepo.idGenerator = func() string {
-		rtCall2++
-		if rtCall2 == 1 {
-			return "inst-rt-1" // collision with r1, retry
-		}
-		return "inst-rt-2" // accepted
-	}
 	r2 := &RuntimeEntry{Name: "rt2", Executable: "llama"}
-	if err := repo.CreateRuntime(r2); err != nil {
-		t.Fatalf("CreateRuntime retry: %v", err)
+	if err := repo.CreateRuntime(r2); err == nil {
+		t.Fatal("expected error for colliding generated runtime ID")
 	}
 
-	// Model
-	var mlCall int
-	jsonRepo.idGenerator = func() string {
-		mlCall++
-		if mlCall == 1 {
-			return "inst-ml-1"
-		}
-		return "inst-ml-2"
-	}
-	m1 := &ModelEntry{Name: "ml1", Path: "/tmp/ml1"}
+	// Model: a colliding generated ID is rejected.
+	jsonRepo.idGenerator = func() string { return "inst-ml-1" }
+	m1 := &ModelEntry{Name: "ml1", RuntimeID: "rt1"}
 	if err := repo.CreateModel(m1); err != nil {
 		t.Fatalf("CreateModel: %v", err)
 	}
-
-	var mlCall2 int
-	jsonRepo.idGenerator = func() string {
-		mlCall2++
-		if mlCall2 == 1 {
-			return "inst-ml-1" // collision with m1, retry
-		}
-		return "inst-ml-2" // accepted
-	}
-	m2 := &ModelEntry{Name: "ml2", Path: "/tmp/ml2"}
-	if err := repo.CreateModel(m2); err != nil {
-		t.Fatalf("CreateModel retry: %v", err)
+	m2 := &ModelEntry{Name: "ml2", RuntimeID: "rt1"}
+	if err := repo.CreateModel(m2); err == nil {
+		t.Fatal("expected error for colliding generated model ID")
 	}
 
-	// LaunchInstance
-	var lnCall int
-	jsonRepo.idGenerator = func() string {
-		lnCall++
-		if lnCall == 1 {
-			return "inst-ln-1"
-		}
-		return "inst-ln-2"
-	}
-	i1 := &LaunchInstanceEntry{ProfileID: "p1", State: "running"}
+	// LaunchInstance: a colliding generated ID is rejected.
+	jsonRepo.idGenerator = func() string { return "inst-ln-1" }
+	i1 := &LaunchInstanceEntry{ModelID: m1.ID, RuntimeID: "rt1", State: "running"}
 	if err := repo.CreateLaunchInstance(i1); err != nil {
 		t.Fatalf("CreateLaunchInstance: %v", err)
 	}
-
-	var lnCall2 int
-	jsonRepo.idGenerator = func() string {
-		lnCall2++
-		if lnCall2 == 1 {
-			return "inst-ln-1" // collision with i1, retry
-		}
-		return "inst-ln-2" // accepted
-	}
-	i2 := &LaunchInstanceEntry{ProfileID: "p2", State: "exited"}
-	if err := repo.CreateLaunchInstance(i2); err != nil {
-		t.Fatalf("CreateLaunchInstance retry: %v", err)
+	i2 := &LaunchInstanceEntry{ModelID: m1.ID, RuntimeID: "rt1", State: "exited"}
+	if err := repo.CreateLaunchInstance(i2); err == nil {
+		t.Fatal("expected error for colliding generated instance ID")
 	}
 }
 
-func TestJSONRepository_CreateProfile_EmptyName(t *testing.T) {
+func TestJSONRepository_CreateModel_EmptyName(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "repo.json")
 	repo, _ := NewJSONRepository(path)
 
 	// Empty ID is OK — auto-generated.
-	p := &ProfileEntry{Name: "valid", RuntimeID: "rt1", Host: "127.0.0.1", Port: 11434}
-	if err := repo.CreateProfile(p); err != nil {
-		t.Fatalf("CreateProfile: %v", err)
+	m := &ModelEntry{Name: "valid", RuntimeID: "rt1", Host: "127.0.0.1", Port: 11434}
+	if err := repo.CreateModel(m); err != nil {
+		t.Fatalf("CreateModel: %v", err)
 	}
-	if p.ID == "" {
-		t.Fatal("expected auto-generated ID for profile")
+	if m.ID == "" {
+		t.Fatal("expected auto-generated ID for model")
 	}
 
 	// Verify retrievable.
-	got, err := repo.GetProfile(p.ID)
+	got, err := repo.GetModel(m.ID)
 	if err != nil {
-		t.Fatalf("GetProfile: %v", err)
+		t.Fatalf("GetModel: %v", err)
 	}
 	if got.Name != "valid" {
 		t.Errorf("expected name 'valid', got '%s'", got.Name)
 	}
 
 	// Another create still works.
-	p2 := &ProfileEntry{Name: "valid2", RuntimeID: "rt1", Host: "127.0.0.1", Port: 11435}
-	if err := repo.CreateProfile(p2); err != nil {
-		t.Fatalf("CreateProfile second: %v", err)
+	m2 := &ModelEntry{Name: "valid2", RuntimeID: "rt1", Host: "127.0.0.1", Port: 11435}
+	if err := repo.CreateModel(m2); err != nil {
+		t.Fatalf("CreateModel second: %v", err)
 	}
-	if p2.ID == "" || p2.ID == p.ID {
-		t.Fatal("expected distinct auto-generated ID for second profile")
+	if m2.ID == "" || m2.ID == m.ID {
+		t.Fatal("expected distinct auto-generated ID for second model")
 	}
 }

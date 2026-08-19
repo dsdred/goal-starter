@@ -1,6 +1,6 @@
 # GoAl
 
-GoAl is a lightweight, single-binary manager for local AI runtimes, models, and launch profiles. One executable for Windows amd64 and Linux amd64.
+GoAl is a lightweight, single-binary manager for local AI runtimes and models. One executable for Windows amd64 and Linux amd64.
 
 **Latest stable: v1.0.3** — [GitHub Releases](https://github.com/dsdred/goal-starter/releases/tag/v1.0.3)
 
@@ -8,7 +8,7 @@ GoAl is a lightweight, single-binary manager for local AI runtimes, models, and 
 
 - **Runtime CRUD** — configure Ollama, llama.cpp, vLLM, or custom inference servers
 - **Model management** — GGUF files, inline arguments, environment variables
-- **Profile-based launches** — combine Runtime + Model + custom args into reusable launch templates
+- **Model-based launches** — combine Runtime + launch args
 - **Multi-instance supervisor** — run several processes concurrently with configurable concurrency limits
 - **Live logs** — SSE streaming with instance filtering and pagination
 - **Historical logs** — paginated, searchable query with time-range and stream filters
@@ -39,7 +39,7 @@ Then open **http://127.0.0.1:9090** in your browser.
 }
 ```
 
-No runtimes, models, or profiles are required to start. The Web UI lets you configure everything.
+No runtimes or models are required to start. The Web UI lets you configure everything.
 
 ## Platforms
 

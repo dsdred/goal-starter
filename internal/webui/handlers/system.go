@@ -259,7 +259,6 @@ func (h *SystemHandler) ServeIndex(w http.ResponseWriter, r *http.Request) {
 	if err := tmpl.Execute(w, map[string]any{
 		"Runtimes": []string{},
 		"Models":   []string{},
-		"Profiles": []string{},
 		"Config":   map[string]any{},
 		"Status":   map[string]any{},
 	}); err != nil {
