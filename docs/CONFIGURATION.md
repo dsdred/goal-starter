@@ -160,5 +160,5 @@ Hot-reload is implemented in `internal/config` but not yet wired into main start
 | Field | Security note |
 |-------|--------------|
 | `adminPassword` | Persisted in `goal.json` so authentication survives restart; stored as a bcrypt hash in memory. Protect the file with POSIX permissions or a Windows ACL. |
-| `authEnabled` | Must be `true` when `listenAddress` is non-loopback. |
+| `authEnabled` | Recommended `true` when `listenAddress` is non-loopback. If `false` on non-loopback, a prominent security warning is emitted but startup is not blocked. |
 | `dataDir` | Contains `goal_repo.json` (secrets, paths). Default `./data` is gitignored. |

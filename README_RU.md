@@ -1,8 +1,8 @@
 # GoAl
 
-GoAl — лёгкий однофайловый менеджер для локальных AI-рантаймов, моделей и профилей запуска. Один бинарник для Windows amd64 и Linux amd64.
+GoAl — лёгкий однофайловый менеджер для локальных AI-рантаймов и моделей. Один бинарник для Windows amd64 и Linux amd64.
 
-**Последняя стабильная версия: v1.0.3** — [GitHub Releases](https://github.com/dsdred/goal-starter/releases/tag/v1.0.3)
+**Релизы:** [GitHub Releases](https://github.com/dsdred/goal-starter/releases)
 
 ## Ключевые возможности
 
@@ -26,7 +26,7 @@ $env:GOAL_CONFIG = (Resolve-Path .\goal.json)
 go run .\cmd\goal
 ```
 
-Затем откройте **http://127.0.0.1:9090** в браузере.
+Затем откройте **http://127.0.0.1:8088** в браузере.
 
 ## Минимальная конфигурация
 
@@ -34,7 +34,7 @@ go run .\cmd\goal
 {
   "version": 2,
   "listenAddress": "127.0.0.1",
-  "webPort": 9090,
+  "webPort": 8088,
   "dataDir": "./data"
 }
 ```

@@ -50,7 +50,7 @@ GoAl has a single admin user. There are no roles or permissions — if the user 
 | `listenAddress` | `authEnabled` | Effect |
 |-----------------|---------------|--------|
 | `127.0.0.1` (default) | `false` | Local-only access, no auth required. |
-| `0.0.0.0` | `false` | **Rejected** — public bind requires auth. |
+| `0.0.0.0` | `false` | **Allowed with prominent WARN** — all endpoints accessible without credentials. |
 | `0.0.0.0` | `true` | Public access, session required. |
 | Custom IP | `true` | Network access, session required. |
 
@@ -86,7 +86,7 @@ remain available internally for process launch.
 | Feature | Status |
 |---------|--------|
 | Default bind loopback | `127.0.0.1` |
-| External bind rejection | `authEnabled=false` + non-loopback → error |
+| External bind warning | `authEnabled=false` + non-loopback → prominent WARN (not blocked) |
 | Request body size limit | `http.MaxBytesReader` |
 | Rate limiting | Placeholder (wired but no-op) |
 | Login rate limit | Placeholder (5 attempts / 5 minutes, not enforced) |

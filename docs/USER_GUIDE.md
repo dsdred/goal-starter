@@ -270,6 +270,22 @@ After starting, GoAl is available at: **http://127.0.0.1:8088**
 - **Model CRUD** — configure launch definitions (runtime + launch args + environment)
 - **Health Monitoring** — check runtime availability
 - **Metrics** — built-in application metrics
+- **Theme** — System / Dark / Light (persisted in browser localStorage)
+- **Language** — Russian / English (persisted in browser localStorage)
+
+### Theme and Language
+
+The Web UI supports two themes (Dark, Light) and a System mode that follows the
+OS preference. The interface is available in Russian and English. Both choices
+are saved per-browser and restored on next visit.
+
+Translation dictionaries live in:
+- `internal/webui/static/i18n/ru.json`
+- `internal/webui/static/i18n/en.json`
+
+To add a new language, create a new JSON file with the same key set in the
+`i18n/` directory and add a `<option>` entry to the language `<select>` in
+`index.html`.
 
 ### Authentication
 
@@ -307,8 +323,9 @@ All API calls start with: `http://127.0.0.1:8088`
 
 ### Models
 
-Models are configured launch definitions combining a runtime with launch arguments,
-host, port, and environment.
+Models are configured launch definitions combining a runtime with launch arguments
+and environment. All launch parameters (`--host`, `--port`, `-m`, etc.) are
+expressed through Args.
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -397,8 +414,9 @@ curl -X POST http://127.0.0.1:8088/api/v1/instances/INSTANCE_ID/restart
 ## Models
 
 A **Model** is a configured launch definition: a runtime reference, launch arguments,
-host/port, and environment. Physical model files (GGUF, MMProj) are not separate
-entities — they are ordinary launch arguments (e.g., `-m <path>`, `--mmproj <path>`).
+and environment. All launch parameters (`--host`, `--port`, `-m`, `--mmproj`, etc.)
+are expressed through Args. Physical model files (GGUF, MMProj) are not separate
+entities — they are ordinary launch arguments.
 
 ### Creating a Model
 
@@ -437,15 +455,13 @@ curl -X POST http://127.0.0.1:8088/api/v1/models \
     "id": "qwen-35b",
     "name": "Qwen 3.6 35B",
     "runtimeId": "llama-cpp",
-    "args": ["-m", "E:\\models\\qwen\\Qwen.gguf", "--mmproj", "E:\\models\\qwen\\mmproj.gguf", "-ngl", "99", "-c", "131072"],
-    "host": "127.0.0.1",
-    "port": 8085,
+    "args": ["-m", "E:\\models\\qwen\\Qwen.gguf", "--mmproj", "E:\\models\\qwen\\mmproj.gguf", "-ngl", "99", "-c", "131072", "--host", "127.0.0.1", "--port", "8085"],
     "active": true
   }'
 ```
 
 The resolved command will be:
-`llama-server <runtime-default-args> -m E:\models\qwen\Qwen.gguf --mmproj E:\models\qwen\mmproj.gguf -ngl 99 -c 131072 --host 127.0.0.1 --port 8085`
+`llama-server -m E:\models\qwen\Qwen.gguf --mmproj E:\models\qwen\mmproj.gguf -ngl 99 -c 131072 --host 127.0.0.1 --port 8085`
 
 ### Launch Command Preview
 

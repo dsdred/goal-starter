@@ -7,7 +7,7 @@ All endpoints are under the `/api/v1` prefix. Base URL is `http://127.0.0.1:8088
 | Mode | `authEnabled` | Effect |
 |------|--------------|--------|
 | Private | `true` | Management endpoints require a valid session cookie. Login, session discovery, `/health`, `/version`, the UI shell, and static assets remain public. Unsafe authenticated methods additionally require a CSRF token. |
-| Public | `false` | No authentication required. Non-loopback bind (`0.0.0.0`) rejects `authEnabled=false`. |
+| Public | `false` | No authentication required. Non-loopback bind (`0.0.0.0`) emits a prominent security warning (startup is not blocked). |
 
 Session cookie: `goal_session` (HTTP-only, SameSite=Lax).
 CSRF cookie: `goal_csrf_token` (double-submit pattern). Send the same value in `X-CSRF-Token` for unsafe authenticated requests.

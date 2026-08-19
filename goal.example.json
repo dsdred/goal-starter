@@ -1,7 +1,7 @@
 {
   "version": 2,
   "listenAddress": "127.0.0.1",
-  "webPort": 9090,
+  "webPort": 8088,
   "dataDir": "./data",
   "adminUser": "admin",
   "adminPassword": "",
@@ -12,7 +12,6 @@
       "name": "llama.cpp",
       "executable": "./llama-server",
       "workingDirectory": ".",
-      "defaultArgs": ["--host", "127.0.0.1"],
       "environment": {}
     }
   ],
@@ -27,22 +26,10 @@
         "--jinja",
         "-c", "200000",
         "-ngl", "99",
+        "--host", "127.0.0.1",
         "--port", "8085",
-        "--host", "0.0.0.0",
         "--image-min-tokens", "1024"
       ],
-      "environment": {}
-    }
-  ],
-  "profiles": [
-    {
-      "id": "qwen36",
-      "name": "Qwen 3.6 35B Vision",
-      "runtimeId": "llama-cpp",
-      "modelId": "qwen36-35b",
-      "host": "127.0.0.1",
-      "port": 8085,
-      "args": [],
       "environment": {}
     }
   ]

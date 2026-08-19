@@ -2,13 +2,16 @@
 
 GoAl is a single-binary application composed of distinct ownership layers. This document describes the current GoAl 2.0 architecture.
 
-## Domain Model (v6)
+## Domain Model (v7)
 
 GoAl 2.0 uses a simplified 3-entity domain:
 
-- **Runtime** — execution engine configuration (executable, working directory, default args, environment)
-- **Model** — configured launch definition (runtime reference, launch args, host, port, environment, autostart)
+- **Runtime** — execution engine configuration (executable, working directory, environment)
+- **Model** — configured launch definition (runtime reference, launch args, environment, autostart)
 - **Instance** — concrete launch history (immutable record of a process launch)
+
+All launch parameters (`--host`, `--port`, `-m`, `--mmproj`, etc.) are expressed
+through Model Args. There are no separate host/port fields on Model.
 
 Physical model files (GGUF, MMProj) are NOT separate domain entities. They are ordinary
 launch arguments (e.g., `-m <path>`, `--mmproj <path>`).

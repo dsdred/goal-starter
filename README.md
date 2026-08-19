@@ -4,7 +4,7 @@ GoAl is a lightweight, single-binary manager for local AI runtimes and models. O
 
 **Architecture:** Runtime ← Model → Instance. A Runtime is an execution engine (executable, working directory, environment). A Model is a configured launch definition (runtime + launch arguments + environment). An Instance is a concrete process launch (PID, state, logs). Physical GGUF/MMProj files are ordinary launch arguments, not separate entities.
 
-**Latest stable: v1.0.3** — [GitHub Releases](https://github.com/dsdred/goal-starter/releases/tag/v1.0.3)
+**Releases:** [GitHub Releases](https://github.com/dsdred/goal-starter/releases)
 
 ## Key features
 
@@ -61,7 +61,7 @@ GoAl Windows releases are currently **not code-signed**. The publisher may appea
 - HTTP-only session cookies, bcrypt password hashing
 - CSRF protection for all unsafe methods
 - Default bind: `127.0.0.1`
-- `authEnabled=false` rejected for non-loopback addresses
+- `authEnabled=false` on non-loopback bind emits a prominent security warning (startup is not blocked)
 - **Public mode warning:** if authentication is disabled and GoAl is bound to `0.0.0.0`, all API endpoints are accessible without credentials.
 > Full reference: [SECURITY.md](docs/SECURITY.md)
 
