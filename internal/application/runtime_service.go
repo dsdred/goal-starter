@@ -67,3 +67,42 @@ func (s *RuntimeService) DeleteRuntime(ctx context.Context, id string) error {
 	}
 	return s.repo.DeleteRuntime(id)
 }
+
+// ReplaceRuntime atomically rebinds all models that reference oldID to newID,
+// then deletes oldID. Returns the number of models moved.
+func (s *RuntimeService) ReplaceRuntime(ctx context.Context, oldID, newID string) (int, error) {
+	if oldID == "" {
+		return 0, errors.ErrRuntimeNotFound("")
+	}
+	if newID == "" {
+		return 0, errors.ErrRuntimeNotFound("")
+	}
+	if _, err := s.repo.GetRuntime(oldID); err != nil {
+		return 0, errors.ErrRuntimeNotFound(oldID)
+	}
+	if _, err := s.repo.GetRuntime(newID); err != nil {
+		return 0, errors.ErrRuntimeNotFound(newID)
+	}
+	moved, err := s.repo.ReplaceRuntimeAndDelete(oldID, newID)
+	if err != nil {
+		return 0, err
+	}
+	return moved, nil
+}
+
+// CascadeDeleteRuntime atomically deletes the runtime and all models that
+// reference it. Instance history is preserved. Returns the number of models
+// deleted.
+func (s *RuntimeService) CascadeDeleteRuntime(ctx context.Context, id string) (int, error) {
+	if id == "" {
+		return 0, errors.ErrRuntimeNotFound("")
+	}
+	if _, err := s.repo.GetRuntime(id); err != nil {
+		return 0, errors.ErrRuntimeNotFound(id)
+	}
+	deleted, err := s.repo.CascadeDeleteRuntimeAndModels(id)
+	if err != nil {
+		return 0, err
+	}
+	return deleted, nil
+}

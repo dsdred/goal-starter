@@ -15,16 +15,13 @@ func (e *ValidationError) Error() string {
 }
 
 // Model represents a configured launch definition.
-// It is the user-facing "model" — a runtime plus launch arguments, host, port.
-// Physical model files (GGUF, MMProj) are NOT separate fields; they are
-// ordinary entries in Args (e.g. "-m <path>", "--mmproj <path>").
+// It defines HOW to launch: runtime reference + args + environment.
+// All launch parameters (including --host, --port, -m, --mmproj) are in Args.
 type Model struct {
 	ID             string
 	Name           string
 	RuntimeID      string
 	Args           []string
-	Host           string
-	Port           int
 	Environment    map[string]string
 	Active         bool
 	AutostartDelay int

@@ -24,9 +24,9 @@ func TestResolve_NoDuplicateHostPort(t *testing.T) {
 			"--mmproj", filepath.Join(dir, "mmproj.gguf"),
 			"-ngl", "999",
 			"-c", "200000",
+			"--host", "0.0.0.0",
+			"--port", "8085",
 		},
-		Host: "0.0.0.0",
-		Port: 8085,
 	}
 	runtime := &Runtime{
 		ID:               "r1",
@@ -81,7 +81,7 @@ func TestResolve_NoDuplicateHostPort(t *testing.T) {
 	}
 }
 
-func TestResolve_NoDuplicateWhenRuntimeHasHostPort(t *testing.T) {
+func TestResolve_HostPortArgsPassedThrough(t *testing.T) {
 	dir := t.TempDir()
 	exePath := filepath.Join(dir, "server")
 	if err := os.WriteFile(exePath, []byte("x"), 0755); err != nil {
@@ -89,13 +89,17 @@ func TestResolve_NoDuplicateWhenRuntimeHasHostPort(t *testing.T) {
 	}
 
 	r := NewLaunchResolver()
-	model := &Model{ID: "m1", Name: "t", RuntimeID: "r1", Host: "127.0.0.1", Port: 8080}
+	model := &Model{
+		ID:        "m1",
+		Name:      "t",
+		RuntimeID: "r1",
+		Args:      []string{"--host", "127.0.0.1", "--port", "8080"},
+	}
 	runtime := &Runtime{
 		ID:               "r1",
 		Name:             "rt",
 		Executable:       "server",
 		WorkingDirectory: dir,
-		DefaultArgs:      []string{"--host", "0.0.0.0", "--port", "1111"},
 	}
 
 	spec, err := r.Resolve(model, runtime, nil, nil)
@@ -105,19 +109,25 @@ func TestResolve_NoDuplicateWhenRuntimeHasHostPort(t *testing.T) {
 
 	hostCount := 0
 	portCount := 0
-	for _, a := range spec.Args {
+	for i, a := range spec.Args {
 		if a == "--host" || a == "-a" {
 			hostCount++
+			if i+1 < len(spec.Args) && spec.Args[i+1] != "127.0.0.1" {
+				t.Errorf("--host value = %q, want 127.0.0.1", spec.Args[i+1])
+			}
 		}
 		if a == "--port" {
 			portCount++
+			if i+1 < len(spec.Args) && spec.Args[i+1] != "8080" {
+				t.Errorf("--port value = %q, want 8080", spec.Args[i+1])
+			}
 		}
 	}
 	if hostCount != 1 {
-		t.Errorf("expected 1 --host (from runtime defaults), got %d. Args: %v", hostCount, spec.Args)
+		t.Errorf("expected 1 --host (passed through from model args), got %d. Args: %v", hostCount, spec.Args)
 	}
 	if portCount != 1 {
-		t.Errorf("expected 1 --port (from runtime defaults), got %d. Args: %v", portCount, spec.Args)
+		t.Errorf("expected 1 --port (passed through from model args), got %d. Args: %v", portCount, spec.Args)
 	}
 }
 
@@ -135,9 +145,7 @@ func TestResolveToInstance_ModelArgsInArgs(t *testing.T) {
 		ID:        "m1",
 		Name:      "m",
 		RuntimeID: "r1",
-		Args:      []string{"-m", modelPath, "-ngl", "999"},
-		Host:      "127.0.0.1",
-		Port:      8080,
+		Args:      []string{"-m", modelPath, "-ngl", "999", "--host", "127.0.0.1", "--port", "8080"},
 	}
 	runtime := &Runtime{ID: "r1", Name: "rt", Executable: "server", WorkingDirectory: dir}
 

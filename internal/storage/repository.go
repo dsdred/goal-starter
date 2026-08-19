@@ -46,6 +46,9 @@ type Repository interface {
 	UpdateRuntime(e *RuntimeEntry) error
 	DeleteRuntime(id string) error
 	ListRuntimes() ([]*RuntimeEntry, error)
+	ReplaceRuntimeAndDelete(oldID, newID string) (int, error)
+	CascadeDeleteRuntimeAndModels(id string) (int, error)
+	DeleteTerminalInstances(mode string, ids []string, cutoff time.Time) (int, error)
 
 	CreateModel(e *ModelEntry) error
 	GetModel(id string) (*ModelEntry, error)
@@ -198,7 +201,11 @@ func (r *JSONRepository) load() error {
 
 	if versionCheck.SchemaVersion <= 5 {
 		if err := r.migrateV5(data); err != nil {
-			return fmt.Errorf("migrate v5 to v6: %w", err)
+			return fmt.Errorf("migrate v5 to v7: %w", err)
+		}
+	} else if versionCheck.SchemaVersion == 6 {
+		if err := r.migrateV6ToV7(data); err != nil {
+			return fmt.Errorf("migrate v6 to v7: %w", err)
 		}
 	} else {
 		var unified struct {
@@ -218,14 +225,20 @@ func (r *JSONRepository) load() error {
 	return nil
 }
 
-// migrateV5 converts a v5 repository file to v6 in memory.
+// migrateV5 converts a v5 repository file to v7 in memory.
 func (r *JSONRepository) migrateV5(data []byte) error {
 	var v5 v5File
 	if err := json.Unmarshal(data, &v5); err != nil {
 		return fmt.Errorf("unmarshal v5: %w", err)
 	}
 
-	// Migrate runtimes (unchanged).
+	// Build runtime DefaultArgs lookup.
+	runtimeArgsMap := make(map[string][]string)
+	for _, rt := range v5.Runtimes {
+		runtimeArgsMap[rt.ID] = rt.DefaultArgs
+	}
+
+	// Migrate runtimes (no DefaultArgs in v7).
 	r.runtimes = make([]*RuntimeEntry, 0, len(v5.Runtimes))
 	for _, rt := range v5.Runtimes {
 		r.runtimes = append(r.runtimes, &RuntimeEntry{
@@ -233,7 +246,6 @@ func (r *JSONRepository) migrateV5(data []byte) error {
 			Name:             rt.Name,
 			Executable:       rt.Executable,
 			WorkingDirectory: rt.WorkingDirectory,
-			DefaultArgs:      rt.DefaultArgs,
 			Environment:      rt.Environment,
 			CreatedAt:        rt.CreatedAt,
 			UpdatedAt:        rt.UpdatedAt,
@@ -246,10 +258,11 @@ func (r *JSONRepository) migrateV5(data []byte) error {
 		modelMap[m.ID] = m
 	}
 
-	// Migrate profiles → new models.
+	// Migrate profiles → new models (folding DefaultArgs + Host/Port into args).
 	r.models = make([]*ModelEntry, 0, len(v5.Profiles))
 	for _, p := range v5.Profiles {
-		args := make([]string, 0, len(p.Args)+8)
+		args := make([]string, 0, len(runtimeArgsMap[p.RuntimeID])+len(p.Args)+8)
+		args = append(args, runtimeArgsMap[p.RuntimeID]...)
 		args = append(args, p.Args...)
 		if p.ModelID != "" {
 			if m, ok := modelMap[p.ModelID]; ok {
@@ -261,6 +274,12 @@ func (r *JSONRepository) migrateV5(data []byte) error {
 				}
 				args = append(args, m.Arguments...)
 			}
+		}
+		if p.Host != "" && !containsV5Flag(args, "--host", "-a") {
+			args = append(args, "--host", p.Host)
+		}
+		if p.Port > 0 && !containsV5Flag(args, "--port") {
+			args = append(args, "--port", fmt.Sprintf("%d", p.Port))
 		}
 
 		updatedAt := p.UpdatedAt
@@ -275,8 +294,6 @@ func (r *JSONRepository) migrateV5(data []byte) error {
 			Name:           p.Name,
 			RuntimeID:      p.RuntimeID,
 			Args:           args,
-			Host:           p.Host,
-			Port:           p.Port,
 			Environment:    p.Environment,
 			Active:         p.Active,
 			AutostartDelay: p.AutostartDelay,
@@ -311,6 +328,106 @@ func (r *JSONRepository) migrateV5(data []byte) error {
 	return nil
 }
 
+// v6Runtime is a temporary struct for reading v6 schema data.
+type v6Runtime struct {
+	ID               string            `json:"id"`
+	Name             string            `json:"name"`
+	Executable       string            `json:"executable"`
+	WorkingDirectory string            `json:"working_directory,omitempty"`
+	DefaultArgs      []string          `json:"default_args"`
+	Environment      map[string]string `json:"environment,omitempty"`
+	CreatedAt        time.Time         `json:"created_at"`
+	UpdatedAt        time.Time         `json:"updated_at"`
+}
+
+// v6Model is a temporary struct for reading v6 schema data.
+type v6Model struct {
+	ID             string            `json:"id"`
+	Name           string            `json:"name"`
+	RuntimeID      string            `json:"runtime_id"`
+	Args           []string          `json:"args,omitempty"`
+	Host           string            `json:"host"`
+	Port           int               `json:"port"`
+	Environment    map[string]string `json:"environment,omitempty"`
+	Active         bool              `json:"active"`
+	AutostartDelay int               `json:"autostart_delay,omitempty"`
+	CreatedAt      time.Time         `json:"created_at"`
+	UpdatedAt      time.Time         `json:"updated_at"`
+}
+
+// v6File represents the v6 schema for migration to v7.
+type v6File struct {
+	SchemaVersion int                    `json:"schema_version"`
+	Runtimes      []*v6Runtime           `json:"runtimes"`
+	Models        []*v6Model             `json:"models"`
+	Instances     []*LaunchInstanceEntry `json:"instances"`
+}
+
+// migrateV6ToV7 converts v6 data (with DefaultArgs, Host, Port) to v7 format.
+func (r *JSONRepository) migrateV6ToV7(data []byte) error {
+	var v6 v6File
+	if err := json.Unmarshal(data, &v6); err != nil {
+		return fmt.Errorf("unmarshal v6: %w", err)
+	}
+
+	runtimeArgsMap := make(map[string][]string, len(v6.Runtimes))
+	r.runtimes = make([]*RuntimeEntry, 0, len(v6.Runtimes))
+	for _, rt := range v6.Runtimes {
+		runtimeArgsMap[rt.ID] = rt.DefaultArgs
+		r.runtimes = append(r.runtimes, &RuntimeEntry{
+			ID:               rt.ID,
+			Name:             rt.Name,
+			Executable:       rt.Executable,
+			WorkingDirectory: rt.WorkingDirectory,
+			Environment:      rt.Environment,
+			CreatedAt:        rt.CreatedAt,
+			UpdatedAt:        rt.UpdatedAt,
+		})
+	}
+
+	r.models = make([]*ModelEntry, 0, len(v6.Models))
+	for _, m := range v6.Models {
+		args := make([]string, 0, len(runtimeArgsMap[m.RuntimeID])+len(m.Args)+4)
+		args = append(args, runtimeArgsMap[m.RuntimeID]...)
+		args = append(args, m.Args...)
+		if m.Host != "" && !containsV5Flag(args, "--host", "-a") {
+			args = append(args, "--host", m.Host)
+		}
+		if m.Port > 0 && !containsV5Flag(args, "--port") {
+			args = append(args, "--port", fmt.Sprintf("%d", m.Port))
+		}
+		r.models = append(r.models, &ModelEntry{
+			ID:             m.ID,
+			Name:           m.Name,
+			RuntimeID:      m.RuntimeID,
+			Args:           args,
+			Environment:    m.Environment,
+			Active:         m.Active,
+			AutostartDelay: m.AutostartDelay,
+			CreatedAt:      m.CreatedAt,
+			UpdatedAt:      m.UpdatedAt,
+		})
+	}
+
+	r.instances = v6.Instances
+	return nil
+}
+
+func containsV5Flag(args []string, flags ...string) bool {
+	for _, arg := range args {
+		for _, f := range flags {
+			if arg == f {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func hasFlag(args []string, flags ...string) bool {
+	return containsV5Flag(args, flags...)
+}
+
 func (r *JSONRepository) tryBackup() ([]byte, error) {
 	bakPath := r.filePath + ".bak"
 	data, err := os.ReadFile(bakPath)
@@ -328,7 +445,7 @@ func (r *JSONRepository) tryBackup() ([]byte, error) {
 
 func (r *JSONRepository) saveLocked() error {
 	unified := map[string]interface{}{
-		"schema_version": 6,
+		"schema_version": 7,
 		"runtimes":       r.runtimes,
 		"models":         r.models,
 		"instances":      r.instances,
@@ -395,13 +512,13 @@ func (r *JSONRepository) save() error {
 	return r.saveLocked()
 }
 
-func (r *JSONRepository) SchemaVersion() int { return 6 }
+func (r *JSONRepository) SchemaVersion() int { return 7 }
 
 func (r *JSONRepository) Upgrade() error { return r.save() }
 
 func (r *JSONRepository) SaveUnified(path string) error {
 	data, err := json.MarshalIndent(map[string]interface{}{
-		"schema_version": 6,
+		"schema_version": 7,
 		"runtimes":       r.runtimes,
 		"models":         r.models,
 		"instances":      r.instances,
@@ -488,6 +605,168 @@ func (r *JSONRepository) ListRuntimes() ([]*RuntimeEntry, error) {
 		out[i] = &cp
 	}
 	return out, nil
+}
+
+// ReplaceRuntimeAndDelete atomically rebinds models from oldID to newID, then deletes oldID.
+func (r *JSONRepository) ReplaceRuntimeAndDelete(oldID, newID string) (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	oldIdx := -1
+	newFound := false
+	for i, e := range r.runtimes {
+		if e.ID == oldID {
+			oldIdx = i
+		}
+		if e.ID == newID {
+			newFound = true
+		}
+	}
+	if oldIdx < 0 {
+		return 0, fmt.Errorf("runtime not found: %s", oldID)
+	}
+	if !newFound {
+		return 0, fmt.Errorf("runtime not found: %s", newID)
+	}
+
+	backupModels := r.models
+	backupRuntimes := r.runtimes
+
+	now := time.Now()
+	models := make([]*ModelEntry, len(r.models))
+	moved := 0
+	for i, m := range r.models {
+		cp := *m
+		if cp.RuntimeID == oldID {
+			cp.RuntimeID = newID
+			cp.UpdatedAt = now
+			moved++
+		}
+		models[i] = &cp
+	}
+	runtimes := make([]*RuntimeEntry, 0, len(r.runtimes)-1)
+	for i, e := range r.runtimes {
+		if i != oldIdx {
+			runtimes = append(runtimes, e)
+		}
+	}
+
+	r.models = models
+	r.runtimes = runtimes
+	if err := r.saveLocked(); err != nil {
+		r.models = backupModels
+		r.runtimes = backupRuntimes
+		return 0, err
+	}
+	return moved, nil
+}
+
+// CascadeDeleteRuntimeAndModels atomically deletes a runtime and all models referencing it.
+func (r *JSONRepository) CascadeDeleteRuntimeAndModels(id string) (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	found := false
+	for _, e := range r.runtimes {
+		if e.ID == id {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return 0, fmt.Errorf("runtime not found: %s", id)
+	}
+
+	backupModels := r.models
+	backupRuntimes := r.runtimes
+
+	models := make([]*ModelEntry, 0, len(r.models))
+	deleted := 0
+	for _, m := range r.models {
+		if m.RuntimeID == id {
+			deleted++
+			continue
+		}
+		models = append(models, m)
+	}
+	runtimes := make([]*RuntimeEntry, 0, len(r.runtimes)-1)
+	for _, e := range r.runtimes {
+		if e.ID != id {
+			runtimes = append(runtimes, e)
+		}
+	}
+
+	r.models = models
+	r.runtimes = runtimes
+	if err := r.saveLocked(); err != nil {
+		r.models = backupModels
+		r.runtimes = backupRuntimes
+		return 0, err
+	}
+	return deleted, nil
+}
+
+// DeleteTerminalInstances deletes instances matching the filter. Returns count deleted.
+// Only terminal instances (exited, failed, stale) are ever deleted.
+func (r *JSONRepository) DeleteTerminalInstances(mode string, ids []string, cutoff time.Time) (int, error) {
+	switch mode {
+	case "all_terminal", "older_than_7d", "older_than_30d", "selected":
+	default:
+		return 0, fmt.Errorf("invalid cleanup mode: %s", mode)
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	idSet := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		idSet[id] = true
+	}
+
+	isTerminal := func(e *LaunchInstanceEntry) bool {
+		switch e.State {
+		case "exited", "failed", "stale":
+			return true
+		default:
+			return false
+		}
+	}
+
+	shouldDelete := func(e *LaunchInstanceEntry) bool {
+		if !isTerminal(e) {
+			return false
+		}
+		switch mode {
+		case "all_terminal":
+			return true
+		case "older_than_7d", "older_than_30d":
+			return !e.StoppedAt.IsZero() && e.StoppedAt.Before(cutoff)
+		case "selected":
+			return idSet[e.ID]
+		}
+		return false
+	}
+
+	deleted := 0
+	kept := make([]*LaunchInstanceEntry, 0, len(r.instances))
+	for _, e := range r.instances {
+		if shouldDelete(e) {
+			deleted++
+			continue
+		}
+		kept = append(kept, e)
+	}
+	if deleted == 0 {
+		return 0, nil
+	}
+
+	backup := r.instances
+	r.instances = kept
+	if err := r.saveLocked(); err != nil {
+		r.instances = backup
+		return 0, err
+	}
+	return deleted, nil
 }
 
 // ─── Model CRUD ───

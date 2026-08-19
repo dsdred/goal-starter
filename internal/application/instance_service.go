@@ -3,6 +3,7 @@ package application
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/dsdred/goal/internal/domain"
 	"github.com/dsdred/goal/internal/process"
@@ -37,7 +38,7 @@ func (s *InstanceService) StartModel(ctx context.Context, modelID string) (*doma
 	domainModel := domain.ModelEntryToDomain(me)
 	domainRuntime := process.RuntimeToDomain(
 		rte.ID, rte.Name, rte.Executable, rte.WorkingDirectory,
-		rte.DefaultArgs, rte.Environment,
+		rte.Environment,
 	)
 
 	return s.supervisor.Start(ctx, domainModel, domainRuntime, nil, nil)
@@ -57,6 +58,23 @@ func (s *InstanceService) ListInstances(ctx context.Context) ([]*domain.LaunchIn
 
 func (s *InstanceService) GetInstanceStatus(ctx context.Context, id domain.InstanceID) (*domain.LaunchInstance, error) {
 	return s.supervisor.Status(id)
+}
+
+// CleanupInstances deletes terminal instances matching the filter.
+// Active instances are never deleted. Returns the number of instances deleted.
+func (s *InstanceService) CleanupInstances(ctx context.Context, mode string, ids []string) (int, error) {
+	switch mode {
+	case "all_terminal":
+		return s.repo.DeleteTerminalInstances(mode, nil, time.Time{})
+	case "older_than_7d":
+		return s.repo.DeleteTerminalInstances(mode, nil, time.Now().AddDate(0, 0, -7))
+	case "older_than_30d":
+		return s.repo.DeleteTerminalInstances(mode, nil, time.Now().AddDate(0, 0, -30))
+	case "selected":
+		return s.repo.DeleteTerminalInstances(mode, ids, time.Time{})
+	default:
+		return 0, fmt.Errorf("invalid cleanup mode: %s", mode)
+	}
 }
 
 // GetModelStatus returns instance summary for a specific model.

@@ -47,6 +47,7 @@ func MigrateFromOldStores(repo Repository, oldDir, repoPath string) error {
 	}
 
 	// Migrate runtimes.
+	runtimeArgsMap := make(map[string][]string)
 	if _, err := os.Stat(runtimePath); err == nil {
 		data, err := os.ReadFile(runtimePath)
 		if err != nil {
@@ -57,6 +58,7 @@ func MigrateFromOldStores(repo Repository, oldDir, repoPath string) error {
 			return fmt.Errorf("decode runtimes: %w", err)
 		}
 		for _, old := range oldRuntimes {
+			runtimeArgsMap[old.ID] = old.DefaultArgs
 			if existingRuntime[old.ID] {
 				continue
 			}
@@ -65,7 +67,6 @@ func MigrateFromOldStores(repo Repository, oldDir, repoPath string) error {
 				Name:             old.Name,
 				Executable:       old.Executable,
 				WorkingDirectory: old.WorkingDirectory,
-				DefaultArgs:      old.DefaultArgs,
 				Environment:      old.Environment,
 				CreatedAt:        old.CreatedAt,
 				UpdatedAt:        old.UpdatedAt,
@@ -91,7 +92,8 @@ func MigrateFromOldStores(repo Repository, oldDir, repoPath string) error {
 			if existingModel[old.ID] {
 				continue
 			}
-			args := make([]string, 0, len(old.Args)+8)
+			args := make([]string, 0, len(runtimeArgsMap[old.RuntimeID])+len(old.Args)+8)
+			args = append(args, runtimeArgsMap[old.RuntimeID]...)
 			args = append(args, old.Args...)
 			if old.ModelID != "" {
 				if m, ok := oldModelMap[old.ModelID]; ok {
@@ -103,12 +105,16 @@ func MigrateFromOldStores(repo Repository, oldDir, repoPath string) error {
 					}
 				}
 			}
+			if old.Host != "" && !containsV5Flag(args, "--host", "-a") {
+				args = append(args, "--host", old.Host)
+			}
+			if old.Port > 0 && !containsV5Flag(args, "--port") {
+				args = append(args, "--port", fmt.Sprintf("%d", old.Port))
+			}
 			me := ModelEntry{
 				ID:          old.ID,
 				Name:        old.Name,
 				RuntimeID:   old.RuntimeID,
-				Host:        old.Host,
-				Port:        old.Port,
 				Args:        args,
 				Environment: old.Environment,
 				Active:      old.Active,

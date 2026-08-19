@@ -79,9 +79,9 @@ cp goal.example.json goal.json
 sudo ./goal          # Linux
 ```
 
-После запуска GoAl доступен по адресу: **http://127.0.0.1:9090**
+После запуска GoAl доступен по адресу: **http://127.0.0.1:8088**
 
-> **Примечание:** Если порт 9090 занят, измените `webPort` в `goal.json`.
+> **Примечание:** Если порт 8088 занят, измените `webPort` в `goal.json`.
 
 ---
 
@@ -97,7 +97,7 @@ sudo ./goal          # Linux
 {
   "version": 2,
   "listenAddress": "127.0.0.1",
-  "webPort": 9090,
+  "webPort": 8088,
   "dataDir": "./data",
   "adminUser": "admin",
   "adminPassword": "",
@@ -114,7 +114,7 @@ sudo ./goal          # Linux
 |------|----------|-------------|-------------|
 | `version` | Версия схемы конфигурации | 2 | Нет |
 | `listenAddress` | Адрес для HTTP-сервера | `127.0.0.1` | Нет |
-| `webPort` | Порт HTTP-сервера | `9090` | Нет |
+| `webPort` | Порт HTTP-сервера | `8088` | Нет |
 | `dataDir` | Каталог для хранения данных | `./data` | Нет |
 | `adminUser` | Имя администратора | `admin` | Нет |
 | `adminPassword` | Пароль администратора (пустой = без авторизации) | `""` | Нет |
@@ -260,7 +260,7 @@ sudo ./goal          # Linux
 
 ## Веб-интерфейс
 
-После запуска GoAl доступен по адресу: **http://127.0.0.1:9090**
+После запуска GoAl доступен по адресу: **http://127.0.0.1:8088**
 
 ### Возможности веб-интерфейса:
 
@@ -275,7 +275,7 @@ sudo ./goal          # Linux
 
 Если `authEnabled` включён:
 
-1. Перейдите на `http://127.0.0.1:9090`
+1. Перейдите на `http://127.0.0.1:8088`
 2. Нажмите **Login**
 3. Введите `adminUser` и `adminPassword` из конфигурации
 4. После входа сессия хранится в HTTP-only cookie
@@ -286,7 +286,7 @@ sudo ./goal          # Linux
 
 ### Базовый URL
 
-Все API вызовы начинаются с: `http://127.0.0.1:9090`
+Все API вызовы начинаются с: `http://127.0.0.1:8088`
 
 ### Аутентификация
 
@@ -367,21 +367,21 @@ host, портом и окружением.
 
 ```bash
 # Список всех экземпляров
-curl http://127.0.0.1:9090/api/v1/instances
+curl http://127.0.0.1:8088/api/v1/instances
 
 # Статус конкретного экземпляра
-curl http://127.0.0.1:9090/api/v1/instances/INSTANCE_ID
+curl http://127.0.0.1:8088/api/v1/instances/INSTANCE_ID
 
 # Остановить экземпляр
-curl -X POST http://127.0.0.1:9090/api/v1/instances/INSTANCE_ID/stop
+curl -X POST http://127.0.0.1:8088/api/v1/instances/INSTANCE_ID/stop
 
 # Перезапустить экземпляр
-curl -X POST http://127.0.0.1:9090/api/v1/instances/INSTANCE_ID/restart
+curl -X POST http://127.0.0.1:8088/api/v1/instances/INSTANCE_ID/restart
 ```
 
 ### Управление через веб-интерфейс
 
-1. Откройте http://127.0.0.1:9090
+1. Откройте http://127.0.0.1:8088
 2. Нажмите на нужный экземпляр
 3. Используйте кнопки **Stop** / **Restart**
 
@@ -409,7 +409,7 @@ host/порт и окружение. Физические файлы модел�
 **Через API:**
 
 ```bash
-curl -X POST http://127.0.0.1:9090/api/v1/models \
+curl -X POST http://127.0.0.1:8088/api/v1/models \
   -H "Content-Type: application/json" \
   -d '{
     "id": "my-model",
@@ -424,7 +424,7 @@ curl -X POST http://127.0.0.1:9090/api/v1/models \
 Типичная конфигурация модели llama.cpp:
 
 ```bash
-curl -X POST http://127.0.0.1:9090/api/v1/models \
+curl -X POST http://127.0.0.1:8088/api/v1/models \
   -H "Content-Type: application/json" \
   -d '{
     "id": "qwen-35b",
@@ -443,7 +443,7 @@ curl -X POST http://127.0.0.1:9090/api/v1/models \
 ### Preview команды запуска
 
 ```bash
-curl -X POST http://127.0.0.1:9090/api/v1/models/my-model/resolve \
+curl -X POST http://127.0.0.1:8088/api/v1/models/my-model/resolve \
   -H "Content-Type: application/json"
 ```
 
@@ -471,7 +471,7 @@ curl -X POST http://127.0.0.1:9090/api/v1/models/my-model/resolve \
 **Через API:**
 
 ```bash
-curl -X POST http://127.0.0.1:9090/api/v1/runtimes \
+curl -X POST http://127.0.0.1:8088/api/v1/runtimes \
   -H "Content-Type: application/json" \
   -d '{
     "id": "my-ollama",
@@ -512,10 +512,10 @@ GoAl автоматически проверяет здоровье рантай
 
 ```bash
 # Здоровье всех рантайнов
-curl http://127.0.0.1:9090/api/v1/runtimes/health
+curl http://127.0.0.1:8088/api/v1/runtimes/health
 
 # Здоровье конкретного рантайма
-curl http://127.0.0.1:9090/api/v1/runtimes/health/ollama
+curl http://127.0.0.1:8088/api/v1/runtimes/health/ollama
 ```
 
 ---
@@ -528,24 +528,24 @@ curl http://127.0.0.1:9090/api/v1/runtimes/health/ollama
 
 ```bash
 # Логи конкретного экземпляра
-curl http://127.0.0.1:9090/api/v1/instances/INSTANCE_ID/logs
+curl http://127.0.0.1:8088/api/v1/instances/INSTANCE_ID/logs
 
 # SSE поток логов
-curl http://127.0.0.1:9090/api/v1/logs/stream
+curl http://127.0.0.1:8088/api/v1/logs/stream
 ```
 
 ### Фильтрация логов
 
 ```bash
 # С фильтром по instance_id
-curl "http://127.0.0.1:9090/api/v1/logs?instance_id=INSTANCE_ID"
+curl "http://127.0.0.1:8088/api/v1/logs?instance_id=INSTANCE_ID"
 ```
 
 ### Пагинация
 
 ```bash
 # Страница 2, по 50 записей на странице
-curl "http://127.0.0.1:9090/api/v1/logs?page=2&page_size=50"
+curl "http://127.0.0.1:8088/api/v1/logs?page=2&page_size=50"
 ```
 
 ---
@@ -576,7 +576,7 @@ curl "http://127.0.0.1:9090/api/v1/logs?page=2&page_size=50"
 ```json
 {
   "listenAddress": "0.0.0.0",
-  "webPort": 9090,
+  "webPort": 8088,
   "authEnabled": true,
   "adminPassword": "secure_password_here"
 }

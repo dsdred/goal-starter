@@ -1,6 +1,6 @@
 # API Reference
 
-All endpoints are under the `/api/v1` prefix. Base URL is `http://127.0.0.1:9090` (configurable via `webPort`).
+All endpoints are under the `/api/v1` prefix. Base URL is `http://127.0.0.1:8088` (configurable via `webPort`).
 
 ## Authentication model
 
@@ -71,6 +71,47 @@ Instances are running processes created from models.
 | `GET` | `/api/v1/instances/{id}/logs` | Yes | — | Historical logs for instance (query with filters). |
 | `GET` | `/api/v1/instances/{id}/logs/stream` | Yes | — | SSE log stream for instance. |
 
+### POST /api/v1/instances/cleanup
+
+Mass-delete terminal (non-active) instances. Requires auth + CSRF.
+
+Request body:
+```json
+{ "mode": "all_terminal" }
+```
+
+Modes: `all_terminal`, `older_than_7d`, `older_than_30d`, `selected` (requires `ids` array).
+
+Response 200:
+```json
+{ "status": "cleaned", "deleted": 5 }
+```
+
+### POST /api/v1/runtimes/{id}/replace
+
+Rebind all models from the given runtime to a new runtime, then delete the old one. Requires auth + CSRF.
+
+Request body:
+```json
+{ "new_runtime_id": "rt-new-id" }
+```
+
+Response 200:
+```json
+{ "status": "replaced", "models_moved": 3 }
+```
+
+### POST /api/v1/runtimes/{id}/cascade-delete
+
+Delete the runtime and all models referencing it. Instance history is preserved. Requires auth + CSRF.
+
+No request body.
+
+Response 200:
+```json
+{ "status": "deleted", "models_deleted": 2 }
+```
+
 ## Runtimes
 
 Runtime `environment` values are write-only. Runtime read and mutation
@@ -92,8 +133,7 @@ values remain available internally for process launch.
 
 ## Models
 
-Models are configured launch definitions combining a runtime with launch arguments,
-host, port, and environment.
+Models are configured launch definitions combining a runtime with launch arguments and environment.
 
 | Method | Path | Description |
 |--------|------|-------------|

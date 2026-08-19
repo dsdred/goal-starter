@@ -24,7 +24,6 @@ type runtimeRequest struct {
 	Name             string             `json:"name"`
 	Executable       string             `json:"executable"`
 	WorkingDirectory string             `json:"working_directory,omitempty"`
-	DefaultArgs      []string           `json:"default_args"`
 	Environment      *map[string]string `json:"environment"`
 }
 
@@ -38,7 +37,6 @@ func (request runtimeRequest) entry() storage.RuntimeEntry {
 		Name:             request.Name,
 		Executable:       request.Executable,
 		WorkingDirectory: request.WorkingDirectory,
-		DefaultArgs:      append([]string(nil), request.DefaultArgs...),
 		Environment:      environment,
 	}
 }
@@ -50,7 +48,6 @@ type runtimeResponse struct {
 	Name             string    `json:"name"`
 	Executable       string    `json:"executable"`
 	WorkingDirectory string    `json:"working_directory,omitempty"`
-	DefaultArgs      []string  `json:"default_args"`
 	EnvironmentKeys  []string  `json:"environment_keys"`
 	CreatedAt        time.Time `json:"created_at"`
 	UpdatedAt        time.Time `json:"updated_at"`
@@ -68,7 +65,6 @@ func newRuntimeResponse(entry *storage.RuntimeEntry) runtimeResponse {
 		Name:             entry.Name,
 		Executable:       entry.Executable,
 		WorkingDirectory: entry.WorkingDirectory,
-		DefaultArgs:      append([]string(nil), entry.DefaultArgs...),
 		EnvironmentKeys:  keys,
 		CreatedAt:        entry.CreatedAt,
 		UpdatedAt:        entry.UpdatedAt,
@@ -186,6 +182,73 @@ func (h *RuntimesHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+// Replace handles POST /api/v1/runtimes/{id}/replace
+func (h *RuntimesHandler) Replace(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimPrefix(r.URL.Path, "/api/v1/runtimes/")
+	id = strings.TrimSuffix(id, "/replace")
+	if id == "" {
+		writeError(w, 400, "runtime ID is required")
+		return
+	}
+	var request struct {
+		NewRuntimeID string `json:"new_runtime_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		writeError(w, 400, "invalid JSON")
+		return
+	}
+	if request.NewRuntimeID == "" {
+		writeError(w, 400, "new_runtime_id is required")
+		return
+	}
+	moved, err := h.runtimeSvc.ReplaceRuntime(r.Context(), id, request.NewRuntimeID)
+	if err != nil {
+		var apiErr *apierrors.APIError
+		if errors.As(err, &apiErr) {
+			status := http.StatusInternalServerError
+			switch apiErr.Code {
+			case apierrors.CodeNotFound, apierrors.CodeInvalidRuntime:
+				status = http.StatusNotFound
+			case apierrors.CodeBadRequest:
+				status = http.StatusBadRequest
+			}
+			writeAPIError(w, status, apiErr)
+			return
+		}
+		writeError(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"status": "replaced", "models_moved": moved})
+}
+
+// CascadeDelete handles POST /api/v1/runtimes/{id}/cascade-delete
+func (h *RuntimesHandler) CascadeDelete(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimPrefix(r.URL.Path, "/api/v1/runtimes/")
+	id = strings.TrimSuffix(id, "/cascade-delete")
+	if id == "" {
+		writeError(w, 400, "runtime ID is required")
+		return
+	}
+	deleted, err := h.runtimeSvc.CascadeDeleteRuntime(r.Context(), id)
+	if err != nil {
+		var apiErr *apierrors.APIError
+		if errors.As(err, &apiErr) {
+			status := http.StatusInternalServerError
+			switch apiErr.Code {
+			case apierrors.CodeNotFound, apierrors.CodeInvalidRuntime:
+				status = http.StatusNotFound
+			case apierrors.CodeBadRequest:
+				status = http.StatusBadRequest
+			}
+			writeAPIError(w, status, apiErr)
+			return
+		}
+		writeError(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"status": "deleted", "models_deleted": deleted})
 }
 
 // Action handles POST /api/v1/runtimes/{id}/action/{action}

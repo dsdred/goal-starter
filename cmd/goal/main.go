@@ -167,7 +167,6 @@ func autostartModels(ctx context.Context, repo storage.Repository, supervisor *p
 			Name:             runtimeEntry.Name,
 			Executable:       runtimeEntry.Executable,
 			WorkingDirectory: runtimeEntry.WorkingDirectory,
-			DefaultArgs:      runtimeEntry.DefaultArgs,
 			Environment:      runtimeEntry.Environment,
 		}
 		if _, err := supervisor.Start(ctx, domainModel, domainRuntime, nil, nil); err != nil {

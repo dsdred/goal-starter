@@ -159,13 +159,12 @@ func (s *Supervisor) ResolvePreview(model *domain.Model, runtime *domain.Runtime
 }
 
 // RuntimeToDomain converts storage.RuntimeEntry to domain.Runtime.
-func RuntimeToDomain(id, name, executable, workingDir string, defaultArgs []string, environment map[string]string) *domain.Runtime {
+func RuntimeToDomain(id, name, executable, workingDir string, environment map[string]string) *domain.Runtime {
 	return &domain.Runtime{
 		ID:               id,
 		Name:             name,
 		Executable:       executable,
 		WorkingDirectory: workingDir,
-		DefaultArgs:      defaultArgs,
 		Environment:      environment,
 	}
 }

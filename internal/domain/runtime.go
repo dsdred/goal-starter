@@ -5,12 +5,13 @@ import (
 )
 
 // Runtime represents an AI runtime executable (e.g., llama.cpp, ollama).
+// It defines WHAT to launch: the executable, working directory, and environment.
+// Launch arguments belong to Model.Args, not here.
 type Runtime struct {
 	ID               string            `json:"id"`
 	Name             string            `json:"name"`
 	Executable       string            `json:"executable"`
 	WorkingDirectory string            `json:"working_directory,omitempty"`
-	DefaultArgs      []string          `json:"default_args,omitempty"`
 	Environment      map[string]string `json:"environment,omitempty"`
 
 	CreatedAt time.Time `json:"created_at"`

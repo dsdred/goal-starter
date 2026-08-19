@@ -95,7 +95,7 @@ func Default() Config {
 	return Config{
 		Version:       2,
 		ListenAddress: "127.0.0.1",
-		WebPort:       9090,
+		WebPort:       8088,
 		DataDir:       "./data",
 		AdminUser:     "admin",
 		AuthEnabled:   false,

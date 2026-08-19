@@ -99,7 +99,7 @@ For network access:
 ```json
 {
   "listenAddress": "0.0.0.0",
-  "webPort": 9090,
+  "webPort": 8088,
   "authEnabled": true,
   "adminPassword": "secure_hash_or_plaintext"
 }

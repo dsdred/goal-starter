@@ -53,38 +53,9 @@ func (r *LaunchResolver) Resolve(
 		return nil, fmt.Errorf("runtime executable does not exist: %s: %w", exePath, err)
 	}
 
-	// Build args: runtime default args + model args + custom args.
-	args := make([]string, 0, len(runtime.DefaultArgs)+len(model.Args)+len(customArgs)+4)
-	args = append(args, runtime.DefaultArgs...)
+	args := make([]string, 0, len(model.Args)+len(customArgs))
 	args = append(args, model.Args...)
 	args = append(args, customArgs...)
-
-	// Add host/port if not already present.
-	if model.Host != "" {
-		hasHostFlag := false
-		for _, arg := range args {
-			if arg == "--host" || arg == "-a" {
-				hasHostFlag = true
-				break
-			}
-		}
-		if !hasHostFlag {
-			args = append(args, "--host", model.Host)
-		}
-	}
-
-	if model.Port > 0 {
-		hasPortFlag := false
-		for _, arg := range args {
-			if arg == "--port" {
-				hasPortFlag = true
-				break
-			}
-		}
-		if !hasPortFlag {
-			args = append(args, "--port", fmt.Sprintf("%d", model.Port))
-		}
-	}
 
 	// Build environment: parent → runtime → model → custom.
 	envMap := make(map[string]string)
@@ -189,36 +160,9 @@ func (r *LaunchResolver) Preview(
 
 	exePath := resolveExecutablePath(runtime.Executable, runtime.WorkingDirectory)
 
-	args := make([]string, 0, len(runtime.DefaultArgs)+len(model.Args)+len(customArgs))
-	args = append(args, runtime.DefaultArgs...)
+	args := make([]string, 0, len(model.Args)+len(customArgs))
 	args = append(args, model.Args...)
 	args = append(args, customArgs...)
-
-	if model.Host != "" {
-		hasHostFlag := false
-		for _, arg := range args {
-			if arg == "--host" || arg == "-a" {
-				hasHostFlag = true
-				break
-			}
-		}
-		if !hasHostFlag {
-			args = append(args, "--host", model.Host)
-		}
-	}
-
-	if model.Port > 0 {
-		hasPortFlag := false
-		for _, arg := range args {
-			if arg == "--port" {
-				hasPortFlag = true
-				break
-			}
-		}
-		if !hasPortFlag {
-			args = append(args, "--port", fmt.Sprintf("%d", model.Port))
-		}
-	}
 
 	envMap := make(map[string]string)
 	for k, v := range runtime.Environment {

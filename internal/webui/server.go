@@ -137,24 +137,26 @@ func (a *App) buildRuntimeDefs() []health.RuntimeDef {
 	if err != nil {
 		return nil
 	}
-	defsMap := make(map[string]health.RuntimeDef)
+	rtNames := make(map[string]string)
 	for _, rt := range runtimes {
-		defsMap[rt.ID] = health.RuntimeDef{
-			ID:   rt.ID,
-			Name: rt.Name,
-			Host: "127.0.0.1",
-			Port: 0,
-		}
+		rtNames[rt.ID] = rt.Name
 	}
 	models, _ := a.repo.ListModels()
+	defsMap := make(map[string]health.RuntimeDef)
 	for _, m := range models {
-		if def, ok := defsMap[m.RuntimeID]; ok {
-			defsMap[m.RuntimeID] = health.RuntimeDef{
-				ID:   m.RuntimeID,
-				Name: def.Name,
-				Host: m.Host,
-				Port: m.Port,
-			}
+		host, port := extractHostPort(m.Args)
+		if port == 0 {
+			continue
+		}
+		name, ok := rtNames[m.RuntimeID]
+		if !ok {
+			name = m.RuntimeID
+		}
+		defsMap[m.RuntimeID] = health.RuntimeDef{
+			ID:   m.RuntimeID,
+			Name: name,
+			Host: host,
+			Port: port,
 		}
 	}
 	defs := make([]health.RuntimeDef, 0, len(defsMap))
@@ -162,6 +164,20 @@ func (a *App) buildRuntimeDefs() []health.RuntimeDef {
 		defs = append(defs, d)
 	}
 	return defs
+}
+
+func extractHostPort(args []string) (string, int) {
+	host := "127.0.0.1"
+	port := 0
+	for i := 0; i < len(args)-1; i++ {
+		switch args[i] {
+		case "--host":
+			host = args[i+1]
+		case "--port":
+			fmt.Sscanf(args[i+1], "%d", &port)
+		}
+	}
+	return host, port
 }
 
 func (a *App) refreshHealthChecks() {

@@ -69,7 +69,7 @@ func TestResolve_PreviewMatchesExecution_ExecutablePath(t *testing.T) {
 	}
 
 	r := NewLaunchResolver()
-	model := &Model{ID: "m1", Name: "test", RuntimeID: "r1", Host: "127.0.0.1", Port: 8085}
+	model := &Model{ID: "m1", Name: "test", RuntimeID: "r1"}
 	rt := &Runtime{ID: "r1", Name: "rt", Executable: filepath.Base(exePath), WorkingDirectory: dir}
 
 	specExec, err := r.Resolve(model, rt, nil, nil)
@@ -103,7 +103,7 @@ func TestResolve_AbsoluteExecutable(t *testing.T) {
 	}
 
 	r := NewLaunchResolver()
-	model := &Model{ID: "m1", Name: "t", RuntimeID: "r1", Host: "0.0.0.0", Port: 9999}
+	model := &Model{ID: "m1", Name: "t", RuntimeID: "r1"}
 	rt := &Runtime{ID: "r1", Name: "rt", Executable: exePath, WorkingDirectory: dir}
 
 	spec, err := r.Resolve(model, rt, nil, nil)

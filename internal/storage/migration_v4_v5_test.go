@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func TestMigration_V5toV6_RealFixture(t *testing.T) {
+func TestMigration_V5toV7_RealFixture(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "goal_repo.json")
 
@@ -62,7 +62,7 @@ func TestMigration_V5toV6_RealFixture(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Load the v5 file — should auto-migrate to v6.
+	// Load the v5 file — should auto-migrate to v7.
 	repo, err := NewJSONRepository(path)
 	if err != nil {
 		t.Fatalf("NewJSONRepository (loading v5): %v", err)
@@ -100,11 +100,11 @@ func TestMigration_V5toV6_RealFixture(t *testing.T) {
 	if models[0].RuntimeID != "rt1" {
 		t.Errorf("model runtime_id = %q, want rt1", models[0].RuntimeID)
 	}
-	if models[0].Host != "0.0.0.0" {
-		t.Errorf("model host = %q, want 0.0.0.0", models[0].Host)
+	if !hasFlagValue(models[0].Args, "--host", "0.0.0.0") {
+		t.Errorf("model args missing --host 0.0.0.0: %v", models[0].Args)
 	}
-	if models[0].Port != 8085 {
-		t.Errorf("model port = %d, want 8085", models[0].Port)
+	if !hasFlagValue(models[0].Args, "--port", "8085") {
+		t.Errorf("model args missing --port 8085: %v", models[0].Args)
 	}
 	if !models[0].Active {
 		t.Error("expected model Active=true to be preserved")
@@ -112,9 +112,9 @@ func TestMigration_V5toV6_RealFixture(t *testing.T) {
 
 	// Verify old model args got folded into profile args.
 	// The old model had: path=E:\models\qwen\model.gguf, mmproj=E:\models\qwen\mmproj.gguf
-	// arguments=["-ngl", "999", "-c", "200000"]
-	// So the new model args should be: ["-m", path, "--mmproj", mmproj, "-ngl", "999", "-c", "200000"]
-	expectedArgs := []string{"-m", `E:\models\qwen\model.gguf`, "--mmproj", `E:\models\qwen\mmproj.gguf`, "-ngl", "999", "-c", "200000"}
+	// arguments=["-ngl", "999", "-c", "200000"], profile host=0.0.0.0 port=8085
+	// So the new model args should be: ["-m", path, "--mmproj", mmproj, "-ngl", "999", "-c", "200000", "--host", "0.0.0.0", "--port", "8085"]
+	expectedArgs := []string{"-m", `E:\models\qwen\model.gguf`, "--mmproj", `E:\models\qwen\mmproj.gguf`, "-ngl", "999", "-c", "200000", "--host", "0.0.0.0", "--port", "8085"}
 	if len(models[0].Args) != len(expectedArgs) {
 		t.Fatalf("model args = %v (len=%d), want %v (len=%d)", models[0].Args, len(models[0].Args), expectedArgs, len(expectedArgs))
 	}
@@ -145,12 +145,12 @@ func TestMigration_V5toV6_RealFixture(t *testing.T) {
 		t.Errorf("instance PID = %d, want 12345", instances[0].PID)
 	}
 
-	// Save (should produce v6).
+	// Save (should produce v7).
 	if err := repo.Upgrade(); err != nil {
 		t.Fatalf("Upgrade: %v", err)
 	}
 
-	// Verify file is now v6.
+	// Verify file is now v7.
 	savedData, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
@@ -161,27 +161,37 @@ func TestMigration_V5toV6_RealFixture(t *testing.T) {
 	if err := json.Unmarshal(savedData, &saved); err != nil {
 		t.Fatal(err)
 	}
-	if saved.SchemaVersion != 6 {
-		t.Errorf("after Upgrade, schema_version = %d, want 6", saved.SchemaVersion)
+	if saved.SchemaVersion != 7 {
+		t.Errorf("after Upgrade, schema_version = %d, want 7", saved.SchemaVersion)
 	}
 
-	// Reload v6 and verify all data still intact.
+	// Reload v7 and verify all data still intact.
 	repo2, err := NewJSONRepository(path)
 	if err != nil {
-		t.Fatalf("reload v6: %v", err)
+		t.Fatalf("reload v7: %v", err)
 	}
 	runtimes2, _ := repo2.ListRuntimes()
 	models2, _ := repo2.ListModels()
 	instances2, _ := repo2.ListInstances()
 
 	if len(runtimes2) != 1 || len(models2) != 1 || len(instances2) != 1 {
-		t.Errorf("after v6 reload: runtimes=%d models=%d instances=%d (want 1 each)",
+		t.Errorf("after v7 reload: runtimes=%d models=%d instances=%d (want 1 each)",
 			len(runtimes2), len(models2), len(instances2))
 	}
 	if models2[0].Active != true {
-		t.Error("v6 model Active should still be true")
+		t.Error("v7 model Active should still be true")
 	}
 	if models2[0].Name != "Qwen Production" {
-		t.Errorf("v6 model name = %q, want Qwen Production", models2[0].Name)
+		t.Errorf("v7 model name = %q, want Qwen Production", models2[0].Name)
 	}
+}
+
+// hasFlagValue reports whether args contains flag immediately followed by value.
+func hasFlagValue(args []string, flag, value string) bool {
+	for i, a := range args {
+		if a == flag && i+1 < len(args) && args[i+1] == value {
+			return true
+		}
+	}
+	return false
 }

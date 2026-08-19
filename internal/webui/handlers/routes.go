@@ -105,6 +105,7 @@ func (r *RouteRegistry) Build() http.Handler {
 	mux.HandleFunc("POST /api/v1/instances/start", r.requireAuthCSRF(r.instanceHandler.StartModel))
 	mux.HandleFunc("POST /api/v1/instances/{id}/stop", r.requireAuthCSRF(r.instanceHandler.StopInstance))
 	mux.HandleFunc("POST /api/v1/instances/{id}/restart", r.requireAuthCSRF(r.instanceHandler.RestartInstance))
+	mux.HandleFunc("POST /api/v1/instances/cleanup", r.requireAuthCSRF(r.instanceHandler.Cleanup))
 	mux.HandleFunc("GET /api/v1/instances/{id}/logs", r.requireAuth(r.systemHandler.InstanceLogs))
 	mux.HandleFunc("GET /api/v1/instances/{id}/logs/stream", r.requireAuth(r.systemHandler.InstanceLogStream))
 
@@ -130,6 +131,8 @@ func (r *RouteRegistry) Build() http.Handler {
 	mux.HandleFunc("POST /api/v1/runtimes", r.requireAuthCSRF(r.runtimeHandler.Create))
 	mux.HandleFunc("PUT /api/v1/runtimes/{id}", r.requireAuthCSRF(r.runtimeHandler.Update))
 	mux.HandleFunc("DELETE /api/v1/runtimes/{id}", r.requireAuthCSRF(r.runtimeHandler.Delete))
+	mux.HandleFunc("POST /api/v1/runtimes/{id}/replace", r.requireAuthCSRF(r.runtimeHandler.Replace))
+	mux.HandleFunc("POST /api/v1/runtimes/{id}/cascade-delete", r.requireAuthCSRF(r.runtimeHandler.CascadeDelete))
 	mux.HandleFunc("POST /api/v1/runtimes/{id}/action/{action}", r.requireAuthCSRF(r.runtimeHandler.Action))
 
 	mux.HandleFunc("/", r.systemHandler.ServeIndex)

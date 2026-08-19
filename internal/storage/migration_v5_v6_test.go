@@ -123,9 +123,7 @@ func TestMigration_V5toV6_EdgeCases(t *testing.T) {
 		if models[0].ID != "p1" {
 			t.Errorf("model ID = %q, want p1", models[0].ID)
 		}
-		if len(models[0].Args) != 0 {
-			t.Errorf("expected no folded args, got %v", models[0].Args)
-		}
+		sameArgs(t, models[0].Args, []string{"--host", "127.0.0.1", "--port", "8080"})
 	})
 
 	t.Run("Case2_ProfileReferencingMissingModel", func(t *testing.T) {
@@ -143,7 +141,7 @@ func TestMigration_V5toV6_EdgeCases(t *testing.T) {
 		if len(models) != 1 {
 			t.Fatalf("expected 1 model, got %d", len(models))
 		}
-		sameArgs(t, models[0].Args, []string{"-flag", "x"})
+		sameArgs(t, models[0].Args, []string{"-flag", "x", "--host", "127.0.0.1", "--port", "8080"})
 	})
 
 	t.Run("Case3_MultipleProfilesShareSameModel", func(t *testing.T) {
@@ -169,7 +167,7 @@ func TestMigration_V5toV6_EdgeCases(t *testing.T) {
 		if !ids["p1"] || !ids["p2"] {
 			t.Errorf("model IDs = %v %v, want p1 and p2", models[0].ID, models[1].ID)
 		}
-		expected := []string{"-m", `E:\models\shared.gguf`, "--mmproj", `E:\models\shared-mm.gguf`, "-ngl", "99"}
+		expected := []string{"-m", `E:\models\shared.gguf`, "--mmproj", `E:\models\shared-mm.gguf`, "-ngl", "99", "--host", "127.0.0.1", "--port", "8080"}
 		sameArgs(t, models[0].Args, expected)
 		sameArgs(t, models[1].Args, expected)
 	})
@@ -195,7 +193,7 @@ func TestMigration_V5toV6_EdgeCases(t *testing.T) {
 		if models[0].ID != "p1" {
 			t.Errorf("model ID = %q, want p1", models[0].ID)
 		}
-		sameArgs(t, models[0].Args, []string{"-m", `E:\models\used.gguf`})
+		sameArgs(t, models[0].Args, []string{"-m", `E:\models\used.gguf`, "--host", "127.0.0.1", "--port", "8080"})
 	})
 
 	t.Run("Case5_EmptyModelPathSkipsMFilg", func(t *testing.T) {
@@ -214,7 +212,7 @@ func TestMigration_V5toV6_EdgeCases(t *testing.T) {
 		if len(models) != 1 {
 			t.Fatalf("expected 1 model, got %d", len(models))
 		}
-		sameArgs(t, models[0].Args, []string{"--mmproj", `E:\models\mm.gguf`, "-ngl", "1"})
+		sameArgs(t, models[0].Args, []string{"--mmproj", `E:\models\mm.gguf`, "-ngl", "1", "--host", "127.0.0.1", "--port", "8080"})
 		for _, a := range models[0].Args {
 			if a == "-m" {
 				t.Errorf("unexpected -m flag in args %v", models[0].Args)
@@ -238,7 +236,7 @@ func TestMigration_V5toV6_EdgeCases(t *testing.T) {
 		if len(models) != 1 {
 			t.Fatalf("expected 1 model, got %d", len(models))
 		}
-		sameArgs(t, models[0].Args, []string{"-m", `E:\models\m.gguf`, "-c", "100"})
+		sameArgs(t, models[0].Args, []string{"-m", `E:\models\m.gguf`, "-c", "100", "--host", "127.0.0.1", "--port", "8080"})
 		for _, a := range models[0].Args {
 			if a == "--mmproj" {
 				t.Errorf("unexpected --mmproj flag in args %v", models[0].Args)
@@ -262,7 +260,7 @@ func TestMigration_V5toV6_EdgeCases(t *testing.T) {
 		if len(models) != 1 {
 			t.Fatalf("expected 1 model, got %d", len(models))
 		}
-		sameArgs(t, models[0].Args, []string{"-m", `E:\models\m.gguf`, "--mmproj", `E:\models\mm.gguf`})
+		sameArgs(t, models[0].Args, []string{"-m", `E:\models\m.gguf`, "--mmproj", `E:\models\mm.gguf`, "--host", "127.0.0.1", "--port", "8080"})
 	})
 
 	t.Run("Case8_ProfileArgsComeFirst", func(t *testing.T) {
@@ -284,7 +282,7 @@ func TestMigration_V5toV6_EdgeCases(t *testing.T) {
 		if len(models) != 1 {
 			t.Fatalf("expected 1 model, got %d", len(models))
 		}
-		sameArgs(t, models[0].Args, []string{"-temp", "1.0", "-m", `E:\models\m.gguf`, "--mmproj", `E:\models\mm.gguf`, "-ngl", "99"})
+		sameArgs(t, models[0].Args, []string{"-temp", "1.0", "-m", `E:\models\m.gguf`, "--mmproj", `E:\models\mm.gguf`, "-ngl", "99", "--host", "127.0.0.1", "--port", "8080"})
 	})
 
 	t.Run("Case9_DuplicateMFilgNotDeduplicated", func(t *testing.T) {
@@ -305,7 +303,7 @@ func TestMigration_V5toV6_EdgeCases(t *testing.T) {
 			t.Fatalf("expected 1 model, got %d", len(models))
 		}
 		// Migration does not deduplicate: profile's -m stays, old model path appended.
-		sameArgs(t, models[0].Args, []string{"-m", `E:\models\custom.gguf`, "-m", `E:\models\from-old-model.gguf`})
+		sameArgs(t, models[0].Args, []string{"-m", `E:\models\custom.gguf`, "-m", `E:\models\from-old-model.gguf`, "--host", "127.0.0.1", "--port", "8080"})
 	})
 
 	t.Run("Case10_InstanceProfileIDBecomesModelID", func(t *testing.T) {
@@ -500,15 +498,15 @@ func TestMigration_V5toV6_EdgeCases(t *testing.T) {
 		if len(instances) != 0 {
 			t.Errorf("expected 0 instances, got %d", len(instances))
 		}
-		if repo.SchemaVersion() != 6 {
-			t.Errorf("SchemaVersion = %d, want 6", repo.SchemaVersion())
+		if repo.SchemaVersion() != 7 {
+			t.Errorf("SchemaVersion = %d, want 7", repo.SchemaVersion())
 		}
 		if err := repo.Upgrade(); err != nil {
 			t.Fatalf("Upgrade: %v", err)
 		}
 		repo2, runtimes2, models2, instances2 := loadMigrated(t, path)
-		if repo2.SchemaVersion() != 6 {
-			t.Errorf("reloaded SchemaVersion = %d, want 6", repo2.SchemaVersion())
+		if repo2.SchemaVersion() != 7 {
+			t.Errorf("reloaded SchemaVersion = %d, want 7", repo2.SchemaVersion())
 		}
 		if len(runtimes2) != 0 || len(models2) != 0 || len(instances2) != 0 {
 			t.Errorf("after reload: runtimes=%d models=%d instances=%d (want 0 each)",

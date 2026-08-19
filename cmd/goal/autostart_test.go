@@ -32,8 +32,6 @@ func addAutostartFixture(t *testing.T, repo storage.Repository, name, exe string
 	m := &storage.ModelEntry{
 		Name:           name,
 		RuntimeID:      rt.ID,
-		Host:           "127.0.0.1",
-		Port:           19999,
 		Active:         active,
 		AutostartDelay: delay,
 	}
@@ -181,7 +179,7 @@ func TestAutostart_FailureDoesNotBlockNext(t *testing.T) {
 	if err := repo.CreateRuntime(rt1); err != nil {
 		t.Fatal(err)
 	}
-	m1 := &storage.ModelEntry{Name: "will-fail", RuntimeID: rt1.ID, Host: "127.0.0.1", Port: 19997, Active: true}
+	m1 := &storage.ModelEntry{Name: "will-fail", RuntimeID: rt1.ID, Active: true}
 	if err := repo.CreateModel(m1); err != nil {
 		t.Fatal(err)
 	}
@@ -192,7 +190,7 @@ func TestAutostart_FailureDoesNotBlockNext(t *testing.T) {
 	if err := repo.CreateRuntime(rt2); err != nil {
 		t.Fatal(err)
 	}
-	m2 := &storage.ModelEntry{Name: "will-succeed", RuntimeID: rt2.ID, Host: "127.0.0.1", Port: 19998, Active: true}
+	m2 := &storage.ModelEntry{Name: "will-succeed", RuntimeID: rt2.ID, Active: true}
 	if err := repo.CreateModel(m2); err != nil {
 		t.Fatal(err)
 	}
@@ -270,8 +268,8 @@ func TestAutostart_NoDuplicateInstances(t *testing.T) {
 
 func TestAutostart_SchemaVersion(t *testing.T) {
 	repo, _ := setupAutostartRepo(t)
-	if repo.SchemaVersion() != 6 {
-		t.Errorf("expected schema version 6, got %d", repo.SchemaVersion())
+	if repo.SchemaVersion() != 7 {
+		t.Errorf("expected schema version 7, got %d", repo.SchemaVersion())
 	}
 }
 

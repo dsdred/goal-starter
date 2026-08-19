@@ -24,21 +24,23 @@ type v5ModelCfg struct {
 	Arguments []string
 }
 
-// v5ResolvedCommand reproduces the v5 launch resolution order:
+// v5ResolvedCommand reproduces the v5 launch resolution order. The v5 runtime
+// had DefaultArgs; the current Runtime type no longer does, so they are passed
+// in separately as a legacy-only input:
 //   - executable: runtime.Executable resolved against runtime.WorkingDirectory
-//   - args: runtime.DefaultArgs + profile.Args + "-m" + model.Path (if non-empty)
+//   - args: defaultArgs + profile.Args + "-m" + model.Path (if non-empty)
 //   - "--mmproj" + model.MMProj (if non-empty) + model.Arguments
 //   - "--host" + profile.Host (if non-empty and not already in args)
 //   - "--port" + profile.Port (if > 0 and not already in args)
 //   - working directory: runtime.WorkingDirectory
 //   - environment: parent env -> runtime.Environment -> profile.Environment
-func v5ResolvedCommand(t *testing.T, rt *Runtime, prof v5ProfileCfg, model v5ModelCfg) *CommandSpec {
+func v5ResolvedCommand(t *testing.T, rt *Runtime, defaultArgs []string, prof v5ProfileCfg, model v5ModelCfg) *CommandSpec {
 	t.Helper()
 
 	exePath := resolveExecutablePath(rt.Executable, rt.WorkingDirectory)
 
 	args := make([]string, 0)
-	args = append(args, rt.DefaultArgs...)
+	args = append(args, defaultArgs...)
 	args = append(args, prof.Args...)
 	if model.Path != "" {
 		args = append(args, "-m", model.Path)
@@ -81,15 +83,16 @@ func v5ResolvedCommand(t *testing.T, rt *Runtime, prof v5ProfileCfg, model v5Mod
 	}
 }
 
-// migrateToV6Model simulates the v5->v6 migration folding of a profile + old
-// model into a single v6 Model:
+// migrateToV7Model simulates the v5->v7 migration folding of a runtime's
+// legacy default args + profile + old model into a single Model:
 //
-//	model.Args = profile.Args + "-m" + path + "--mmproj" + mmproj + model.Arguments
-//	model.Host = profile.Host
-//	model.Port = profile.Port
+//	model.Args = defaultArgs + profile.Args + "-m" + path + "--mmproj" + mmproj + model.Arguments
+//	          + "--host" + profile.Host (if non-empty and not already in args)
+//	          + "--port" + profile.Port (if > 0 and not already in args)
 //	model.Environment = profile.Environment
-func migrateToV6Model(prof v5ProfileCfg, model v5ModelCfg) *Model {
+func migrateToV7Model(defaultArgs []string, prof v5ProfileCfg, model v5ModelCfg) *Model {
 	args := make([]string, 0)
+	args = append(args, defaultArgs...)
 	args = append(args, prof.Args...)
 	if model.Path != "" {
 		args = append(args, "-m", model.Path)
@@ -99,13 +102,18 @@ func migrateToV6Model(prof v5ProfileCfg, model v5ModelCfg) *Model {
 	}
 	args = append(args, model.Arguments...)
 
+	if prof.Host != "" && !containsAny(args, "--host", "-a") {
+		args = append(args, "--host", prof.Host)
+	}
+	if prof.Port > 0 && !containsAny(args, "--port") {
+		args = append(args, "--port", fmt.Sprintf("%d", prof.Port))
+	}
+
 	return &Model{
 		ID:             "migrated",
 		Name:           "migrated",
 		RuntimeID:      "rt1",
 		Args:           args,
-		Host:           prof.Host,
-		Port:           prof.Port,
 		Environment:    prof.Environment,
 		Active:         true,
 		AutostartDelay: 0,
@@ -169,7 +177,6 @@ func TestCommandEquivalence(t *testing.T) {
 			Name:             "llama.cpp",
 			Executable:       "llama-server",
 			WorkingDirectory: filepath.Join("runtimes", "llama.cpp"),
-			DefaultArgs:      []string{"--alias", "goal"},
 			Environment:      map[string]string{"RT_VAR": "rt", "SHARED": "from-runtime"},
 		}
 		prof := v5ProfileCfg{
@@ -184,8 +191,8 @@ func TestCommandEquivalence(t *testing.T) {
 			Arguments: []string{"-c", "200000"},
 		}
 
-		want := v5ResolvedCommand(t, rt, prof, model)
-		got, err := r.Preview(migrateToV6Model(prof, model), rt, nil, nil)
+		want := v5ResolvedCommand(t, rt, []string{"--alias", "goal"}, prof, model)
+		got, err := r.Preview(migrateToV7Model([]string{"--alias", "goal"}, prof, model), rt, nil, nil)
 		if err != nil {
 			t.Fatalf("Preview: %v", err)
 		}
@@ -202,8 +209,8 @@ func TestCommandEquivalence(t *testing.T) {
 		prof := v5ProfileCfg{}
 		model := v5ModelCfg{Path: filepath.Join("models", "small.gguf")}
 
-		want := v5ResolvedCommand(t, rt, prof, model)
-		got, err := r.Preview(migrateToV6Model(prof, model), rt, nil, nil)
+		want := v5ResolvedCommand(t, rt, nil, prof, model)
+		got, err := r.Preview(migrateToV7Model(nil, prof, model), rt, nil, nil)
 		if err != nil {
 			t.Fatalf("Preview: %v", err)
 		}
@@ -216,8 +223,8 @@ func TestCommandEquivalence(t *testing.T) {
 			Name:             "llama.cpp",
 			Executable:       "llama-server",
 			WorkingDirectory: filepath.Join("runtimes", "llama.cpp"),
-			DefaultArgs:      []string{"--alias", "goal"},
 		}
+		legacyDefaultArgs := []string{"--alias", "goal"}
 		prof := v5ProfileCfg{
 			Host: "",
 			Port: 0,
@@ -229,17 +236,17 @@ func TestCommandEquivalence(t *testing.T) {
 			Arguments: []string{"-c", "200000"},
 		}
 
-		want := v5ResolvedCommand(t, rt, prof, model)
+		want := v5ResolvedCommand(t, rt, legacyDefaultArgs, prof, model)
 		if containsAny(want.Args, "--host", "--port") {
 			t.Fatalf("v5 baseline unexpectedly contains host/port flags: %#v", want.Args)
 		}
-		got, err := r.Preview(migrateToV6Model(prof, model), rt, nil, nil)
+		got, err := r.Preview(migrateToV7Model(legacyDefaultArgs, prof, model), rt, nil, nil)
 		if err != nil {
 			t.Fatalf("Preview: %v", err)
 		}
 		assertSpecEquivalent(t, r, got, want, rt, prof)
 		if containsAny(got.Args, "--host", "--port") {
-			t.Errorf("v6 args unexpectedly contain host/port flags: %#v", got.Args)
+			t.Errorf("migrated args unexpectedly contain host/port flags: %#v", got.Args)
 		}
 	})
 
@@ -248,9 +255,9 @@ func TestCommandEquivalence(t *testing.T) {
 			ID:          "rt1",
 			Name:        "llama.cpp",
 			Executable:  "llama-server",
-			DefaultArgs: []string{"-c", "4096"},
 			Environment: map[string]string{"RT_VAR": "rt"},
 		}
+		legacyDefaultArgs := []string{"-c", "4096"}
 		prof := v5ProfileCfg{
 			Host:        "127.0.0.1",
 			Port:        8080,
@@ -262,8 +269,8 @@ func TestCommandEquivalence(t *testing.T) {
 			Arguments: []string{"-c", "200000"},
 		}
 
-		want := v5ResolvedCommand(t, rt, prof, model)
-		got, err := r.Preview(migrateToV6Model(prof, model), rt, nil, nil)
+		want := v5ResolvedCommand(t, rt, legacyDefaultArgs, prof, model)
+		got, err := r.Preview(migrateToV7Model(legacyDefaultArgs, prof, model), rt, nil, nil)
 		if err != nil {
 			t.Fatalf("Preview: %v", err)
 		}

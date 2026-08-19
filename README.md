@@ -2,7 +2,7 @@
 
 GoAl is a lightweight, single-binary manager for local AI runtimes and models. One executable for Windows amd64 and Linux amd64.
 
-**Architecture:** Runtime ← Model → Instance. A Runtime is an execution engine (executable, default args, environment). A Model is a configured launch definition (runtime + args + host + port + environment). An Instance is a concrete process launch (PID, state, logs). Physical GGUF/MMProj files are ordinary launch arguments, not separate entities.
+**Architecture:** Runtime ← Model → Instance. A Runtime is an execution engine (executable, working directory, environment). A Model is a configured launch definition (runtime + launch arguments + environment). An Instance is a concrete process launch (PID, state, logs). Physical GGUF/MMProj files are ordinary launch arguments, not separate entities.
 
 **Latest stable: v1.0.3** — [GitHub Releases](https://github.com/dsdred/goal-starter/releases/tag/v1.0.3)
 
@@ -29,7 +29,7 @@ $env:GOAL_CONFIG = (Resolve-Path .\goal.json)
 go run .\cmd\goal
 ```
 
-Then open **http://127.0.0.1:9090** in your browser.
+Then open **http://127.0.0.1:8088** in your browser.
 
 ## Minimal configuration
 
@@ -37,7 +37,7 @@ Then open **http://127.0.0.1:9090** in your browser.
 {
   "version": 2,
   "listenAddress": "127.0.0.1",
-  "webPort": 9090,
+  "webPort": 8088,
   "dataDir": "./data"
 }
 ```

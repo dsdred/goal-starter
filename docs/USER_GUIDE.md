@@ -79,9 +79,9 @@ cp goal.example.json goal.json
 sudo ./goal          # Linux
 ```
 
-After starting, GoAl is available at: **http://127.0.0.1:9090**
+After starting, GoAl is available at: **http://127.0.0.1:8088**
 
-> **Note:** If port 9090 is in use, change `webPort` in `goal.json`.
+> **Note:** If port 8088 is in use, change `webPort` in `goal.json`.
 
 ---
 
@@ -97,7 +97,7 @@ The `goal.json` file is located in the same directory as the binary. It is **exc
 {
   "version": 2,
   "listenAddress": "127.0.0.1",
-  "webPort": 9090,
+  "webPort": 8088,
   "dataDir": "./data",
   "adminUser": "admin",
   "adminPassword": "",
@@ -114,7 +114,7 @@ The `goal.json` file is located in the same directory as the binary. It is **exc
 |-------|-------------|---------|----------|
 | `version` | Configuration schema version | 2 | No |
 | `listenAddress` | HTTP server listen address | `127.0.0.1` | No |
-| `webPort` | HTTP server port | `9090` | No |
+| `webPort` | HTTP server port | `8088` | No |
 | `dataDir` | Directory for storing data | `./data` | No |
 | `adminUser` | Administrator username | `admin` | No |
 | `adminPassword` | Administrator password (empty = no auth) | `""` | No |
@@ -260,7 +260,7 @@ model's launch args.
 
 ## Web Interface
 
-After starting, GoAl is available at: **http://127.0.0.1:9090**
+After starting, GoAl is available at: **http://127.0.0.1:8088**
 
 ### Web Interface Features:
 
@@ -275,7 +275,7 @@ After starting, GoAl is available at: **http://127.0.0.1:9090**
 
 If `authEnabled` is set:
 
-1. Go to `http://127.0.0.1:9090`
+1. Go to `http://127.0.0.1:8088`
 2. Click **Login**
 3. Enter `adminUser` and `adminPassword` from your configuration
 4. After login, the session is stored in an HTTP-only cookie
@@ -286,7 +286,7 @@ If `authEnabled` is set:
 
 ### Base URL
 
-All API calls start with: `http://127.0.0.1:9090`
+All API calls start with: `http://127.0.0.1:8088`
 
 ### Authentication
 
@@ -374,21 +374,21 @@ One model can create multiple instances. Stopping an instance does not delete th
 
 ```bash
 # List all instances
-curl http://127.0.0.1:9090/api/v1/instances
+curl http://127.0.0.1:8088/api/v1/instances
 
 # Status of specific instance
-curl http://127.0.0.1:9090/api/v1/instances/INSTANCE_ID
+curl http://127.0.0.1:8088/api/v1/instances/INSTANCE_ID
 
 # Stop instance
-curl -X POST http://127.0.0.1:9090/api/v1/instances/INSTANCE_ID/stop
+curl -X POST http://127.0.0.1:8088/api/v1/instances/INSTANCE_ID/stop
 
 # Restart instance
-curl -X POST http://127.0.0.1:9090/api/v1/instances/INSTANCE_ID/restart
+curl -X POST http://127.0.0.1:8088/api/v1/instances/INSTANCE_ID/restart
 ```
 
 ### Web Interface Management
 
-1. Open http://127.0.0.1:9090
+1. Open http://127.0.0.1:8088
 2. Click on the desired instance
 3. Use **Stop** / **Restart** buttons
 
@@ -416,7 +416,7 @@ entities — they are ordinary launch arguments (e.g., `-m <path>`, `--mmproj <p
 **Via API:**
 
 ```bash
-curl -X POST http://127.0.0.1:9090/api/v1/models \
+curl -X POST http://127.0.0.1:8088/api/v1/models \
   -H "Content-Type: application/json" \
   -d '{
     "id": "my-model",
@@ -431,7 +431,7 @@ curl -X POST http://127.0.0.1:9090/api/v1/models \
 A typical llama.cpp model configuration:
 
 ```bash
-curl -X POST http://127.0.0.1:9090/api/v1/models \
+curl -X POST http://127.0.0.1:8088/api/v1/models \
   -H "Content-Type: application/json" \
   -d '{
     "id": "qwen-35b",
@@ -450,7 +450,7 @@ The resolved command will be:
 ### Launch Command Preview
 
 ```bash
-curl -X POST http://127.0.0.1:9090/api/v1/models/my-model/resolve \
+curl -X POST http://127.0.0.1:8088/api/v1/models/my-model/resolve \
   -H "Content-Type: application/json"
 ```
 
@@ -478,7 +478,7 @@ Returns the full command that will be executed.
 **Via API:**
 
 ```bash
-curl -X POST http://127.0.0.1:9090/api/v1/runtimes \
+curl -X POST http://127.0.0.1:8088/api/v1/runtimes \
   -H "Content-Type: application/json" \
   -d '{
     "id": "my-ollama",
@@ -519,10 +519,10 @@ GoAl automatically checks runtime health every 30 seconds. Two types are support
 
 ```bash
 # Health of all runtimes
-curl http://127.0.0.1:9090/api/v1/runtimes/health
+curl http://127.0.0.1:8088/api/v1/runtimes/health
 
 # Health of specific runtime
-curl http://127.0.0.1:9090/api/v1/runtimes/health/ollama
+curl http://127.0.0.1:8088/api/v1/runtimes/health/ollama
 ```
 
 ---
@@ -535,24 +535,24 @@ curl http://127.0.0.1:9090/api/v1/runtimes/health/ollama
 
 ```bash
 # Logs of specific instance
-curl http://127.0.0.1:9090/api/v1/instances/INSTANCE_ID/logs
+curl http://127.0.0.1:8088/api/v1/instances/INSTANCE_ID/logs
 
 # SSE log stream
-curl http://127.0.0.1:9090/api/v1/logs/stream
+curl http://127.0.0.1:8088/api/v1/logs/stream
 ```
 
 ### Filtering Logs
 
 ```bash
 # With instance_id filter
-curl "http://127.0.0.1:9090/api/v1/logs?instance_id=INSTANCE_ID"
+curl "http://127.0.0.1:8088/api/v1/logs?instance_id=INSTANCE_ID"
 ```
 
 ### Pagination
 
 ```bash
 # Page 2, 50 records per page
-curl "http://127.0.0.1:9090/api/v1/logs?page=2&page_size=50"
+curl "http://127.0.0.1:8088/api/v1/logs?page=2&page_size=50"
 ```
 
 ---
@@ -583,7 +583,7 @@ To make GoAl accessible from the network:
 ```json
 {
   "listenAddress": "0.0.0.0",
-  "webPort": 9090,
+  "webPort": 8088,
   "authEnabled": true,
   "adminPassword": "secure_password_here"
 }

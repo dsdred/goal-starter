@@ -170,8 +170,8 @@ func TestRuntimeEnvironmentRemainsInternalAcrossModelLifecycle(t *testing.T) {
 	}
 	runtime := &storage.RuntimeEntry{
 		ID: "runtime-v23", Name: "runtime", Executable: fakeruntime.Path(t),
-		WorkingDirectory: t.TempDir(), DefaultArgs: []string{"graceful"},
-		Environment: map[string]string{"GOAL_RUNTIME_SECRET_V23": v23RuntimeSecret},
+		WorkingDirectory: t.TempDir(),
+		Environment:      map[string]string{"GOAL_RUNTIME_SECRET_V23": v23RuntimeSecret},
 	}
 	if err := repo.CreateRuntime(runtime); err != nil {
 		t.Fatalf("create runtime: %v", err)
@@ -190,7 +190,7 @@ func TestRuntimeEnvironmentRemainsInternalAcrossModelLifecycle(t *testing.T) {
 	_ = NewSystemHandler(supervisor, security.NewSessionStore(), security.NewCSRF(), instanceService)
 
 	createRecorder := httptest.NewRecorder()
-	modelHandler.Create(createRecorder, httptest.NewRequest(http.MethodPost, "/api/v1/models", strings.NewReader(`{"name":"model","runtime_id":"runtime-v23","host":"","port":0}`)))
+	modelHandler.Create(createRecorder, httptest.NewRequest(http.MethodPost, "/api/v1/models", strings.NewReader(`{"name":"model","runtime_id":"runtime-v23","args":["graceful"]}`)))
 	if createRecorder.Code != http.StatusCreated {
 		t.Fatalf("model create status: got %d, body %s", createRecorder.Code, createRecorder.Body.String())
 	}
@@ -235,10 +235,6 @@ func TestRuntimeEnvironmentMergeReachesRealChildProcess(t *testing.T) {
 	proofPath := filepath.Join(t.TempDir(), "environment-proof.txt")
 	runtime := &domain.Runtime{
 		Executable: fakeruntime.Path(t),
-		DefaultArgs: []string{
-			"env-file", proofPath,
-			"GOAL_RUNTIME_SECRET_V23", "GOAL_PARENT_V23", "GOAL_MODEL_OVERRIDE_V23", "GOAL_CUSTOM_OVERRIDE_V23",
-		},
 		Environment: map[string]string{
 			"GOAL_RUNTIME_SECRET_V23":  v23RuntimeSecret,
 			"GOAL_PARENT_V23":          "runtime-value-v23",
@@ -246,10 +242,16 @@ func TestRuntimeEnvironmentMergeReachesRealChildProcess(t *testing.T) {
 			"GOAL_CUSTOM_OVERRIDE_V23": "runtime-value-v23",
 		},
 	}
-	model := &domain.Model{Environment: map[string]string{
-		"GOAL_MODEL_OVERRIDE_V23":  "model-value-v23",
-		"GOAL_CUSTOM_OVERRIDE_V23": "model-value-v23",
-	}}
+	model := &domain.Model{
+		Args: []string{
+			"env-file", proofPath,
+			"GOAL_RUNTIME_SECRET_V23", "GOAL_PARENT_V23", "GOAL_MODEL_OVERRIDE_V23", "GOAL_CUSTOM_OVERRIDE_V23",
+		},
+		Environment: map[string]string{
+			"GOAL_MODEL_OVERRIDE_V23":  "model-value-v23",
+			"GOAL_CUSTOM_OVERRIDE_V23": "model-value-v23",
+		},
+	}
 	custom := map[string]string{"GOAL_CUSTOM_OVERRIDE_V23": "custom-value-v23"}
 	spec, err := domain.NewLaunchResolver().Resolve(model, runtime, nil, custom)
 	if err != nil {

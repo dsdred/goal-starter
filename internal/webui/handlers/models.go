@@ -20,8 +20,6 @@ type modelResponse struct {
 	Name            string   `json:"name"`
 	RuntimeID       string   `json:"runtime_id"`
 	Args            []string `json:"args,omitempty"`
-	Host            string   `json:"host"`
-	Port            int      `json:"port"`
 	EnvironmentKeys []string `json:"environment_keys,omitempty"`
 	Active          bool     `json:"active"`
 	AutostartDelay  int      `json:"autostart_delay,omitempty"`
@@ -39,8 +37,6 @@ func newModelResponse(e *storage.ModelEntry) *modelResponse {
 		Name:            e.Name,
 		RuntimeID:       e.RuntimeID,
 		Args:            e.Args,
-		Host:            e.Host,
-		Port:            e.Port,
 		EnvironmentKeys: envKeys,
 		Active:          e.Active,
 		AutostartDelay:  e.AutostartDelay,

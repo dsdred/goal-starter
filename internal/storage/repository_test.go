@@ -23,7 +23,6 @@ func TestJSONRepository_CreateRuntime(t *testing.T) {
 	rt := &RuntimeEntry{
 		Name:        "test-runtime",
 		Executable:  "ollama",
-		DefaultArgs: []string{"serve"},
 		Environment: map[string]string{"OLLAMA_HOST": "127.0.0.1:11434"},
 	}
 	err = repo.CreateRuntime(rt)
@@ -125,7 +124,7 @@ func TestJSONRepository_CrossReferenceValidation(t *testing.T) {
 		t.Fatalf("CreateRuntime: %v", err)
 	}
 
-	m := &ModelEntry{Name: "valid", RuntimeID: rt.ID, Host: "127.0.0.1", Port: 11434}
+	m := &ModelEntry{Name: "valid", RuntimeID: rt.ID}
 	if err := repo.CreateModel(m); err != nil {
 		t.Fatalf("CreateModel: %v", err)
 	}
@@ -135,7 +134,7 @@ func TestJSONRepository_CrossReferenceValidation(t *testing.T) {
 	}
 
 	// Invalid model (non-existent runtime).
-	m2 := &ModelEntry{Name: "invalid", RuntimeID: "non-existent", Host: "127.0.0.1", Port: 11434}
+	m2 := &ModelEntry{Name: "invalid", RuntimeID: "non-existent"}
 	if err := repo.CreateModel(m2); err != nil {
 		t.Fatalf("CreateModel: %v", err)
 	}
@@ -234,7 +233,6 @@ func TestJSONRepository_ConcurrentWrites(t *testing.T) {
 			rt := &RuntimeEntry{
 				Name:        "concurrent",
 				Executable:  "ollama",
-				DefaultArgs: []string{"serve"},
 				Environment: map[string]string{"TEST": "true"},
 			}
 			_ = repo.CreateRuntime(rt)
@@ -263,7 +261,6 @@ func TestJSONRepository_ListRuntimes_ReturnsCopies(t *testing.T) {
 	rt := &RuntimeEntry{
 		Name:        "test",
 		Executable:  "ollama",
-		DefaultArgs: []string{"a", "b"},
 		Environment: map[string]string{"KEY": "value"},
 	}
 	if err := repo.CreateRuntime(rt); err != nil {
@@ -277,7 +274,6 @@ func TestJSONRepository_ListRuntimes_ReturnsCopies(t *testing.T) {
 
 	// Mutate returned copy.
 	runtimes[0].Name = "mutated"
-	runtimes[0].DefaultArgs[0] = "x"
 	runtimes[0].Environment["KEY"] = "changed"
 
 	// Reload and verify original is intact.
@@ -285,9 +281,6 @@ func TestJSONRepository_ListRuntimes_ReturnsCopies(t *testing.T) {
 	runtimes2, _ := repo2.ListRuntimes()
 	if runtimes2[0].Name != "test" {
 		t.Errorf("expected 'test', got '%s'", runtimes2[0].Name)
-	}
-	if runtimes2[0].DefaultArgs[0] != "a" {
-		t.Errorf("expected 'a', got '%s'", runtimes2[0].DefaultArgs[0])
 	}
 	if runtimes2[0].Environment["KEY"] != "value" {
 		t.Errorf("expected 'value', got '%s'", runtimes2[0].Environment["KEY"])
@@ -299,8 +292,8 @@ func TestJSONRepository_SchemaVersion(t *testing.T) {
 	path := filepath.Join(dir, "repo.json")
 	repo, _ := NewJSONRepository(path)
 
-	if repo.SchemaVersion() != 6 {
-		t.Errorf("expected schema version 6, got %d", repo.SchemaVersion())
+	if repo.SchemaVersion() != 7 {
+		t.Errorf("expected schema version 7, got %d", repo.SchemaVersion())
 	}
 }
 
@@ -372,9 +365,7 @@ func TestJSONRepository_ModelFullFieldsRoundTrip(t *testing.T) {
 	m := &ModelEntry{
 		Name:           "test-model",
 		RuntimeID:      "runtime-1",
-		Host:           "127.0.0.1",
-		Port:           11434,
-		Args:           []string{"--flag"},
+		Args:           []string{"--host", "127.0.0.1", "--port", "11434", "--flag"},
 		Environment:    map[string]string{"VAR": "val"},
 		Active:         true,
 		AutostartDelay: 3,
@@ -392,14 +383,14 @@ func TestJSONRepository_ModelFullFieldsRoundTrip(t *testing.T) {
 	if got.Name != "test-model" {
 		t.Errorf("expected 'test-model', got '%s'", got.Name)
 	}
-	if got.Host != "127.0.0.1" {
-		t.Errorf("expected host '127.0.0.1', got '%s'", got.Host)
+	if !hasFlagValue(got.Args, "--host", "127.0.0.1") {
+		t.Errorf("expected --host 127.0.0.1 in args, got %v", got.Args)
 	}
-	if got.Port != 11434 {
-		t.Errorf("expected port 11434, got %d", got.Port)
+	if !hasFlagValue(got.Args, "--port", "11434") {
+		t.Errorf("expected --port 11434 in args, got %v", got.Args)
 	}
-	if got.Args[0] != "--flag" {
-		t.Errorf("expected args ['--flag'], got %v", got.Args)
+	if !containsV5Flag(got.Args, "--flag") {
+		t.Errorf("expected --flag in args, got %v", got.Args)
 	}
 	if got.Environment["VAR"] != "val" {
 		t.Errorf("expected VAR=val, got %v", got.Environment)
@@ -450,8 +441,6 @@ func TestJSONRepository_ModelsRoundTrip(t *testing.T) {
 	m := &ModelEntry{
 		Name:      "test-model",
 		RuntimeID: "runtime-1",
-		Host:      "127.0.0.1",
-		Port:      11434,
 	}
 	if err := repo.CreateModel(m); err != nil {
 		t.Fatalf("CreateModel: %v", err)
@@ -554,7 +543,7 @@ func TestJSONRepository_RepositoryInterfaceMethods(t *testing.T) {
 		t.Fatalf("CreateRuntime: %v", err)
 	}
 
-	m := &ModelEntry{Name: "test-model", RuntimeID: rt.ID, Host: "127.0.0.1", Port: 11434}
+	m := &ModelEntry{Name: "test-model", RuntimeID: rt.ID}
 	if err := repo.CreateModel(m); err != nil {
 		t.Fatalf("CreateModel: %v", err)
 	}
@@ -641,8 +630,8 @@ func TestJSONRepository_MarshalJSONRoundTrip(t *testing.T) {
 	if err := json.Unmarshal(data, &parsed); err != nil {
 		t.Fatalf("Unmarshal: %v", err)
 	}
-	if parsed["schema_version"] != float64(6) {
-		t.Errorf("expected schema_version 6, got %v", parsed["schema_version"])
+	if parsed["schema_version"] != float64(7) {
+		t.Errorf("expected schema_version 7, got %v", parsed["schema_version"])
 	}
 	if _, ok := parsed["runtimes"]; !ok {
 		t.Error("expected runtimes key to exist")
@@ -654,7 +643,7 @@ func TestJSONRepository_MarshalJSONRoundTrip(t *testing.T) {
 		t.Error("expected instances key to exist")
 	}
 	if _, ok := parsed["profiles"]; ok {
-		t.Error("unexpected profiles key in v6 JSON")
+		t.Error("unexpected profiles key in v7 JSON")
 	}
 }
 
@@ -770,8 +759,6 @@ func BenchmarkJSONRepository_CreateModel(b *testing.B) {
 		m := &ModelEntry{
 			Name:      "model",
 			RuntimeID: rt.ID,
-			Host:      "127.0.0.1",
-			Port:      11434,
 		}
 		_ = repo.CreateModel(m)
 	}
@@ -1089,14 +1076,14 @@ func TestJSONRepository_Persistence(t *testing.T) {
 	if err := json.Unmarshal(data, &parsed); err != nil {
 		t.Fatalf("Unmarshal: %v", err)
 	}
-	if parsed["schema_version"] != float64(6) {
-		t.Errorf("expected schema_version 6, got %v", parsed["schema_version"])
+	if parsed["schema_version"] != float64(7) {
+		t.Errorf("expected schema_version 7, got %v", parsed["schema_version"])
 	}
 	if _, ok := parsed["models"]; !ok {
 		t.Error("expected models key in JSON")
 	}
 	if _, ok := parsed["profiles"]; ok {
-		t.Error("unexpected profiles key in v6 JSON")
+		t.Error("unexpected profiles key in v7 JSON")
 	}
 }
 
@@ -1188,7 +1175,7 @@ func TestJSONRepository_CreateModel_EmptyName(t *testing.T) {
 	repo, _ := NewJSONRepository(path)
 
 	// Empty ID is OK — auto-generated.
-	m := &ModelEntry{Name: "valid", RuntimeID: "rt1", Host: "127.0.0.1", Port: 11434}
+	m := &ModelEntry{Name: "valid", RuntimeID: "rt1"}
 	if err := repo.CreateModel(m); err != nil {
 		t.Fatalf("CreateModel: %v", err)
 	}
@@ -1206,7 +1193,7 @@ func TestJSONRepository_CreateModel_EmptyName(t *testing.T) {
 	}
 
 	// Another create still works.
-	m2 := &ModelEntry{Name: "valid2", RuntimeID: "rt1", Host: "127.0.0.1", Port: 11435}
+	m2 := &ModelEntry{Name: "valid2", RuntimeID: "rt1"}
 	if err := repo.CreateModel(m2); err != nil {
 		t.Fatalf("CreateModel second: %v", err)
 	}

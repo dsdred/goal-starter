@@ -2,12 +2,14 @@ package handlers
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/dsdred/goal/internal/application"
 	"github.com/dsdred/goal/internal/domain"
@@ -262,6 +264,124 @@ func TestInstancesHandler_RestartInstance(t *testing.T) {
 }
 
 // ---------- RouteRegistry tests ----------
+
+func TestInstancesHandler_Cleanup(t *testing.T) {
+	repo := newTestRepo(t)
+	sup := newTestSupervisor(t)
+	insSvc := application.NewInstanceService(sup, repo)
+	h := NewInstancesHandler(insSvc, nil)
+
+	seed := func(id, state string, stoppedAgo time.Duration) {
+		var stoppedAt time.Time
+		if stoppedAgo > 0 {
+			stoppedAt = time.Now().Add(-stoppedAgo)
+		}
+		err := repo.CreateInstance(&storage.LaunchInstanceEntry{
+			ID:        id,
+			ModelID:   "model-x",
+			RuntimeID: "rt-x",
+			State:     state,
+			StoppedAt: stoppedAt,
+			CreatedAt: time.Now(),
+		})
+		if err != nil {
+			t.Fatalf("seed %s: %v", id, err)
+		}
+	}
+	seed("exited-1", "exited", time.Hour)
+	seed("failed-1", "failed", time.Hour)
+	seed("stale-1", "stale", time.Hour)
+	seed("running-1", "running", 0)
+	seed("pending-1", "pending", 0)
+
+	listIDs := func() map[string]bool {
+		t.Helper()
+		instances, err := repo.ListInstances()
+		if err != nil {
+			t.Fatalf("ListInstances: %v", err)
+		}
+		ids := make(map[string]bool, len(instances))
+		for _, inst := range instances {
+			ids[inst.ID] = true
+		}
+		return ids
+	}
+
+	// --- all_terminal ---
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/instances/cleanup", bytes.NewBufferString(`{"mode":"all_terminal"}`))
+	w := httptest.NewRecorder()
+	h.Cleanup(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("Cleanup all_terminal: expected 200, got %d, body %s", w.Code, w.Body.String())
+	}
+	var out struct {
+		Status  string `json:"status"`
+		Deleted int    `json:"deleted"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if out.Status != "cleaned" || out.Deleted != 3 {
+		t.Fatalf("unexpected response: %#v", out)
+	}
+	ids := listIDs()
+	for _, id := range []string{"exited-1", "failed-1", "stale-1"} {
+		if ids[id] {
+			t.Errorf("terminal instance %s should be deleted", id)
+		}
+	}
+	for _, id := range []string{"running-1", "pending-1"} {
+		if !ids[id] {
+			t.Errorf("active instance %s must not be deleted", id)
+		}
+	}
+
+	// --- selected: running instance must survive ---
+	seed("failed-2", "failed", time.Hour)
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/instances/cleanup", bytes.NewBufferString(`{"mode":"selected","ids":["failed-2","running-1"]}`))
+	w = httptest.NewRecorder()
+	h.Cleanup(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("Cleanup selected: expected 200, got %d, body %s", w.Code, w.Body.String())
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if out.Status != "cleaned" || out.Deleted != 1 {
+		t.Fatalf("unexpected response: %#v", out)
+	}
+	ids = listIDs()
+	if ids["failed-2"] {
+		t.Error("selected terminal instance should be deleted")
+	}
+	if !ids["running-1"] {
+		t.Error("active instance must not be deleted")
+	}
+
+	// --- invalid mode (400) ---
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/instances/cleanup", bytes.NewBufferString(`{"mode":"bogus"}`))
+	w = httptest.NewRecorder()
+	h.Cleanup(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("Cleanup invalid mode: expected 400, got %d", w.Code)
+	}
+
+	// --- selected without ids (400) ---
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/instances/cleanup", bytes.NewBufferString(`{"mode":"selected"}`))
+	w = httptest.NewRecorder()
+	h.Cleanup(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("Cleanup selected without ids: expected 400, got %d", w.Code)
+	}
+
+	// --- invalid JSON (400) ---
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/instances/cleanup", bytes.NewBufferString(`{invalid`))
+	w = httptest.NewRecorder()
+	h.Cleanup(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("Cleanup invalid JSON: expected 400, got %d", w.Code)
+	}
+}
 
 func TestRouteRegistry_Build(t *testing.T) {
 	repo := newTestRepo(t)

@@ -18,10 +18,11 @@ func (c Config) ValidateFull() error {
 		return fmt.Errorf("config validation failed: %w", err)
 	}
 
-	// If authentication is disabled, the server must not be exposed to the network.
+	// If authentication is disabled and the server is exposed to the network,
+	// log a prominent warning but do NOT block startup.
 	if !c.AuthEnabled {
 		if err := validateLocalhostOnly(c.ListenAddress); err != nil {
-			return fmt.Errorf("auth disabled but %w", err)
+			fmt.Fprintf(os.Stderr, "WARNING: GoAl Web UI is exposed without authentication. Anyone with network access to this address can control this GoAl instance.\n")
 		}
 	}
 

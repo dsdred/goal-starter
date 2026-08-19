@@ -10,7 +10,7 @@ Configuration is loaded from a JSON file (default: `goal.json`) at application s
 |-------|------|----------|---------|-------------|
 | `version` | int | No | `2` | Configuration schema version. Auto-migrated on load. |
 | `listenAddress` | string | Yes | `127.0.0.1` | HTTP server bind address. |
-| `webPort` | int | No | `9090` | HTTP server port (1–65535). |
+| `webPort` | int | No | `8088` | HTTP server port (1–65535). |
 | `dataDir` | string | No | `./data` | Directory for `goal_repo.json` and runtime data. |
 | `adminUser` | string | No | `admin` | Administrator username. Required when `authEnabled` is true. |
 | `adminPassword` | string | Conditional | `""` | Administrator password; required when `authEnabled=true`. Configuration files use mode `0600` on POSIX; restrict the containing directory with an ACL on Windows. |
@@ -51,7 +51,7 @@ Each runtime entry defines an external inference server or service.
 | `name` | string | Yes | — | Display name. |
 | `executable` | string | Yes | — | Path to the server executable. |
 | `workingDirectory` | string | No | `""` | Working directory for the process. |
-| `defaultArgs` | array of string | No | `[]` | Default command-line arguments. |
+| `defaultArgs` | array of string | No | `[]` | Legacy; migrated to model args. Retained for backward compatibility only. |
 | `environment` | map[string]string | No | `{}` | Process environment variables. |
 | `healthCheck` | object | No | — | Health check configuration (see below). |
 | `active` | bool | No | `true` | Whether the runtime is enabled. |
@@ -78,7 +78,7 @@ preserves the stored map, `{}` clears it, and an explicit map replaces it.
 Each model entry in `goal.json` uses the legacy v5 format. At startup, `SeedFromConfig`
 folds old model data (`path`, `arguments`) into the launch args of the corresponding
 GoAl 2.0 Model (derived from `profiles`). New models created via the API/UI use the
-simplified format: `id`, `name`, `runtimeId`, `args`, `host`, `port`, `environment`.
+simplified format: `id`, `name`, `runtimeId`, `args`, `environment`.
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|

@@ -32,7 +32,7 @@ func TestDeleteModel_Success(t *testing.T) {
 	}
 
 	// Create Model
-	m := &storage.ModelEntry{ID: "m-1", Name: "Model", RuntimeID: "rt-1", Host: "127.0.0.1", Port: 8080}
+	m := &storage.ModelEntry{ID: "m-1", Name: "Model", RuntimeID: "rt-1"}
 	if err := modelSvc.CreateModel(ctx, m); err != nil {
 		t.Fatalf("CreateModel: %v", err)
 	}
@@ -81,7 +81,7 @@ func TestDeleteRuntime_Referenced_Fails(t *testing.T) {
 	}
 
 	// Create Model referencing the runtime
-	m := &storage.ModelEntry{ID: "m-1", Name: "Model", RuntimeID: "rt-1", Host: "127.0.0.1", Port: 8080}
+	m := &storage.ModelEntry{ID: "m-1", Name: "Model", RuntimeID: "rt-1"}
 	if err := modelSvc.CreateModel(ctx, m); err != nil {
 		t.Fatalf("CreateModel: %v", err)
 	}
@@ -107,7 +107,7 @@ func TestDeleteModel_FailedDoesNotModifyRepo(t *testing.T) {
 	if err := runtimeSvc.CreateRuntime(ctx, rt); err != nil {
 		t.Fatalf("CreateRuntime: %v", err)
 	}
-	m := &storage.ModelEntry{ID: "m-1", Name: "Model", RuntimeID: "rt-1", Host: "127.0.0.1", Port: 8080}
+	m := &storage.ModelEntry{ID: "m-1", Name: "Model", RuntimeID: "rt-1"}
 	if err := modelSvc.CreateModel(ctx, m); err != nil {
 		t.Fatalf("CreateModel: %v", err)
 	}

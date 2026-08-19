@@ -7,185 +7,86 @@ let logEs = null;
 let logPaused = false;
 let refreshTimer = null;
 
-// Data cache
 let runtimesData = [];
 let modelsData = [];
 let instancesData = [];
 
-// Wizard state
 let wizStep = 1;
 let wizEditId = null;
 
-// ─── Layout adaptation ──────────────────────────────────────────────────────
-// The legacy page template still ships 4-entity views; the new domain has
-// only Runtimes, Models and Instances, so the surplus UI is trimmed here.
+let i18nDict = {};
+let currentLang = localStorage.getItem('goal_lang') || 'ru';
+let currentTheme = localStorage.getItem('goal_theme') || 'system';
+let versionInfo = {};
 
-function setupLayout() {
+// ─── i18n ───────────────────────────────────────────────────────────────────
 
-    rebuildWizard();
-    rebuildRuntimeModals();
-    rebuildHistoryHeader();
-    const instHead = document.querySelector('#view-adv-instances thead');
-    if (instHead) {
-        instHead.innerHTML = '<tr><th>ID</th><th>Модель</th><th>Состояние</th><th>PID</th><th>Запущен</th><th>Остановлен</th><th>Exit</th><th></th></tr>';
+function t(key, params) {
+    let s = i18nDict[key] || key;
+    if (params) {
+        Object.keys(params).forEach(function (k) {
+            s = s.replace('{' + k + '}', params[k]);
+        });
     }
-    const rtHead = document.querySelector('#view-adv-runtimes thead');
-    if (rtHead) {
-        rtHead.innerHTML = '<tr><th>Название</th><th>Исполняемый файл</th><th>Рабочая папка</th><th>Доп. параметры</th><th></th></tr>';
-    }
+    return s;
 }
 
-function hideNavItems(views) {
-    views.forEach(function (v) {
-        const btn = document.querySelector('.nav-item[data-view="' + v + '"]');
-        if (btn) btn.style.display = 'none';
+function applyI18n() {
+    document.querySelectorAll('[data-i18n]').forEach(function (el) {
+        el.textContent = t(el.dataset.i18n);
     });
+    document.title = t('app.title');
 }
 
-function rebuildWizard() {
-    const steps = document.querySelector('#wizard-modal .wizard-steps');
-    if (steps) {
-        steps.innerHTML =
-            '<div class="wizard-step active" data-step="1"><span>1</span> Модель</div>' +
-            '<div class="wizard-step" data-step="2"><span>2</span> Runtime</div>' +
-            '<div class="wizard-step" data-step="3"><span>3</span> Запуск</div>';
-    }
-    const form = document.getElementById('wizard-form');
-    if (!form) return;
-    form.innerHTML =
-        '<div class="wizard-panel active" data-panel="1">' +
-            '<div class="form-group">' +
-                '<label>Название модели *</label>' +
-                '<input type="text" id="wiz-name" placeholder="Например: Qwen3.8-27B-Q4_K_M" required>' +
-            '</div>' +
-        '</div>' +
-        '<div class="wizard-panel" data-panel="2">' +
-            '<div class="form-group">' +
-                '<label>Runtime</label>' +
-                '<div class="radio-group">' +
-                    '<label class="radio-option">' +
-                        '<input type="radio" name="wiz-rt-mode" value="existing" checked onchange="onWizRtModeChange()">' +
-                        '<span>Использовать существующий</span>' +
-                    '</label>' +
-                    '<label class="radio-option">' +
-                        '<input type="radio" name="wiz-rt-mode" value="new" onchange="onWizRtModeChange()">' +
-                        '<span>Создать новый Runtime</span>' +
-                    '</label>' +
-                '</div>' +
-            '</div>' +
-            '<div id="wiz-rt-existing-section" class="form-group">' +
-                '<label>Выберите Runtime</label>' +
-                '<select id="wiz-runtime-existing"><option value="">— выбрать —</option></select>' +
-            '</div>' +
-            '<div id="wiz-rt-new-section" class="form-group" style="display:none;">' +
-                '<small class="hint" style="margin-bottom:8px;display:block;">Runtime будет создан автоматически при нажатии «Создать».</small>' +
-                '<div class="form-group">' +
-                    '<label>Название *</label>' +
-                    '<input type="text" id="wiz-rt-name" placeholder="llama.cpp">' +
-                '</div>' +
-                '<div class="form-group">' +
-                    '<label>Исполняемый файл *</label>' +
-                    '<input type="text" id="wiz-rt-executable" placeholder="E:\\tools\\llama-server.exe">' +
-                    '<small class="hint">Имя файла (относительно рабочей папки) или абсолютный путь</small>' +
-                '</div>' +
-                '<div class="form-group">' +
-                    '<label>Рабочая папка</label>' +
-                    '<input type="text" id="wiz-rt-workdir" placeholder="E:\\tools">' +
-                '</div>' +
-                '<div class="form-group">' +
-                    '<label>Дополнительные параметры Runtime</label>' +
-                    '<textarea id="wiz-rt-default-args" rows="2" placeholder="Аргументы по умолчанию (опционально)"></textarea>' +
-                '</div>' +
-            '</div>' +
-        '</div>' +
-        '<div class="wizard-panel" data-panel="3">' +
-            '<div class="form-group">' +
-                '<label>Аргументы запуска</label>' +
-                '<textarea id="wiz-args" rows="4" placeholder="-m model.gguf&#10;--ngl 99&#10;--port 8080"></textarea>' +
-                '<small class="hint">По одному флагу в строке или через пробел</small>' +
-            '</div>' +
-            '<div class="form-row">' +
-                '<div class="form-group">' +
-                    '<label>Host</label>' +
-                    '<input type="text" id="wiz-host" value="0.0.0.0">' +
-                '</div>' +
-                '<div class="form-group">' +
-                    '<label>Port</label>' +
-                    '<input type="number" id="wiz-port" value="8080" min="1" max="65535">' +
-                '</div>' +
-            '</div>' +
-            '<div class="form-group">' +
-                '<label>Переменные окружения (расширено)</label>' +
-                '<small class="hint">Дополнительные env-переменные процесса (например, CUDA_VISIBLE_DEVICES). Значения не показываются при чтении.</small>' +
-                '<div id="wiz-env-container"></div>' +
-                '<button type="button" class="btn btn-ghost btn-sm" onclick="addWizEnvRow()">+ Переменная</button>' +
-            '</div>' +
-            '<div class="form-group form-autostart">' +
-                '<div>' +
-                    '<span class="autostart-label">Автозапуск при старте GoAl</span>' +
-                    '<small class="hint">Модель будет запущена автоматически при каждом старте GoAl</small>' +
-                '</div>' +
-                '<label class="toggle-switch"><input type="checkbox" id="wiz-autostart"><span class="toggle-slider"></span></label>' +
-            '</div>' +
-            '<div class="form-group" id="wiz-delay-group" style="display:none;">' +
-                '<label>Задержка запуска (сек)</label>' +
-                '<input type="number" id="wiz-autostart-delay" value="0" min="0" max="300">' +
-            '</div>' +
-        '</div>' +
-        '<div id="wizard-error" class="error-msg" style="display:none;"></div>' +
-        '<div class="modal-actions">' +
-            '<button type="button" class="btn btn-ghost" id="wiz-prev" onclick="wizPrev()" style="display:none;">Назад</button>' +
-            '<button type="submit" class="btn btn-primary" id="wiz-next">Далее</button>' +
-            '<button type="button" class="btn btn-ghost" onclick="closeWizard()">Отмена</button>' +
-        '</div>';
-
-    form.addEventListener('submit', handleWizardSubmit);
-    document.getElementById('wiz-autostart').addEventListener('change', function () {
-        document.getElementById('wiz-delay-group').style.display = this.checked ? '' : 'none';
-    });
+async function loadI18n(lang) {
+    try {
+        const r = await fetch('/static/i18n/' + lang + '.json');
+        if (r.ok) {
+            i18nDict = await r.json();
+            applyI18n();
+        }
+    } catch {}
 }
 
-function rebuildRuntimeModals() {
-    const createForm = document.querySelector('#create-runtime-modal form');
-    if (createForm) {
-        createForm.innerHTML =
-            '<div class="form-group"><label>Название *</label><input type="text" name="name" required placeholder="llama.cpp"></div>' +
-            '<div class="form-group"><label>Исполняемый файл *</label><input type="text" name="executable" required placeholder="E:\\tools\\llama-server.exe"></div>' +
-            '<div class="form-group"><label>Рабочая папка</label><input type="text" name="working_directory" placeholder="E:\\tools"></div>' +
-            '<div class="form-group"><label>Дополнительные параметры Runtime</label><textarea name="default_args" rows="2" placeholder="Аргументы по умолчанию (опционально)"></textarea></div>' +
-            '<div class="form-group"><label>Environment (расширено)</label><div id="rt-create-env-container"></div>' +
-            '<button type="button" class="btn btn-ghost btn-sm" onclick="addEnvRow(\'rt-create-env-container\')">+ Переменная</button></div>' +
-            '<div class="modal-actions"><button type="submit" class="btn btn-primary">Создать</button><button type="button" class="btn btn-ghost" onclick="closeModal(\'create-runtime-modal\')">Отмена</button></div>';
-    }
-    const editForm = document.querySelector('#edit-runtime-modal form');
-    if (editForm) {
-        editForm.innerHTML =
-            '<input type="hidden" name="id">' +
-            '<div class="form-group"><label>Название *</label><input type="text" name="name" required></div>' +
-            '<div class="form-group"><label>Исполняемый файл *</label><input type="text" name="executable" required></div>' +
-            '<div class="form-group"><label>Рабочая папка</label><input type="text" name="working_directory"></div>' +
-            '<div class="form-group"><label>Дополнительные параметры Runtime</label><textarea name="default_args" rows="2"></textarea></div>' +
-            '<div class="form-group"><label>Environment (расширено)</label><div id="rt-edit-env-container"></div>' +
-            '<button type="button" class="btn btn-ghost btn-sm" onclick="addEnvRow(\'rt-edit-env-container\')">+ Переменная</button></div>' +
-            '<div class="modal-actions"><button type="submit" class="btn btn-primary">Сохранить</button><button type="button" class="btn btn-ghost" onclick="closeModal(\'edit-runtime-modal\')">Отмена</button></div>';
-    }
-    const createTitle = document.querySelector('#create-runtime-modal h2');
-    if (createTitle) createTitle.textContent = 'Создать Runtime';
-    const editTitle = document.querySelector('#edit-runtime-modal h2');
-    if (editTitle) editTitle.textContent = 'Изменить Runtime';
+function setLanguage(lang) {
+    currentLang = lang;
+    localStorage.setItem('goal_lang', lang);
+    document.getElementById('lang-select').value = lang;
+    const setLang = document.getElementById('set-lang');
+    if (setLang) setLang.value = lang;
+    loadI18n(lang);
 }
 
-function rebuildHistoryHeader() {
-    const head = document.querySelector('#view-history thead');
-    if (head) {
-        head.innerHTML = '<tr><th>Модель</th><th>Instance</th><th>Состояние</th><th>PID</th><th>Запущен</th><th>Остановлен</th><th>Exit code</th></tr>';
+// ─── Theme ──────────────────────────────────────────────────────────────────
+
+function applyTheme() {
+    let mode = currentTheme;
+    if (mode === 'system') {
+        mode = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
     }
+    document.documentElement.setAttribute('data-theme', mode);
+}
+
+function setTheme(theme) {
+    currentTheme = theme;
+    localStorage.setItem('goal_theme', theme);
+    applyTheme();
+    document.getElementById('theme-select').value = theme;
+    const setThemeEl = document.getElementById('set-theme');
+    if (setThemeEl) setThemeEl.value = theme;
 }
 
 // ─── Init ───────────────────────────────────────────────────────────────────
 
 async function init() {
-    setupLayout();
+    applyTheme();
+    document.getElementById('theme-select').value = currentTheme;
+    document.getElementById('lang-select').value = currentLang;
+    await loadI18n(currentLang);
+    document.getElementById('wizard-form').addEventListener('submit', handleWizardSubmit);
+    document.getElementById('wiz-autostart').addEventListener('change', function () {
+        document.getElementById('wiz-delay-group').style.display = this.checked ? '' : 'none';
+    });
     await getCSRFToken();
     const auth = await checkAuth();
     if (!auth) {
@@ -211,13 +112,25 @@ async function checkAuth() {
         if (r.ok) {
             const d = await r.json();
             if (d.authenticated) {
-                document.getElementById('set-user').textContent = d.user || '';
+                updateSidebarAuth(d.user);
                 return true;
             }
         }
     } catch {}
     showLogin();
     return false;
+}
+
+function updateSidebarAuth(user) {
+    const el = document.getElementById('sidebar-auth');
+    if (user) {
+        el.style.display = 'flex';
+        document.getElementById('sidebar-user').textContent = user;
+    }
+    const setCard = document.getElementById('set-user-card');
+    if (setCard) setCard.style.display = user ? '' : 'none';
+    const setUser = document.getElementById('set-user');
+    if (setUser) setUser.textContent = user || '-';
 }
 
 function showLogin() {
@@ -251,6 +164,7 @@ async function handleLogin(e) {
         });
         if (r.ok) {
             await getCSRFToken();
+            updateSidebarAuth(u);
             document.getElementById('login-modal').style.display = 'none';
             document.getElementById('app-shell').style.display = 'flex';
             await reloadAllData();
@@ -275,10 +189,11 @@ async function handleLogout() {
 
 // ─── API helper ─────────────────────────────────────────────────────────────
 
-async function api(path, opts = {}) {
+async function api(path, opts) {
+    opts = opts || {};
     const headers = { 'Content-Type': 'application/json' };
     if (opts.method && opts.method !== 'GET') headers['X-CSRF-Token'] = csrfToken;
-    const r = await fetch('/api/v1' + path, { ...opts, headers });
+    const r = await fetch('/api/v1' + path, { method: opts.method || 'GET', headers: headers, body: opts.body });
     if (!r.ok) {
         let msg = r.statusText;
         let details = null;
@@ -292,6 +207,7 @@ async function api(path, opts = {}) {
         err.details = details;
         throw err;
     }
+    if (r.status === 204) return null;
     return r.json();
 }
 
@@ -305,38 +221,53 @@ async function reloadAllData() {
     modelsData = mo.status === 'fulfilled' ? mo.value : [];
     instancesData = ins.status === 'fulfilled' ? ins.value : [];
     loadVersion();
+    updateFilterOptions();
 }
 
 async function loadVersion() {
     try {
         const d = await api('/version');
-        document.getElementById('server-version').textContent = 'v' + (d.version || '?');
-        document.getElementById('set-version').textContent = 'v' + (d.version || '?');
+        versionInfo = d;
+        const ver = d.version || 'dev';
+        document.getElementById('server-version').textContent = ver;
+        document.getElementById('set-version').textContent = ver;
+        document.getElementById('set-commit').textContent = d.gitCommit || '-';
+        document.getElementById('set-go').textContent = d.goVersion || '-';
+        document.getElementById('set-platform').textContent = (d.os || '') + '/' + (d.arch || '');
     } catch {}
 }
 
-// ─── Rendering ──────────────────────────────────────────────────────────────
-
-function renderAll() {
-    renderModelCards();
-    renderAdvRuntimes();
-    renderAdvInstances();
-    renderHistory();
-    updateLogInstanceSelect();
+function updateFilterOptions() {
+    const mfRt = document.getElementById('mf-runtime');
+    if (mfRt) {
+        const cur = mfRt.value;
+        mfRt.innerHTML = '<option value="">' + t('models.filter.runtime') + '</option>' +
+            runtimesData.map(function (r) { return '<option value="' + esc(r.id) + '">' + esc(r.name) + '</option>'; }).join('');
+        mfRt.value = cur;
+    }
+    const hfM = document.getElementById('hf-model');
+    if (hfM) {
+        const cur = hfM.value;
+        hfM.innerHTML = '<option value="">' + t('history.filter.model') + '</option>' +
+            modelsData.map(function (m) { return '<option value="' + esc(m.id) + '">' + esc(m.name) + '</option>'; }).join('');
+        hfM.value = cur;
+    }
 }
 
+// ─── Utilities ──────────────────────────────────────────────────────────────
+
 function getRuntimeName(id) {
-    const r = runtimesData.find(x => x.id === id);
+    const r = runtimesData.find(function (x) { return x.id === id; });
     return r ? r.name : (id || '—');
 }
 
 function getModelName(id) {
-    const m = modelsData.find(x => x.id === id);
+    const m = modelsData.find(function (x) { return x.id === id; });
     return m ? m.name : (id || '—');
 }
 
 function getActiveInstances(modelId) {
-    return instancesData.filter(i => i.model_id === modelId && isActive(i.state));
+    return instancesData.filter(function (i) { return i.model_id === modelId && isActive(i.state); });
 }
 
 function isActive(s) { return s === 'running' || s === 'starting' || s === 'stopping'; }
@@ -344,10 +275,10 @@ function isActive(s) { return s === 'running' || s === 'starting' || s === 'stop
 function modelStatus(model) {
     const active = getActiveInstances(model.id);
     if (active.length === 0) return 'stopped';
-    const states = active.map(i => i.state);
-    if (states.includes('running')) return 'running';
-    if (states.includes('starting')) return 'starting';
-    if (states.includes('stopping')) return 'stopping';
+    const states = active.map(function (i) { return i.state; });
+    if (states.indexOf('running') !== -1) return 'running';
+    if (states.indexOf('starting') !== -1) return 'starting';
+    if (states.indexOf('stopping') !== -1) return 'stopping';
     return 'stopped';
 }
 
@@ -383,18 +314,45 @@ function parseArgs(raw) {
     return raw.trim().split(/\s+/).filter(Boolean);
 }
 
-// ─── Model Cards ────────────────────────────────────────────────────────────
+// ─── Rendering ──────────────────────────────────────────────────────────────
 
-function renderModelCards() {
-    const grid = document.getElementById('model-grid');
+function renderAll() {
+    renderModels();
+    renderAdvRuntimes();
+    renderAdvInstances();
+    renderHistory();
+    updateLogInstanceSelect();
+}
+
+// ─── My Models (compact list) ──────────────────────────────────────────────
+
+function renderModels() {
+    const list = document.getElementById('model-list');
     const empty = document.getElementById('models-empty');
-    if (modelsData.length === 0) {
-        grid.innerHTML = '';
-        empty.style.display = 'block';
+    const search = (document.getElementById('mf-search').value || '').toLowerCase();
+    const rtFilter = document.getElementById('mf-runtime').value;
+    const stateFilter = document.getElementById('mf-state').value;
+    const autoOnly = document.getElementById('mf-autostart').checked;
+
+    let filtered = modelsData.filter(function (m) {
+        if (search && m.name.toLowerCase().indexOf(search) === -1) return false;
+        if (rtFilter && m.runtime_id !== rtFilter) return false;
+        if (stateFilter && modelStatus(m) !== stateFilter) return false;
+        if (autoOnly && !m.active) return false;
+        return true;
+    });
+
+    if (filtered.length === 0) {
+        list.innerHTML = '';
+        empty.style.display = modelsData.length === 0 ? 'block' : 'none';
+        if (modelsData.length > 0) {
+            list.innerHTML = '<div class="empty-state" style="padding:1.5rem;"><p style="font-size:0.85rem;">No matching models.</p></div>';
+        }
         return;
     }
     empty.style.display = 'none';
-    grid.innerHTML = modelsData.map(m => {
+
+    list.innerHTML = filtered.map(function (m) {
         const status = modelStatus(m);
         const active = getActiveInstances(m.id);
         const inst = active[0];
@@ -402,33 +360,29 @@ function renderModelCards() {
 
         let actionBtns = '';
         if (status === 'running') {
-            actionBtns = '<button class="btn btn-warning btn-sm" onclick="restartModel(\'' + safeId(m.id) + '\')">Перезапустить</button>' +
-                '<button class="btn btn-danger btn-sm" onclick="stopModel(\'' + safeId(m.id) + '\')">Остановить</button>';
+            actionBtns = '<button class="btn btn-warning btn-sm" onclick="restartModel(\'' + safeId(m.id) + '\')">' + t('models.actions.restart') + '</button>' +
+                '<button class="btn btn-danger btn-sm" onclick="stopModel(\'' + safeId(m.id) + '\')">' + t('models.actions.stop') + '</button>';
         } else if (status === 'starting' || status === 'stopping') {
-            actionBtns = '<span class="hint-text">В процессе...</span>';
+            actionBtns = '<span class="hint-text">' + status + '...</span>';
         } else {
-            actionBtns = '<button class="btn btn-success btn-sm" onclick="startModel(\'' + safeId(m.id) + '\')">Запустить</button>';
+            actionBtns = '<button class="btn btn-success btn-sm" onclick="startModel(\'' + safeId(m.id) + '\')">' + t('models.actions.start') + '</button>';
         }
 
-        return '<div class="model-card">' +
-            '<div class="model-card-header">' +
-                '<div>' +
-                    '<div class="model-card-title">' + esc(m.name) + '</div>' +
-                    '<div class="model-card-runtime">' + esc(getRuntimeName(m.runtime_id)) + '</div>' +
+        return '<div class="model-row">' +
+            '<div class="model-row-main">' +
+                '<div class="model-row-name">' + esc(m.name) + '</div>' +
+                '<div class="model-row-sub">' + esc(getRuntimeName(m.runtime_id)) +
+                    (m.active ? ' <span class="autostart-indicator" title="' + t('models.autostart') + '">A</span>' : '') +
                 '</div>' +
-                '<span class="status-badge ' + status + '"><span class="status-dot ' + (status === 'running' ? 'running' : '') + '"></span>' + status.toUpperCase() + '</span>' +
             '</div>' +
-            '<div class="model-card-info">' +
-                '<div class="info-row"><span class="label">Адрес:</span><span>' + esc(m.host || '0.0.0.0') + ':' + (m.port || '—') + '</span></div>' +
-                (inst && inst.pid ? '<div class="info-row"><span class="label">PID:</span><span>' + inst.pid + '</span></div>' : '') +
-                (uptime ? '<div class="info-row"><span class="label">Uptime:</span><span>' + uptime + '</span></div>' : '') +
-            '</div>' +
-            '<div class="model-card-autostart"><span class="autostart-label">Автозапуск</span><label class="toggle-switch"><input type="checkbox" ' + (m.active ? 'checked' : '') + ' onchange="toggleAutostart(\'' + safeId(m.id) + '\')"><span class="toggle-slider"></span></label></div>' +
-            '<div class="model-card-actions">' +
+            (inst && inst.pid ? '<span class="model-row-pid">PID ' + inst.pid + '</span>' : '') +
+            (uptime ? '<span class="model-row-uptime">' + uptime + '</span>' : '') +
+            '<span class="status-badge ' + status + '">' + t('models.status.' + status) + '</span>' +
+            '<div class="model-row-actions">' +
                 actionBtns +
-                '<button class="btn btn-ghost btn-sm" onclick="viewInstanceLogs(\'' + (active.length ? safeId(active[0].id) : '') + '\')">Логи</button>' +
-                '<button class="btn btn-ghost btn-sm" onclick="openWizard(\'' + safeId(m.id) + '\')">Изменить</button>' +
-                '<button class="btn btn-danger btn-sm" onclick="deleteModel(\'' + safeId(m.id) + '\')">Удалить</button>' +
+                '<button class="btn btn-ghost btn-sm" onclick="viewInstanceLogs(\'' + (active.length ? safeId(active[0].id) : '') + '\')">' + t('models.actions.logs') + '</button>' +
+                '<button class="btn btn-ghost btn-sm" onclick="openWizard(\'' + safeId(m.id) + '\')">' + t('models.actions.edit') + '</button>' +
+                '<button class="btn btn-danger btn-sm" onclick="deleteModel(\'' + safeId(m.id) + '\')">' + t('models.actions.delete') + '</button>' +
             '</div>' +
         '</div>';
     }).join('');
@@ -437,51 +391,45 @@ function renderModelCards() {
 // ─── Model actions ──────────────────────────────────────────────────────────
 
 async function startModel(modelId) {
-    const btns = document.querySelectorAll('.model-card-actions .btn-success');
-    btns.forEach(b => b.disabled = true);
     try {
         await api('/models/' + modelId + '/start', { method: 'POST' });
-        showToast('Запуск...', 'success');
+        showToast(t('common.loading'), 'success');
         await reloadAllData(); renderAll();
-    } catch (e) { showToast(friendlyError(e), 'error'); btns.forEach(b => b.disabled = false); }
+    } catch (e) { showToast(friendlyError(e), 'error'); }
 }
 
 async function stopModel(modelId) {
-    const btns = document.querySelectorAll('.model-card-actions .btn-danger');
-    btns.forEach(b => b.disabled = true);
     try {
         await api('/models/' + modelId + '/stop', { method: 'POST' });
-        showToast('Остановка...', 'success');
+        showToast(t('common.loading'), 'success');
         await reloadAllData(); renderAll();
-    } catch (e) { showToast(friendlyError(e), 'error'); btns.forEach(b => b.disabled = false); }
+    } catch (e) { showToast(friendlyError(e), 'error'); }
 }
 
 async function restartModel(modelId) {
-    const btns = document.querySelectorAll('.model-card-actions .btn-warning');
-    btns.forEach(b => b.disabled = true);
     try {
         await api('/models/' + modelId + '/restart', { method: 'POST' });
-        showToast('Перезапуск...', 'success');
+        showToast(t('common.loading'), 'success');
         await reloadAllData(); renderAll();
-    } catch (e) { showToast(friendlyError(e), 'error'); btns.forEach(b => b.disabled = false); }
+    } catch (e) { showToast(friendlyError(e), 'error'); }
 }
 
 function deleteModel(id) {
-    const m = modelsData.find(x => x.id === id);
+    const m = modelsData.find(function (x) { return x.id === id; });
     const name = m ? m.name : id;
     const activeInsts = getActiveInstances(id);
-    let msg = 'Удалить модель "' + name + '"?';
-    if (activeInsts.length > 0) msg += '\nАктивные экземпляры (' + activeInsts.length + ') будут остановлены.';
+    let msg = 'Delete "' + name + '"?';
+    if (activeInsts.length > 0) msg += '\n' + activeInsts.length + ' active instance(s) will be stopped.';
     showConfirm(msg, async function () {
         try {
             await api('/models/' + id, { method: 'DELETE' });
             closeConfirm();
-            showToast('Модель удалена', 'success');
+            showToast(t('common.deleted'), 'success');
             await reloadAllData(); renderAll();
         } catch (err) {
             if (err.status === 409 && err.details && err.details.length) {
                 closeConfirm();
-                showBlockedModal('Модель', name, err.details);
+                showBlockedModal(t('blocked.title'), err.details);
             } else {
                 showToast(friendlyError(err), 'error');
             }
@@ -490,7 +438,7 @@ function deleteModel(id) {
 }
 
 async function toggleAutostart(id) {
-    const m = modelsData.find(x => x.id === id);
+    const m = modelsData.find(function (x) { return x.id === id; });
     if (!m) return;
     try {
         if (m.active) {
@@ -507,13 +455,18 @@ async function toggleAutostart(id) {
 function updateLogInstanceSelect() {
     const sel = document.getElementById('log-instance-select');
     const cur = sel.value;
-    const activeInsts = instancesData.filter(i => isActive(i.state));
+    const allInsts = instancesData.slice().sort(function (a, b) {
+        const ta = a.started_at ? new Date(a.started_at).getTime() : 0;
+        const tb = b.started_at ? new Date(b.started_at).getTime() : 0;
+        return tb - ta;
+    });
     const logsEmpty = document.getElementById('logs-empty');
-    if (logsEmpty) logsEmpty.style.display = activeInsts.length === 0 ? 'block' : 'none';
-    sel.innerHTML = '<option value="">Все экземпляры</option>' +
-        activeInsts.map(i =>
-            '<option value="' + esc(i.id) + '">' + esc(getModelName(i.model_id)) + ' | ' + i.id.slice(0, 12) + '… | PID ' + (i.pid || '?') + ' | ' + esc(i.state) + '</option>'
-        ).join('');
+    if (logsEmpty) logsEmpty.style.display = allInsts.length === 0 ? 'block' : 'none';
+    sel.innerHTML = '<option value="">' + t('logs.select.all') + '</option>' +
+        allInsts.map(function (i) {
+            const label = getModelName(i.model_id) + ' | ' + i.id.slice(0, 12) + '… | ' + i.state;
+            return '<option value="' + esc(i.id) + '">' + esc(label) + '</option>';
+        }).join('');
     sel.value = cur;
 }
 
@@ -527,14 +480,14 @@ function updateLogInstanceBar(instId) {
     const bar = document.getElementById('log-instance-bar');
     if (!bar) return;
     if (!instId) { bar.style.display = 'none'; return; }
-    const inst = instancesData.find(i => i.id === instId);
+    const inst = instancesData.find(function (i) { return i.id === instId; });
     if (!inst) { bar.style.display = 'none'; return; }
     const started = fmtTime(inst.started_at);
-    bar.innerHTML = '<span class="log-bar-label">Модель:</span> ' + esc(getModelName(inst.model_id)) +
-        ' &nbsp;|&nbsp; <span class="log-bar-label">Instance:</span> <code>' + esc(inst.id) + '</code>' +
-        ' &nbsp;|&nbsp; <span class="log-bar-label">PID:</span> ' + (inst.pid || '—') +
-        ' &nbsp;|&nbsp; <span class="log-bar-label">State:</span> <span class="status-badge ' + esc(inst.state) + '">' + esc(inst.state) + '</span>' +
-        ' &nbsp;|&nbsp; <span class="log-bar-label">Старт:</span> ' + started;
+    bar.innerHTML = '<span class="log-bar-label">' + t('logs.bar.model') + ':</span> ' + esc(getModelName(inst.model_id)) +
+        ' &nbsp;|&nbsp; <span class="log-bar-label">' + t('logs.bar.instance') + ':</span> <code>' + esc(inst.id.slice(0, 16)) + '</code>' +
+        ' &nbsp;|&nbsp; <span class="log-bar-label">' + t('logs.bar.pid') + ':</span> ' + (inst.pid || '—') +
+        ' &nbsp;|&nbsp; <span class="log-bar-label">' + t('logs.bar.state') + ':</span> <span class="status-badge ' + esc(inst.state) + '">' + esc(inst.state) + '</span>' +
+        ' &nbsp;|&nbsp; <span class="log-bar-label">' + t('logs.bar.started') + ':</span> ' + started;
     bar.style.display = 'flex';
 }
 
@@ -551,7 +504,7 @@ function connectLogStream(instanceId) {
             appendLogLine(d);
         } catch {}
     };
-    logEs.onerror = function () { /* auto-reconnect */ };
+    logEs.onerror = function () {};
 }
 
 function appendLogLine(d) {
@@ -559,13 +512,13 @@ function appendLogLine(d) {
     const search = document.getElementById('log-search').value.toLowerCase();
     const filter = document.getElementById('log-stream-filter').value;
     if (filter && stream !== filter) return;
-    if (search && !(d.message || '').toLowerCase().includes(search)) return;
+    if (search && !(d.message || '').toLowerCase().indexOf(search) !== -1) return;
 
     const view = document.getElementById('log-view');
     const div = document.createElement('div');
     div.className = 'log-line ' + stream;
-    const t = d.time ? new Date(d.time).toLocaleTimeString() : '';
-    div.innerHTML = '<span class="log-time">' + t + '</span><span class="log-source">[' + esc(stream) + ']</span>' + esc(d.message);
+    const ts = d.time ? new Date(d.time).toLocaleTimeString() : '';
+    div.innerHTML = '<span class="log-time">' + ts + '</span><span class="log-source">[' + esc(stream) + ']</span>' + esc(d.message);
     view.appendChild(div);
 
     while (view.children.length > 2000) view.removeChild(view.firstChild);
@@ -574,11 +527,11 @@ function appendLogLine(d) {
     }
 }
 
-function applyLogSearch() { /* search applied on new lines */ }
+function applyLogSearch() {}
 
 function toggleLogPause() {
     logPaused = !logPaused;
-    document.getElementById('log-pause-btn').textContent = logPaused ? 'Продолжить' : 'Пауза';
+    document.getElementById('log-pause-btn').textContent = logPaused ? t('logs.resume') : t('logs.pause');
 }
 
 function clearLogView() {
@@ -601,10 +554,10 @@ function viewInstanceLogs(instanceId) {
 
 function navigate(view) {
     currentView = view;
-    document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+    document.querySelectorAll('.view').forEach(function (v) { v.classList.remove('active'); });
     const target = document.getElementById('view-' + view);
     if (target) target.classList.add('active');
-    document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+    document.querySelectorAll('.nav-item').forEach(function (n) { n.classList.remove('active'); });
     const navBtn = document.querySelector('.nav-item[data-view="' + view + '"]');
     if (navBtn) navBtn.classList.add('active');
 
@@ -623,40 +576,48 @@ function openWizard(modelId) {
     document.getElementById('wiz-env-container').innerHTML = '';
     document.querySelector('input[name=wiz-rt-mode][value=existing]').checked = true;
     onWizRtModeChange();
-    loadWizardRuntimeSelect();
+    loadWizardRuntimeCards();
 
-    const titleEl = document.querySelector('#wizard-modal h2');
-    if (titleEl) titleEl.textContent = wizEditId ? 'Изменить модель' : 'Добавить модель';
+    const titleEl = document.getElementById('wizard-title');
+    titleEl.textContent = wizEditId ? t('wizard.title.edit') : t('wizard.title.add');
 
     if (wizEditId) {
-        const m = modelsData.find(x => x.id === wizEditId);
+        const m = modelsData.find(function (x) { return x.id === wizEditId; });
         if (m) {
             document.getElementById('wiz-name').value = m.name || '';
             document.getElementById('wiz-args').value = (m.args || []).join('\n');
-            document.getElementById('wiz-host').value = m.host || '0.0.0.0';
-            document.getElementById('wiz-port').value = m.port || 8080;
             document.getElementById('wiz-autostart').checked = !!m.active;
             document.getElementById('wiz-delay-group').style.display = m.active ? '' : 'none';
             document.getElementById('wiz-autostart-delay').value = m.autostart_delay || 0;
             if (m.runtime_id) {
-                const sel = document.getElementById('wiz-runtime-existing');
-                sel.value = m.runtime_id;
+                const card = document.querySelector('#wiz-rt-cards .rt-card[data-id="' + m.runtime_id + '"]');
+                if (card) card.classList.add('selected');
             }
         }
     }
-    document.getElementById('wiz-next').textContent = wizStep === 3 ? (wizEditId ? 'Сохранить' : 'Создать') : 'Далее';
     updateWizardStep();
     document.getElementById('wizard-modal').style.display = 'flex';
 }
 
 function closeWizard() { document.getElementById('wizard-modal').style.display = 'none'; }
 
-function loadWizardRuntimeSelect() {
-    const sel = document.getElementById('wiz-runtime-existing');
-    const cur = sel.value;
-    sel.innerHTML = '<option value="">— выбрать —</option>' +
-        runtimesData.map(r => '<option value="' + esc(r.id) + '">' + esc(r.name) + ' (' + esc(r.executable) + ')</option>').join('');
-    sel.value = cur;
+function loadWizardRuntimeCards() {
+    const container = document.getElementById('wiz-rt-cards');
+    if (runtimesData.length === 0) {
+        container.innerHTML = '<div class="hint-text">No runtimes. Create one below.</div>';
+        return;
+    }
+    container.innerHTML = runtimesData.map(function (r) {
+        return '<div class="rt-card" data-id="' + esc(r.id) + '" onclick="selectRtCard(this)">' +
+            '<div class="rt-card-name">' + esc(r.name) + '</div>' +
+            '<div class="rt-card-exe">' + esc(r.executable) + (r.working_directory ? ' (' + esc(r.working_directory) + ')' : '') + '</div>' +
+        '</div>';
+    }).join('');
+}
+
+function selectRtCard(el) {
+    document.querySelectorAll('#wiz-rt-cards .rt-card').forEach(function (c) { c.classList.remove('selected'); });
+    el.classList.add('selected');
 }
 
 function onWizRtModeChange() {
@@ -665,24 +626,32 @@ function onWizRtModeChange() {
     document.getElementById('wiz-rt-new-section').style.display = mode === 'new' ? '' : 'none';
 }
 
+function wizGoto(step) {
+    wizStep = step;
+    updateWizardStep();
+}
+
 function wizPrev() { if (wizStep > 1) { wizStep--; updateWizardStep(); } }
 
 function updateWizardStep() {
-    document.querySelectorAll('#wizard-modal .wizard-step').forEach(s => {
+    document.querySelectorAll('#wizard-steps .wizard-step').forEach(function (s) {
         const n = parseInt(s.dataset.step);
         s.classList.toggle('active', n === wizStep);
         s.classList.toggle('done', n < wizStep);
     });
-    document.querySelectorAll('#wizard-modal .wizard-panel').forEach(p => p.classList.toggle('active', parseInt(p.dataset.panel) === wizStep));
+    document.querySelectorAll('#wizard-modal .wizard-panel').forEach(function (p) {
+        p.classList.toggle('active', parseInt(p.dataset.panel) === wizStep);
+    });
     document.getElementById('wiz-prev').style.display = wizStep > 1 ? '' : 'none';
-    document.getElementById('wiz-next').textContent = wizStep === 3 ? (wizEditId ? 'Сохранить' : 'Создать') : 'Далее';
+    const nextBtn = document.getElementById('wiz-next');
+    nextBtn.textContent = wizStep === 3 ? (wizEditId ? t('wizard.btn.save') : t('wizard.btn.create')) : t('wizard.btn.next');
 }
 
 async function handleWizardSubmit(e) {
     e.preventDefault();
     if (wizStep < 3) {
         if (wizStep === 1 && !document.getElementById('wiz-name').value.trim()) {
-            wizError('Укажите название');
+            wizError(t('wizard.error.name'));
             return;
         }
         wizStep++;
@@ -691,41 +660,42 @@ async function handleWizardSubmit(e) {
     }
 
     const name = document.getElementById('wiz-name').value.trim();
-    if (!name) { wizError('Укажите название'); return; }
+    if (!name) { wizError(t('wizard.error.name')); return; }
 
     const rtMode = document.querySelector('input[name=wiz-rt-mode]:checked').value;
-    let runtimeId = rtMode === 'existing' ? document.getElementById('wiz-runtime-existing').value : '';
-    if (rtMode === 'existing' && !runtimeId) {
-        wizError('Выберите Runtime');
-        return;
+    let runtimeId = '';
+    if (rtMode === 'existing') {
+        const sel = document.querySelector('#wiz-rt-cards .rt-card.selected');
+        if (sel) runtimeId = sel.dataset.id;
+        if (!runtimeId) {
+            if (wizStep === 2) { wizError(t('wizard.error.runtime')); return; }
+        }
     }
 
     const submitBtn = document.getElementById('wiz-next');
     if (submitBtn.disabled) return;
     submitBtn.disabled = true;
     const oldLabel = submitBtn.textContent;
-    submitBtn.textContent = wizEditId ? 'Сохранение...' : 'Создание...';
+    submitBtn.textContent = t('common.loading');
 
     try {
         if (rtMode === 'new') {
             const rtName = document.getElementById('wiz-rt-name').value.trim();
             const rtExe = document.getElementById('wiz-rt-executable').value.trim();
-            if (!rtName || !rtExe) { wizError('Заполните поля Runtime'); return; }
+            if (!rtName || !rtExe) { wizError('Fill runtime fields'); return; }
             const rtBody = { name: rtName, executable: rtExe };
             const rtWd = document.getElementById('wiz-rt-workdir').value.trim();
             if (rtWd) rtBody.working_directory = rtWd;
-            const rtArgs = parseArgs(document.getElementById('wiz-rt-default-args').value);
-            if (rtArgs.length) rtBody.default_args = rtArgs;
             const rt = await api('/runtimes', { method: 'POST', body: JSON.stringify(rtBody) });
             runtimeId = rt.id;
         }
+
+        if (!runtimeId) { wizError(t('wizard.error.runtime')); return; }
 
         const body = {
             name: name,
             runtime_id: runtimeId,
             args: parseArgs(document.getElementById('wiz-args').value),
-            host: document.getElementById('wiz-host').value.trim() || '0.0.0.0',
-            port: parseInt(document.getElementById('wiz-port').value) || 8080,
             active: document.getElementById('wiz-autostart').checked
         };
         if (body.active) {
@@ -737,10 +707,10 @@ async function handleWizardSubmit(e) {
 
         if (wizEditId) {
             await api('/models/' + wizEditId, { method: 'PUT', body: JSON.stringify(body) });
-            showToast('Модель "' + name + '" сохранена', 'success');
+            showToast('"' + name + '" ' + t('common.saved'), 'success');
         } else {
             await api('/models', { method: 'POST', body: JSON.stringify(body) });
-            showToast('Модель "' + name + '" создана', 'success');
+            showToast('"' + name + '" created', 'success');
         }
         closeWizard();
         await reloadAllData(); renderAll();
@@ -778,14 +748,12 @@ function addWizEnvRow() { addEnvRow('wiz-env-container'); }
 
 function collectEnvRows(containerId) {
     const env = {};
-    document.querySelectorAll('#' + containerId + ' .env-row').forEach(row => {
+    document.querySelectorAll('#' + containerId + ' .env-row').forEach(function (row) {
         const inputs = row.querySelectorAll('input');
         if (inputs[0] && inputs[0].value.trim()) env[inputs[0].value.trim()] = inputs[1] ? inputs[1].value : '';
     });
     return env;
 }
-
-function collectWizEnv() { return collectEnvRows('wiz-env-container'); }
 
 // ─── Advanced: Runtimes ─────────────────────────────────────────────────────
 
@@ -797,12 +765,11 @@ function renderAdvRuntimes() {
         return;
     }
     if (empty) empty.style.display = 'none';
-    document.getElementById('adv-runtimes-body').innerHTML = runtimesData.map(r =>
-        '<tr><td>' + esc(r.name) + '</td><td>' + esc(r.executable) + '</td><td>' + esc(r.working_directory || '—') + '</td>' +
-        '<td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;"><code>' + esc((r.default_args || []).join(' ')) + '</code></td>' +
-        '<td class="actions-cell"><button class="btn btn-ghost btn-sm" onclick="editRuntime(\'' + safeId(r.id) + '\')">Изменить</button> ' +
-        '<button class="btn btn-danger btn-sm" onclick="deleteRuntime(\'' + safeId(r.id) + '\')">Удалить</button></td></tr>'
-    ).join('');
+    document.getElementById('adv-runtimes-body').innerHTML = runtimesData.map(function (r) {
+        return '<tr><td>' + esc(r.name) + '</td><td>' + esc(r.executable) + '</td><td>' + esc(r.working_directory || '—') + '</td>' +
+            '<td class="actions-cell"><button class="btn btn-ghost btn-sm" onclick="editRuntime(\'' + safeId(r.id) + '\')">' + t('runtimes.actions.edit') + '</button> ' +
+            '<button class="btn btn-danger btn-sm" onclick="deleteRuntime(\'' + safeId(r.id) + '\')">' + t('runtimes.actions.delete') + '</button></td></tr>';
+    }).join('');
 }
 
 function showCreateRuntimeModal() {
@@ -817,21 +784,19 @@ async function handleCreateRuntime(e) {
     const f = e.target;
     const body = { name: f.name.value, executable: f.executable.value };
     if (f.working_directory.value) body.working_directory = f.working_directory.value;
-    const args = parseArgs(f.default_args.value);
-    if (args.length) body.default_args = args;
     const env = collectEnvRows('rt-create-env-container');
     if (Object.keys(env).length) body.environment = env;
     try {
         await api('/runtimes', { method: 'POST', body: JSON.stringify(body) });
         closeModal('create-runtime-modal');
-        showToast('Runtime создан', 'success');
+        showToast(t('common.saved'), 'success');
         await reloadAllData(); renderAll();
     } catch (err) { showToast(friendlyError(err), 'error'); }
     return false;
 }
 
 function editRuntime(id) {
-    const r = runtimesData.find(x => x.id === id);
+    const r = runtimesData.find(function (x) { return x.id === id; });
     if (!r) return;
     const modal = document.getElementById('edit-runtime-modal');
     const f = modal.querySelector('form');
@@ -839,11 +804,10 @@ function editRuntime(id) {
     f.querySelector('[name=name]').value = r.name;
     f.querySelector('[name=executable]').value = r.executable;
     f.querySelector('[name=working_directory]').value = r.working_directory || '';
-    f.querySelector('[name=default_args]').value = (r.default_args || []).join(' ');
     const envC = document.getElementById('rt-edit-env-container');
     envC.innerHTML = '';
     if (r.environment_keys && r.environment_keys.length) {
-        r.environment_keys.forEach(k => {
+        r.environment_keys.forEach(function (k) {
             const row = document.createElement('div');
             row.className = 'env-row';
             row.style.display = 'flex';
@@ -855,7 +819,7 @@ function editRuntime(id) {
             i1.style.cssText = 'flex:1;padding:6px;border:1px solid var(--border);border-radius:4px;background:var(--bg-input);color:var(--text-primary);';
             const i2 = document.createElement('input');
             i2.type = 'text';
-            i2.placeholder = 'value (не показывается при чтении)';
+            i2.placeholder = 'value (write-only)';
             i2.style.cssText = 'flex:2;padding:6px;border:1px solid var(--border);border-radius:4px;background:var(--bg-input);color:var(--text-primary);';
             const btn = document.createElement('button');
             btn.type = 'button';
@@ -876,48 +840,110 @@ async function handleEditRuntime(e) {
     const f = e.target;
     const body = { name: f.name.value, executable: f.executable.value };
     if (f.working_directory.value) body.working_directory = f.working_directory.value;
-    body.default_args = parseArgs(f.default_args.value);
     const env = collectEnvRows('rt-edit-env-container');
-    body.environment = env;
+    if (Object.keys(env).length) body.environment = env;
     try {
         await api('/runtimes/' + f.querySelector('[name=id]').value, { method: 'PUT', body: JSON.stringify(body) });
         closeModal('edit-runtime-modal');
-        showToast('Сохранено', 'success');
+        showToast(t('common.saved'), 'success');
         await reloadAllData(); renderAll();
     } catch (err) { showToast(friendlyError(err), 'error'); }
     return false;
 }
 
+// ─── Runtime delete (replace / cascade) ─────────────────────────────────────
+
+let rtDeleteId = null;
+
 function deleteRuntime(id) {
-    const rt = runtimesData.find(x => x.id === id);
-    const name = rt ? rt.name : id;
-    const depModels = modelsData.filter(m => m.runtime_id === id);
+    const rt = runtimesData.find(function (x) { return x.id === id; });
+    if (!rt) return;
+    const depModels = modelsData.filter(function (m) { return m.runtime_id === id; });
     if (depModels.length > 0) {
-        showBlockedModal('Runtime', name, depModels.map(m => 'Модель: ' + m.name));
-        return;
-    }
-    showConfirm('Удалить runtime "' + name + '"?', async function () {
-        try {
-            await api('/runtimes/' + id, { method: 'DELETE' });
-            closeConfirm();
-            showToast('Runtime удалён', 'success');
-            await reloadAllData(); renderAll();
-        } catch (err) {
-            if (err.status === 409 && err.details && err.details.length) {
+        rtDeleteId = id;
+        const content = document.getElementById('rt-delete-content');
+        content.innerHTML = '<p><strong>' + esc(rt.name) + '</strong></p>' +
+            '<p style="margin-top:0.5rem;">' + t('runtimes.delete.dependents', { count: depModels.length }) + '</p>' +
+            '<ul style="margin:0.5rem 0 0.5rem 1.2rem;font-size:0.88rem;color:var(--text-secondary);">' +
+            depModels.map(function (m) { return '<li>' + esc(m.name) + '</li>'; }).join('') + '</ul>';
+        const otherRt = runtimesData.filter(function (r) { return r.id !== id; });
+        document.getElementById('rt-delete-replace-btn').style.display = otherRt.length > 0 ? '' : 'none';
+        document.getElementById('rt-delete-modal').style.display = 'flex';
+    } else {
+        showConfirm(t('runtimes.delete.confirm', { name: rt.name }), async function () {
+            try {
+                await api('/runtimes/' + id, { method: 'DELETE' });
                 closeConfirm();
-                showBlockedModal('Runtime', name, err.details.map(formatServerDetail));
-            } else {
+                showToast(t('common.deleted'), 'success');
+                await reloadAllData(); renderAll();
+            } catch (err) {
                 showToast(friendlyError(err), 'error');
             }
-        }
-    });
+        });
+    }
 }
 
-function formatServerDetail(d) {
-    const s = String(d);
-    const m = s.match(/^model:\s*(.+)$/i);
-    if (m) return 'Модель: ' + m[1];
-    return s;
+function closeRTDelete() {
+    document.getElementById('rt-delete-modal').style.display = 'none';
+    rtDeleteId = null;
+}
+
+function openRTReplace() {
+    closeRTDelete();
+    const depCount = modelsData.filter(function (m) { return m.runtime_id === rtDeleteId; }).length;
+    document.getElementById('rt-replace-msg').textContent = t('runtimes.replace.select', { count: depCount });
+    const sel = document.getElementById('rt-replace-select');
+    const otherRt = runtimesData.filter(function (r) { return r.id !== rtDeleteId; });
+    sel.innerHTML = otherRt.map(function (r) {
+        return '<option value="' + esc(r.id) + '">' + esc(r.name) + ' (' + esc(r.executable) + ')</option>';
+    }).join('');
+    document.getElementById('rt-replace-modal').style.display = 'flex';
+}
+
+function closeRTReplace() { document.getElementById('rt-replace-modal').style.display = 'none'; }
+
+async function confirmRTReplace() {
+    const newId = document.getElementById('rt-replace-select').value;
+    if (!newId || !rtDeleteId) return;
+    const btn = document.getElementById('rt-replace-btn');
+    btn.disabled = true;
+    btn.textContent = t('confirm.executing');
+    try {
+        await api('/runtimes/' + rtDeleteId + '/replace', { method: 'POST', body: JSON.stringify({ new_runtime_id: newId }) });
+        closeRTReplace();
+        showToast(t('common.saved'), 'success');
+        await reloadAllData(); renderAll();
+    } catch (err) {
+        showToast(friendlyError(err), 'error');
+    }
+    btn.disabled = false;
+    btn.textContent = t('runtimes.replace.confirm');
+}
+
+function openRTCascade() {
+    closeRTDelete();
+    const depCount = modelsData.filter(function (m) { return m.runtime_id === rtDeleteId; }).length;
+    document.getElementById('rt-cascade-msg').textContent = t('runtimes.cascade.confirm', { count: depCount });
+    document.getElementById('rt-cascade-modal').style.display = 'flex';
+}
+
+function closeRTCascade() { document.getElementById('rt-cascade-modal').style.display = 'none'; }
+
+async function confirmRTCascade() {
+    if (!rtDeleteId) return;
+    const btn = document.getElementById('rt-cascade-btn');
+    btn.disabled = true;
+    btn.textContent = t('confirm.executing');
+    try {
+        const res = await api('/runtimes/' + rtDeleteId + '/cascade-delete', { method: 'POST' });
+        closeRTCascade();
+        showToast(t('common.deleted') + (res.models_deleted ? ' (' + res.models_deleted + ' models)' : ''), 'success');
+        await reloadAllData(); renderAll();
+    } catch (err) {
+        showToast(friendlyError(err), 'error');
+    }
+    btn.disabled = false;
+    btn.textContent = t('runtimes.cascade.btn');
 }
 
 // ─── Advanced: Instances ────────────────────────────────────────────────────
@@ -930,16 +956,16 @@ function renderAdvInstances() {
         return;
     }
     if (empty) empty.style.display = 'none';
-    document.getElementById('adv-instances-body').innerHTML = instancesData.map(i =>
-        '<tr><td style="font-family:var(--font-mono);font-size:0.78rem;">' + esc(i.id.slice(0, 16)) + '</td>' +
-        '<td>' + esc(getModelName(i.model_id)) + '</td>' +
-        '<td><span class="status-badge ' + esc(i.state) + '">' + esc(i.state) + '</span></td>' +
-        '<td>' + (i.pid || '—') + '</td><td>' + fmtTime(i.started_at) + '</td><td>' + fmtTime(i.stopped_at) + '</td>' +
-        '<td>' + (i.exit_code != null ? i.exit_code : '—') + '</td>' +
-        '<td class="actions-cell"><button class="btn btn-ghost btn-sm" onclick="viewInstanceLogs(\'' + safeId(i.id) + '\')">Логи</button>' +
-        (isActive(i.state) ? ' <button class="btn btn-danger btn-sm" onclick="stopInstance(\'' + safeId(i.id) + '\')">Остановить</button> ' +
-        '<button class="btn btn-warning btn-sm" onclick="restartInstance(\'' + safeId(i.id) + '\')">Перезапустить</button>' : '') + '</td></tr>'
-    ).join('');
+    document.getElementById('adv-instances-body').innerHTML = instancesData.map(function (i) {
+        return '<tr><td style="font-family:var(--font-mono);font-size:0.78rem;">' + esc(i.id.slice(0, 16)) + '</td>' +
+            '<td>' + esc(getModelName(i.model_id)) + '</td>' +
+            '<td><span class="status-badge ' + esc(i.state) + '">' + esc(i.state) + '</span></td>' +
+            '<td>' + (i.pid || '—') + '</td><td>' + fmtTime(i.started_at) + '</td><td>' + fmtTime(i.stopped_at) + '</td>' +
+            '<td>' + (i.exit_code != null ? i.exit_code : '—') + '</td>' +
+            '<td class="actions-cell"><button class="btn btn-ghost btn-sm" onclick="viewInstanceLogs(\'' + safeId(i.id) + '\')">' + t('instances.actions.logs') + '</button>' +
+            (isActive(i.state) ? ' <button class="btn btn-danger btn-sm" onclick="stopInstance(\'' + safeId(i.id) + '\')">' + t('instances.actions.stop') + '</button> ' +
+            '<button class="btn btn-warning btn-sm" onclick="restartInstance(\'' + safeId(i.id) + '\')">' + t('instances.actions.restart') + '</button>' : '') + '</td></tr>';
+    }).join('');
 }
 
 async function stopInstance(id) {
@@ -952,24 +978,63 @@ async function restartInstance(id) {
     catch (err) { showToast(friendlyError(err), 'error'); }
 }
 
-// ─── History ────────────────────────────────────────────────────────────────
+// ─── Instance History (with filters) ────────────────────────────────────────
 
 function renderHistory() {
     const empty = document.getElementById('history-empty');
-    if (instancesData.length === 0) {
+    const stateF = document.getElementById('hf-state').value;
+    const modelF = document.getElementById('hf-model').value;
+    const activeOnly = document.getElementById('hf-active').checked;
+
+    let filtered = instancesData.filter(function (i) {
+        if (stateF && i.state !== stateF) return false;
+        if (modelF && i.model_id !== modelF) return false;
+        if (activeOnly && !isActive(i.state)) return false;
+        return true;
+    });
+    filtered.sort(function (a, b) {
+        const ta = a.started_at ? new Date(a.started_at).getTime() : 0;
+        const tb = b.started_at ? new Date(b.started_at).getTime() : 0;
+        return tb - ta;
+    });
+
+    if (filtered.length === 0) {
         document.getElementById('history-body').innerHTML = '';
         if (empty) empty.style.display = 'block';
         return;
     }
     if (empty) empty.style.display = 'none';
-    document.getElementById('history-body').innerHTML = instancesData.slice(0, 100).map(i =>
-        '<tr><td>' + esc(getModelName(i.model_id)) + '</td>' +
-        '<td style="font-family:var(--font-mono);font-size:0.78rem;">' + esc(i.id.slice(0, 12)) + '</td>' +
-        '<td><span class="status-badge ' + esc(i.state) + '">' + esc(i.state) + '</span></td>' +
-        '<td>' + (i.pid || '—') + '</td>' +
-        '<td>' + fmtTime(i.started_at) + '</td><td>' + fmtTime(i.stopped_at) + '</td>' +
-        '<td>' + (i.exit_code != null ? i.exit_code : '—') + '</td></tr>'
-    ).join('');
+    document.getElementById('history-body').innerHTML = filtered.slice(0, 200).map(function (i) {
+        return '<tr><td>' + esc(getModelName(i.model_id)) + '</td>' +
+            '<td style="font-family:var(--font-mono);font-size:0.78rem;">' + esc(i.id.slice(0, 12)) + '</td>' +
+            '<td><span class="status-badge ' + esc(i.state) + '">' + esc(i.state) + '</span></td>' +
+            '<td>' + (i.pid || '—') + '</td>' +
+            '<td>' + fmtTime(i.started_at) + '</td><td>' + fmtTime(i.stopped_at) + '</td>' +
+            '<td>' + (i.exit_code != null ? i.exit_code : '—') + '</td>' +
+            '<td class="actions-cell"><button class="btn btn-ghost btn-sm" onclick="viewInstanceLogs(\'' + safeId(i.id) + '\')">' + t('instances.actions.logs') + '</button></td></tr>';
+    }).join('');
+}
+
+// ─── Instance Cleanup ───────────────────────────────────────────────────────
+
+function openCleanup() {
+    document.querySelectorAll('input[name=cleanup-mode]').forEach(function (r) { r.checked = r.value === 'all_terminal'; });
+    document.getElementById('cleanup-modal').style.display = 'flex';
+}
+
+function closeCleanup() { document.getElementById('cleanup-modal').style.display = 'none'; }
+
+async function confirmCleanup() {
+    const mode = document.querySelector('input[name=cleanup-mode]:checked').value;
+    const body = { mode: mode };
+    try {
+        const res = await api('/instances/cleanup', { method: 'POST', body: JSON.stringify(body) });
+        closeCleanup();
+        showToast(t('instances.cleanup.result', { count: res.deleted }), 'success');
+        await reloadAllData(); renderAll();
+    } catch (err) {
+        showToast(friendlyError(err), 'error');
+    }
 }
 
 // ─── Settings ───────────────────────────────────────────────────────────────
@@ -978,31 +1043,24 @@ async function loadSettings() {
     try {
         const m = await api('/metrics');
         document.getElementById('set-listen').textContent = (m.listen_address || '127.0.0.1') + ':' + (m.web_port || '');
-        document.getElementById('set-auth').textContent = m.auth_enabled ? 'Включена' : 'Выключена';
-        const userCard = document.getElementById('set-user-card');
-        if (userCard) userCard.style.display = m.auth_enabled ? '' : 'none';
+        document.getElementById('set-auth').textContent = m.auth_enabled ? t('settings.server.auth.on') : t('settings.server.auth.off');
     } catch {}
 }
 
 // ─── Error messages ─────────────────────────────────────────────────────────
 
 function friendlyError(err) {
-    let msg = (err && err.message) || 'Неизвестная ошибка';
+    let msg = (err && err.message) || 'Unknown error';
     const patterns = [
-        [/model not found/i, 'Модель не найдена. Возможно, она уже удалена.'],
-        [/runtime not found/i, 'Runtime не найден. Возможно, он уже удалён.'],
-        [/instance not found/i, 'Экземпляр не найден.'],
-        [/in use|referenced|depend/i, 'Объект используется другими записями и не может быть удалён.'],
-        [/port.*in use|address already in use/i, 'Порт уже занят другим процессом.'],
-        [/executable.*not found|no such file/i, 'Исполняемый файл не найден. Проверьте путь.'],
+        [/model not found/i, 'Model not found. It may have been deleted.'],
+        [/runtime not found/i, 'Runtime not found. It may have been deleted.'],
+        [/instance not found/i, 'Instance not found.'],
+        [/in use|referenced|depend/i, 'Object is used by other records and cannot be deleted.'],
+        [/port.*in use|address already in use/i, 'Port is already in use by another process.'],
+        [/executable.*not found|no such file/i, 'Executable not found. Check the path.'],
     ];
-    for (const [re, replacement] of patterns) {
-        if (re.test(msg)) return replacement;
-    }
-    if (msg.includes(': ')) {
-        const parts = msg.split(': ');
-        const unique = [...new Set(parts)];
-        msg = unique.length > 1 ? unique[unique.length - 1] : msg;
+    for (let i = 0; i < patterns.length; i++) {
+        if (patterns[i][0].test(msg)) return patterns[i][1];
     }
     return msg.charAt(0).toUpperCase() + msg.slice(1);
 }
@@ -1015,21 +1073,21 @@ function showConfirm(msg, onYes) {
     const el = document.getElementById('confirm-message');
     el.textContent = '';
     el.style.whiteSpace = 'pre-line';
-    msg.split('\n').forEach((line, idx) => {
+    msg.split('\n').forEach(function (line, idx) {
         if (idx > 0) el.appendChild(document.createElement('br'));
         el.appendChild(document.createTextNode(line));
     });
     const btn = document.getElementById('confirm-yes');
     btn.disabled = false;
-    btn.textContent = 'Подтвердить';
+    btn.textContent = t('common.confirm');
     btn.onclick = async function () {
         btn.disabled = true;
-        btn.textContent = 'Выполняется...';
+        btn.textContent = t('confirm.executing');
         try {
             await onYes();
         } finally {
             btn.disabled = false;
-            btn.textContent = 'Подтвердить';
+            btn.textContent = t('common.confirm');
         }
     };
     document.getElementById('confirm-modal').style.display = 'flex';
@@ -1037,17 +1095,15 @@ function showConfirm(msg, onYes) {
 
 function closeConfirm() { document.getElementById('confirm-modal').style.display = 'none'; }
 
-function showBlockedModal(entityType, entityName, dependents) {
-    const content = document.getElementById('blocked-content');
-    let html = '<p><strong>' + esc(entityType) + '</strong>: ' + esc(entityName) + '</p>';
-    html += '<p class="hint-text" style="margin-top:0.8rem;">Используется:</p><ul style="margin:0.5rem 0 0.5rem 1.2rem;font-size:0.88rem;color:var(--text-secondary);">';
-    dependents.forEach(d => { html += '<li>' + esc(d) + '</li>'; });
-    html += '</ul><p class="hint-text" style="margin-top:0.8rem;">Сначала удалите или измените связанные записи.</p>';
+function showBlockedModal(title, dependents) {
+    const content = document.getElementById('rt-delete-content');
+    let html = '<p><strong>' + esc(title) + '</strong></p>';
+    html += '<p class="hint-text" style="margin-top:0.8rem;">' + t('blocked.used_by') + '</p><ul style="margin:0.5rem 0 0.5rem 1.2rem;font-size:0.88rem;color:var(--text-secondary);">';
+    dependents.forEach(function (d) { html += '<li>' + esc(d) + '</li>'; });
+    html += '</ul><p class="hint-text" style="margin-top:0.8rem;">' + t('blocked.hint') + '</p>';
     content.innerHTML = html;
-    document.getElementById('blocked-modal').style.display = 'flex';
+    document.getElementById('rt-delete-modal').style.display = 'flex';
 }
-
-function closeBlocked() { document.getElementById('blocked-modal').style.display = 'none'; }
 
 // ─── Toast ──────────────────────────────────────────────────────────────────
 
@@ -1056,14 +1112,14 @@ function showToast(msg, type) {
     div.className = 'toast ' + (type || '');
     div.textContent = msg;
     document.getElementById('toast-container').appendChild(div);
-    setTimeout(() => div.remove(), 4000);
+    setTimeout(function () { div.remove(); }, 4000);
 }
 
 // ─── Refresh loop ───────────────────────────────────────────────────────────
 
 function startRefresh() {
     if (refreshTimer) clearInterval(refreshTimer);
-    refreshTimer = setInterval(async () => {
+    refreshTimer = setInterval(async function () {
         await reloadAllData();
         renderAll();
     }, 3000);
@@ -1077,6 +1133,7 @@ window.navigate = navigate;
 window.openWizard = openWizard;
 window.closeWizard = closeWizard;
 window.wizPrev = wizPrev;
+window.wizGoto = wizGoto;
 window.viewInstanceLogs = viewInstanceLogs;
 window.startModel = startModel;
 window.stopModel = stopModel;
@@ -1096,11 +1153,25 @@ window.toggleLogPause = toggleLogPause;
 window.clearLogView = clearLogView;
 window.closeModal = closeModal;
 window.closeConfirm = closeConfirm;
-window.closeBlocked = closeBlocked;
 window.reloadAllData = reloadAllData;
 window.addWizEnvRow = addWizEnvRow;
 window.addEnvRow = addEnvRow;
 window.onWizRtModeChange = onWizRtModeChange;
+window.setTheme = setTheme;
+window.setLanguage = setLanguage;
+window.selectRtCard = selectRtCard;
+window.renderModels = renderModels;
+window.renderHistory = renderHistory;
+window.closeRTDelete = closeRTDelete;
+window.openRTReplace = openRTReplace;
+window.closeRTReplace = closeRTReplace;
+window.confirmRTReplace = confirmRTReplace;
+window.openRTCascade = openRTCascade;
+window.closeRTCascade = closeRTCascade;
+window.confirmRTCascade = confirmRTCascade;
+window.openCleanup = openCleanup;
+window.closeCleanup = closeCleanup;
+window.confirmCleanup = confirmCleanup;
 
 // ─── Boot ───────────────────────────────────────────────────────────────────
 
