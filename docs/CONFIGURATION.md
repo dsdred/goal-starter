@@ -32,10 +32,10 @@ Migration runs via `config.MigrateConfig()` during `config.Load()`. No separate 
 | Source | Role | Lifecycle |
 |--------|------|-----------|
 | `goal.json` | Startup seed | Read once at startup; subsequent edits do not update existing entities. New entities (by ID) are added. |
-| `goal_repo.json` | Authoritative store | Written by API/UI; survives restarts; contains runtimes, models, profiles, and instances. |
+| `goal_repo.json` | Authoritative store | Written by API/UI; survives restarts; contains runtimes, models, and instances. |
 
-`goal_repo.json` can contain runtime and profile environment values and must be
-protected as sensitive local data. Runtime and profile API responses omit those
+`goal_repo.json` can contain runtime and model environment values and must be
+protected as sensitive local data. Runtime and model API responses omit those
 values and expose only their keys; the values remain available internally when
 GoAl launches a runtime. This storage is not an encrypted secret vault.
 
@@ -75,27 +75,34 @@ preserves the stored map, `{}` clears it, and an explicit map replaces it.
 
 ## Model configuration
 
-Each model entry defines a GGUF model or argument bundle for a runtime.
+Each model entry in `goal.json` uses the legacy v5 format. At startup, `SeedFromConfig`
+folds old model data (`path`, `arguments`) into the launch args of the corresponding
+GoAl 2.0 Model (derived from `profiles`). New models created via the API/UI use the
+simplified format: `id`, `name`, `runtimeId`, `args`, `host`, `port`, `environment`.
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
 | `id` | string | Yes | — | Unique identifier. |
 | `name` | string | Yes | — | Display name. |
 | `runtimeId` | string | No | — | ID of the runtime this model targets. |
-| `path` | string | No | `""` | Direct path to a GGUF file (mutually exclusive with `arguments`). |
-| `arguments` | array of string | No | `[]` | Command-line arguments for the runtime (mutually exclusive with `path`). |
+| `path` | string | No | `""` | Direct path to a GGUF file (legacy; folded into args as `-m <path>`). |
+| `arguments` | array of string | No | `[]` | Command-line arguments (legacy; folded into model args). |
 | `environment` | map[string]string | No | `{}` | Process environment variables. |
 
-## Profile configuration
+## Profile configuration (legacy `goal.json` format)
 
-Each profile defines a reusable launch template combining runtime, model, and custom settings.
+Profiles in `goal.json` are the legacy launch template format. At startup, each profile
+becomes a GoAl 2.0 **Model**: the profile's `args` are preserved, and if `modelId`
+references a legacy model entry, that model's `path` and `arguments` are folded into
+the resulting model's args (e.g., `-m <path>`). There is no separate "profile" entity
+in the GoAl 2.0 domain.
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
 | `id` | string | Yes | — | Unique identifier. |
 | `name` | string | Yes | — | Display name. |
 | `runtimeId` | string | Yes | — | ID of the target runtime. |
-| `modelId` | string | No | `""` | ID of the model (optional). |
+| `modelId` | string | No | `""` | ID of a legacy model entry to fold into args (optional). |
 | `host` | string | No | `""` | Override target host. |
 | `port` | int | No | `0` | Override target port. |
 | `args` | array of string | No | `[]` | Additional command-line arguments (accepts legacy `arguments` key). |
@@ -113,9 +120,21 @@ Each profile defines a reusable launch template combining runtime, model, and cu
 | `httpPath` | string | No | `"/health"` | HTTP path to check. |
 | `httpStatus` | int | No | `200` | Expected HTTP status code. |
 
-### Profile arguments compatibility
+### Profile args key compatibility
 
 The profile JSON accepts both `args` and `arguments` as the key for additional command-line arguments. The parser treats them as equivalent for backward compatibility.
+
+## Storage migration (v5 → v6)
+
+On first startup with a v5 `goal_repo.json`, GoAl automatically migrates to v6:
+
+- `profiles` entries become `models` (launch definitions).
+- Old physical `models` entries (with `path`/`arguments`) are folded into the corresponding model's launch args (e.g., `-m <path>`).
+- `profile_id` in instances becomes `model_id`.
+- Instance history is preserved.
+- Resolved-command semantics are maintained: the final launch command is identical before and after migration.
+
+After migration, `goal_repo.json` contains only `runtimes`, `models`, and `instances`.
 
 ## Hot-reload
 

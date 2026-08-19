@@ -1,6 +1,6 @@
 # Security
 
-This document describes the security model of GoAl v1.0.0 as implemented in production code.
+This document describes the security model of GoAl 2.0 as implemented in production code.
 
 ## Authentication
 

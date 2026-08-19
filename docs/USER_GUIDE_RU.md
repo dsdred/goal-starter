@@ -89,6 +89,8 @@ sudo ./goal          # Linux
 
 Файл `goal.json` лежит в той же директории, что и бинарник. Он **исключён из git** (содержит секреты и пользовательские пути).
 
+> **Legacy-формат:** `goal.json` использует схему v5 для обратной совместимости. Записи `profiles` при старте становятся **Model** (определениями запуска) GoAl 2.0. Legacy-записи `models` (с `path`) складываются в launch args соответствующей модели. Новые модели, созданные через API или Web UI, используют упрощённый формат GoAl 2.0.
+
 ### Полная конфигурация
 
 ```json
@@ -158,11 +160,12 @@ sudo ./goal          # Linux
 | `healthCheck` | Настройка проверки здоровья |
 | `active` | Активен ли рантайм |
 
-### Настройка модели
+### Настройка модели (legacy-формат `goal.json`)
 
-Модели можно настроить двумя способами: через `arguments` (inline-аргументы для сервера) или через `path` (прямой путь к GGUF-файлу).
+В `goal.json` модели используют legacy-формат v5. При старте `SeedFromConfig` складывает
+`path` и `arguments` в launch args GoAl 2.0 Model, созданной из `profiles`.
 
-**Вариант A: через arguments (для llama.cpp server и подобных):**
+**Пример: llama.cpp с GGUF-моделью:**
 
 ```json
 {
@@ -185,7 +188,7 @@ sudo ./goal          # Linux
 }
 ```
 
-**Вариант B: через path (простой GGUF-файл):**
+**Вариант B: через path (простой GGUF-файл, складывается в args при старте):**
 
 ```json
 {
@@ -200,18 +203,24 @@ sudo ./goal          # Linux
 }
 ```
 
-**Поля модели:**
+При старте `path` превращается в `-m E:/models/llama3/model.gguf` в launch args модели.
+
+**Поля модели (legacy `goal.json`):**
 
 | Поле | Описание |
 |------|----------|
 | `id` | Уникальный идентификатор |
 | `name` | Отображаемое имя |
 | `runtimeId` | ID рантайна, где будет запущена |
-| `path` | Путь к GGUF-файлу (альтернатива arguments) |
-| `arguments` | Массив аргументов командной строки (альтернатива path) |
+| `path` | Путь к GGUF-файлу (складывается в args как `-m <путь>` при старте) |
+| `arguments` | Массив аргументов командной строки (добавляются к model args) |
 | `environment` | Переменные окружения процесса |
 
-### Настройка профиля запуска
+### Настройка профиля запуска (legacy-формат `goal.json`)
+
+Записи `profiles` в `goal.json` при старте становятся **Model** GoAl 2.0.
+Если `modelId` ссылается на legacy-модель, её `path` и `arguments` складываются
+в launch args результирующей модели.
 
 ```json
 {
@@ -229,7 +238,7 @@ sudo ./goal          # Linux
 }
 ```
 
-**Поля профиля:**
+**Поля профиля (legacy `goal.json` — становится Model при старте):**
 
 | Поле | Описание |
 |------|----------|
@@ -409,6 +418,27 @@ curl -X POST http://127.0.0.1:9090/api/v1/models \
     "active": true
   }'
 ```
+
+### Пример: llama.cpp с Qwen GGUF
+
+Типичная конфигурация модели llama.cpp:
+
+```bash
+curl -X POST http://127.0.0.1:9090/api/v1/models \
+  -H "Content-Type: application/json" \
+  -d '{
+    "id": "qwen-35b",
+    "name": "Qwen 3.6 35B",
+    "runtimeId": "llama-cpp",
+    "args": ["-m", "E:\\models\\qwen\\Qwen.gguf", "--mmproj", "E:\\models\\qwen\\mmproj.gguf", "-ngl", "99", "-c", "131072"],
+    "host": "127.0.0.1",
+    "port": 8085,
+    "active": true
+  }'
+```
+
+Резолюция команды:
+`llama-server <runtime-default-args> -m E:\models\qwen\Qwen.gguf --mmproj E:\models\qwen\mmproj.gguf -ngl 99 -c 131072 --host 127.0.0.1 --port 8085`
 
 ### Preview команды запуска
 
@@ -617,6 +647,21 @@ Get-Service goal
 ```powershell
 .\deploy\windows\uninstall-service.ps1
 ```
+
+---
+
+## Миграция (v5 → v6)
+
+При обновлении с GoAl v1.x файл `goal_repo.json` автоматически мигрируется при первом запуске:
+
+| v5 (старое) | v6 (новое) |
+|-------------|------------|
+| Записи `profiles` | Становятся `models` (определения запуска) |
+| Записи `models` (физические GGUF) | Складываются в launch args модели (например, `-m <путь>`) |
+| `profile_id` в инстансах | Переименовывается в `model_id` |
+| История инстансов | Сохраняется без изменений |
+
+Резолюция команды запуска идентична до и после миграции. Действия пользователя не требуются.
 
 ---
 

@@ -89,6 +89,8 @@ After starting, GoAl is available at: **http://127.0.0.1:9090**
 
 The `goal.json` file is located in the same directory as the binary. It is **excluded from git** (contains secrets and custom paths).
 
+> **Legacy format:** `goal.json` uses the v5 config schema for backward compatibility. The `profiles` entries become GoAl 2.0 **Models** (launch definitions) at startup. Legacy `models` entries (with `path`) are folded into the corresponding model's launch args. New models created via the API or Web UI use the simplified GoAl 2.0 format.
+
 ### Full Configuration
 
 ```json
@@ -158,11 +160,12 @@ The `goal.json` file is located in the same directory as the binary. It is **exc
 | `healthCheck` | Health check configuration |
 | `active` | Whether the runtime is enabled |
 
-### Model Configuration
+### Model Configuration (legacy `goal.json` format)
 
-Models can be configured in two ways: via `arguments` (inline args for the server) or via `path` (direct GGUF file path).
+In `goal.json`, models use the legacy v5 format. At startup, `SeedFromConfig` folds
+`path` and `arguments` into the launch args of the GoAl 2.0 Model derived from `profiles`.
 
-**Option A: via arguments (for llama.cpp server and similar):**
+**Example: llama.cpp with GGUF model:**
 
 ```json
 {
@@ -185,7 +188,7 @@ Models can be configured in two ways: via `arguments` (inline args for the serve
 }
 ```
 
-**Option B: via path (simple GGUF file):**
+**Option B: via path (simple GGUF file, folded into args at startup):**
 
 ```json
 {
@@ -200,18 +203,24 @@ Models can be configured in two ways: via `arguments` (inline args for the serve
 }
 ```
 
-**Model Fields:**
+At startup, `path` becomes `-m E:/models/llama3/model.gguf` in the model's launch args.
+
+**Model Fields (legacy `goal.json`):**
 
 | Field | Description |
 |-------|-------------|
 | `id` | Unique identifier |
 | `name` | Display name |
 | `runtimeId` | ID of the runtime where the model will run |
-| `path` | Path to GGUF file (alternative to arguments) |
-| `arguments` | Command-line arguments array (alternative to path) |
+| `path` | Path to GGUF file (folded into args as `-m <path>` at startup) |
+| `arguments` | Command-line arguments array (appended to model args) |
 | `environment` | Process environment variables |
 
-### Launch Profile Configuration
+### Launch Profile Configuration (legacy `goal.json` format)
+
+Profiles in `goal.json` become GoAl 2.0 **Models** at startup. If `modelId` references
+a legacy model entry, that model's `path` and `arguments` are folded into the resulting
+model's launch args.
 
 ```json
 {
@@ -229,7 +238,7 @@ Models can be configured in two ways: via `arguments` (inline args for the serve
 }
 ```
 
-**Profile Fields:**
+**Profile Fields (legacy `goal.json` — becomes a Model at startup):**
 
 | Field | Description |
 |-------|-------------|
@@ -416,6 +425,27 @@ curl -X POST http://127.0.0.1:9090/api/v1/models \
     "active": true
   }'
 ```
+
+### Example: llama.cpp with Qwen GGUF
+
+A typical llama.cpp model configuration:
+
+```bash
+curl -X POST http://127.0.0.1:9090/api/v1/models \
+  -H "Content-Type: application/json" \
+  -d '{
+    "id": "qwen-35b",
+    "name": "Qwen 3.6 35B",
+    "runtimeId": "llama-cpp",
+    "args": ["-m", "E:\\models\\qwen\\Qwen.gguf", "--mmproj", "E:\\models\\qwen\\mmproj.gguf", "-ngl", "99", "-c", "131072"],
+    "host": "127.0.0.1",
+    "port": 8085,
+    "active": true
+  }'
+```
+
+The resolved command will be:
+`llama-server <runtime-default-args> -m E:\models\qwen\Qwen.gguf --mmproj E:\models\qwen\mmproj.gguf -ngl 99 -c 131072 --host 127.0.0.1 --port 8085`
 
 ### Launch Command Preview
 
@@ -624,6 +654,21 @@ Get-Service goal
 ```powershell
 .\deploy\windows\uninstall-service.ps1
 ```
+
+---
+
+## Migration (v5 → v6)
+
+If you upgrade from GoAl v1.x, the `goal_repo.json` is automatically migrated on first startup:
+
+| v5 (old) | v6 (new) |
+|----------|----------|
+| `profiles` entries | Become `models` (launch definitions) |
+| `models` entries (physical GGUF) | Folded into the model's launch args (e.g., `-m <path>`) |
+| Instance `profile_id` | Renamed to `model_id` |
+| Instance history | Preserved unchanged |
+
+The resolved launch command is identical before and after migration. No user action is required.
 
 ---
 

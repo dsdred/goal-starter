@@ -1,6 +1,6 @@
 # Architecture
 
-GoAl is a single-binary application composed of distinct ownership layers. This document describes the production V1 architecture.
+GoAl is a single-binary application composed of distinct ownership layers. This document describes the current GoAl 2.0 architecture.
 
 ## Domain Model (v6)
 

@@ -120,7 +120,7 @@ returned in API responses. Only `environment_keys` (the list of variable names) 
 | `GET` | `/api/v1/logs` | Yes | — | Query aggregated logs (filters: `stream`, `search`, `instance_id`, `page`, `page_size`). |
 | `GET` | `/api/v1/logs/stream` | Yes | — | SSE log stream (multi-instance LogBroker). |
 
-## Not part of V1 public contract
+## Not part of the public contract
 
 | Path | Status |
 |------|--------|

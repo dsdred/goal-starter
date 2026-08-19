@@ -2,13 +2,16 @@
 
 GoAl is a lightweight, single-binary manager for local AI runtimes and models. One executable for Windows amd64 and Linux amd64.
 
+**Architecture:** Runtime ← Model → Instance. A Runtime is an execution engine (executable, default args, environment). A Model is a configured launch definition (runtime + args + host + port + environment). An Instance is a concrete process launch (PID, state, logs). Physical GGUF/MMProj files are ordinary launch arguments, not separate entities.
+
 **Latest stable: v1.0.3** — [GitHub Releases](https://github.com/dsdred/goal-starter/releases/tag/v1.0.3)
 
 ## Key features
 
 - **Runtime CRUD** — configure Ollama, llama.cpp, vLLM, or custom inference servers
-- **Model management** — GGUF files, inline arguments, environment variables
-- **Model-based launches** — combine Runtime + launch args
+- **Model CRUD** — configured launch definitions (runtime + args + environment)
+- **Instance lifecycle** — start, stop, restart; multi-instance supervisor
+- **Launch command preview** — resolve and inspect the full command before starting
 - **Multi-instance supervisor** — run several processes concurrently with configurable concurrency limits
 - **Live logs** — SSE streaming with instance filtering and pagination
 - **Historical logs** — paginated, searchable query with time-range and stream filters
