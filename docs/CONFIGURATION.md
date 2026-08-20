@@ -155,10 +155,34 @@ The following fields require a restart:
 
 Hot-reload is implemented in `internal/config` but not yet wired into main startup.
 
+## Runtime Name uniqueness
+
+`Runtime.Name` must be unique across all runtimes (case-insensitive). The API returns `409 Conflict` when creating or renaming a runtime to an already-existing name. A runtime can be edited without changing its own name.
+
+## Active Instances vs Instance History
+
+| Page | States shown | Actions |
+|------|-------------|---------|
+| **Instances** (Экземпляры) | Active only: `starting`, `running`, `stopping` | Logs, Stop, Restart |
+| **Instance History** (История) | Terminal only: `exited`, `failed`, `stale` | Logs, Cleanup |
+
+Terminal instances move from Instances to History automatically when they reach a terminal state. History cleanup deletes terminal instances only; active instances are never affected.
+
+## Server settings in Web UI
+
+Server parameters (`listenAddress`, `webPort`, `authEnabled`, `adminUser`, `adminPassword`) are **read-only** in the Web UI. They are displayed in Settings → Server but cannot be edited through the interface.
+
+To change server configuration:
+1. Stop GoAl.
+2. Edit `goal.json` (path via `GOAL_CONFIG` or default location).
+3. Start GoAl again.
+
+This is by design: hot-reconfiguration of the HTTP listener and auth state is not supported by the current architecture.
+
 ## Security implications
 
 | Field | Security note |
 |-------|--------------|
-| `adminPassword` | Persisted in `goal.json` so authentication survives restart; stored as a bcrypt hash in memory. Protect the file with POSIX permissions or a Windows ACL. |
+| `adminPassword` | Persisted in `goal.json` so authentication survives restart; stored as a bcrypt hash (cost 12) in memory. Protect the file with POSIX permissions or a Windows ACL. |
 | `authEnabled` | Recommended `true` when `listenAddress` is non-loopback. If `false` on non-loopback, a prominent security warning is emitted but startup is not blocked. |
 | `dataDir` | Contains `goal_repo.json` (secrets, paths). Default `./data` is gitignored. |

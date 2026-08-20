@@ -2,7 +2,6 @@ package security
 
 import (
 	"crypto/rand"
-	"crypto/subtle"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -175,12 +174,11 @@ type PasswordStore struct {
 	users map[string]string // username -> bcrypt hash
 }
 
-// NewPasswordStore creates password store with default admin credentials.
+// NewPasswordStore creates an empty password store.
+// Users are added via SetPassword after loading configuration.
 func NewPasswordStore() *PasswordStore {
 	return &PasswordStore{
-		users: map[string]string{
-			"admin": "", // will be set via SetPassword
-		},
+		users: make(map[string]string),
 	}
 }
 
@@ -205,18 +203,16 @@ func (p *PasswordStore) SetPassword(username, password string) error {
 }
 
 // ValidateCredentials checks username/password against stored bcrypt hash.
-// If the stored hash is empty string (legacy/plain-text mode), falls back to
-// constant-time comparison.
+// Returns false for unknown users, empty passwords, or mismatched credentials.
 func (p *PasswordStore) ValidateCredentials(username, password string) bool {
+	if username == "" || password == "" {
+		return false
+	}
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	stored, ok := p.users[username]
-	if !ok {
+	if !ok || stored == "" {
 		return false
-	}
-	// Legacy fallback: empty hash means plaintext comparison.
-	if stored == "" {
-		return subtle.ConstantTimeCompare([]byte(password), []byte(stored)) == 1
 	}
 	return CheckPasswordHash(password, stored)
 }

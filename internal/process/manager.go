@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -78,6 +79,7 @@ type Manager struct {
 	done     chan struct{}
 	logSubs  map[chan LogEvent]struct{}
 	logStore *LogStore
+	stopReq  atomic.Bool
 }
 
 // NewManager creates a Manager already in the stopped state.
@@ -181,6 +183,7 @@ func (m *Manager) Start(ctx context.Context, spec CommandSpec) error {
 	m.cmd = cmd
 	m.control = control
 	m.done = make(chan struct{})
+	m.stopReq.Store(false)
 	m.status = Status{
 		State:     StateRunning,
 		PID:       cmd.Process.Pid,
@@ -204,6 +207,7 @@ func (m *Manager) Stop(ctx context.Context) error {
 	done := m.done
 	control := m.control
 	m.status.State = StateStopping
+	m.stopReq.Store(true)
 	m.mu.Unlock()
 
 	// Send SIGTERM to process group / job.
@@ -318,9 +322,13 @@ func (m *Manager) wait(cmd *exec.Cmd, control platform.ProcessControl) {
 		})
 	}
 
-	// Signal-based termination takes priority over exit code classification.
-	// On Windows, Job Object kill-on-close may return exit code 0.
-	if control.WasSignaled() {
+	// Intentional stop takes highest priority: if Stop() was requested, the
+	// process was terminated by GoAl regardless of the OS exit code.
+	// On Windows, CTRL_BREAK_EVENT produces 0xC000013A (STATUS_CONTROL_C_EXIT);
+	// on Linux, SIGTERM may produce 143. These are all intentional stops.
+	if m.stopReq.Load() {
+		exitClass = ExitSignaled
+	} else if control.WasSignaled() {
 		exitClass = ExitSignaled
 	} else if exitCodePtr != nil && *exitCodePtr == 0 {
 		exitClass = ExitNormal

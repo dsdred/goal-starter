@@ -8,19 +8,38 @@ This document describes the security model of GoAl 2.0 as implemented in product
 
 | Setting | Value |
 |---------|-------|
-| Cookie name | `session` |
+| Cookie name | `goal_session` |
 | HttpOnly | `true` |
 | SameSite | `Lax` |
 | Secure | `false` (set to `true` when HTTPS middleware is added) |
-| Password store | bcrypt hash in session store |
-| Default credentials | `admin` / (empty, legacy fallback) |
+| Password store | bcrypt hash (cost 12), in-memory, seeded from config at startup |
+| Default credentials | None (store starts empty; `adminUser` + `adminPassword` required in config) |
 
 Login endpoint: `POST /api/v1/auth/login`
 Logout endpoint: `POST /api/v1/auth/logout`
+Session check: `GET /api/v1/auth/session`
+
+### Credential validation
+
+When `authEnabled=true`:
+
+- `adminUser` and `adminPassword` are **required** in `goal.json` (startup rejects empty values).
+- At startup, the password is hashed with bcrypt (cost 12) and stored in memory.
+- Login validates the submitted username against the stored username and the password against the bcrypt hash.
+- Unknown username, wrong password, or empty credentials → `401`, no session created.
+- Successful login creates a session and returns the **server-verified username** in the response.
+- After logout, the session is destroyed; subsequent requests are unauthenticated.
+
+When `authEnabled=false`:
+
+- All routes are accessible without authentication.
+- The login endpoint returns `200` immediately (no credentials parsed).
+- The session endpoint reports `user: "public"`.
+- A prominent warning is emitted if the bind address is non-loopback.
 
 ### Password storage
 
-At startup, the configured password is hashed with bcrypt in memory. Authentication-enabled startup rejects an empty password. `Config.Save()` retains the password so authentication continues to work after restart. The file uses mode `0600` on POSIX; on Windows, restrict its directory with an ACL.
+The `adminPassword` is stored in plaintext in `goal.json` (the canonical config mechanism). At startup it is hashed with bcrypt and the plaintext is used only for initial seeding. `Config.Save()` retains the password so authentication continues to work after restart. The file uses mode `0600` on POSIX; on Windows, restrict its directory with an ACL.
 
 ### Session store
 
@@ -88,8 +107,7 @@ remain available internally for process launch.
 | Default bind loopback | `127.0.0.1` |
 | External bind warning | `authEnabled=false` + non-loopback → prominent WARN (not blocked) |
 | Request body size limit | `http.MaxBytesReader` |
-| Rate limiting | Placeholder (wired but no-op) |
-| Login rate limit | Placeholder (5 attempts / 5 minutes, not enforced) |
+| Rate limiting | **Not implemented** (known limitation; no brute-force protection on login) |
 | Runtime path validation | Executable and working directory validated against allowed roots |
 
 ## Recommended deployment
@@ -137,7 +155,9 @@ Authenticode code signing is a possible future improvement. It is not currently 
 
 ## Security notes
 
-- **Public mode warning:** If `authEnabled=false` and GoAl is accessible from the network, all API endpoints (except `/health` and `/version`) are accessible without authentication.
+- **Public mode warning:** If `authEnabled=false` and GoAl is accessible from the network, all API endpoints are accessible without authentication. A prominent WARN is emitted at startup.
 - **No HTTPS in binary:** TLS is not terminated inside GoAl. Use a reverse proxy for HTTPS.
 - **No token-based auth:** Only session cookies are supported. No API keys or bearer tokens.
 - **No multi-user:** Single admin user only. No roles or permissions.
+- **No login rate limiting:** Known limitation. Mitigate by binding to loopback or using a reverse proxy with rate limiting.
+- **Plaintext password in config:** `adminPassword` is stored in `goal.json` in plaintext. Protect the file with filesystem permissions.

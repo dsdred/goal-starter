@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"strings"
 
 	"github.com/dsdred/goal/internal/storage"
 	"github.com/dsdred/goal/internal/webui/errors"
@@ -27,25 +28,44 @@ func (s *RuntimeService) GetRuntime(ctx context.Context, id string) (*storage.Ru
 	return s.repo.GetRuntime(id)
 }
 
-// CreateRuntime creates a new runtime.
+// CreateRuntime creates a new runtime. Name must be unique (case-insensitive).
 func (s *RuntimeService) CreateRuntime(ctx context.Context, entry *storage.RuntimeEntry) error {
 	if entry.Name == "" {
 		return errors.ErrValidation
 	}
+	if s.nameExists(entry.Name, "") {
+		return errors.NewAPIError(errors.CodeConflict, "a runtime with name \""+entry.Name+"\" already exists")
+	}
 	return s.repo.CreateRuntime(entry)
 }
 
-// UpdateRuntime updates an existing runtime.
+// UpdateRuntime updates an existing runtime. Name must be unique (case-insensitive).
 func (s *RuntimeService) UpdateRuntime(ctx context.Context, entry *storage.RuntimeEntry) error {
 	existing, err := s.repo.GetRuntime(entry.ID)
 	if err != nil {
 		return err
+	}
+	if entry.Name != "" && entry.Name != existing.Name {
+		if s.nameExists(entry.Name, entry.ID) {
+			return errors.NewAPIError(errors.CodeConflict, "a runtime with name \""+entry.Name+"\" already exists")
+		}
 	}
 	entry.CreatedAt = existing.CreatedAt
 	if entry.Environment == nil {
 		entry.Environment = existing.Environment
 	}
 	return s.repo.UpdateRuntime(entry)
+}
+
+func (s *RuntimeService) nameExists(name string, excludeID string) bool {
+	all, _ := s.repo.ListRuntimes()
+	target := strings.ToLower(name)
+	for _, r := range all {
+		if r.ID != excludeID && strings.ToLower(r.Name) == target {
+			return true
+		}
+	}
+	return false
 }
 
 // DeleteRuntime deletes a runtime by ID. Returns a conflict error if any model

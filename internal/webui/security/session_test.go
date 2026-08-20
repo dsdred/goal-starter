@@ -64,20 +64,35 @@ func TestSessionStore_Destroy(t *testing.T) {
 func TestPasswordStore_ValidateCredentials(t *testing.T) {
 	store := NewPasswordStore()
 
-	// Admin has empty bcrypt hash set via NewPasswordStore, so empty password should work.
-	if !store.ValidateCredentials("admin", "") {
-		t.Error("Expected admin with empty password to validate")
+	// Empty store: no users exist yet.
+	if store.ValidateCredentials("admin", "anypass") {
+		t.Error("Expected unknown user to fail on empty store")
+	}
+	if store.ValidateCredentials("admin", "") {
+		t.Error("Expected empty password to fail")
+	}
+	if store.ValidateCredentials("", "pass") {
+		t.Error("Expected empty username to fail")
 	}
 
-	if store.ValidateCredentials("admin", "wrong") {
-		t.Error("Expected admin with wrong password to fail")
+	err := store.SetPassword("admin", "secret123")
+	if err != nil {
+		t.Fatalf("SetPassword error: %v", err)
 	}
 
-	if store.ValidateCredentials("nonexistent", "") {
-		t.Error("Expected nonexistent user to fail")
+	if !store.ValidateCredentials("admin", "secret123") {
+		t.Error("Expected correct credentials to validate")
 	}
 
-	err := store.SetPassword("custom", "custompass")
+	if store.ValidateCredentials("admin", "wrongpass") {
+		t.Error("Expected wrong password to fail")
+	}
+
+	if store.ValidateCredentials("unknown", "secret123") {
+		t.Error("Expected unknown user to fail")
+	}
+
+	err = store.SetPassword("custom", "custompass")
 	if err != nil {
 		t.Fatalf("SetPassword error: %v", err)
 	}

@@ -383,9 +383,24 @@ this file is not an encrypted secret vault.
 ### What is an Instance?
 
 - **Model** — configured launch definition (runtime reference + launch args + environment)
-- **Instance** — running process (runtime entity)
+- **Instance** — a process launch (runtime entity) with a lifecycle state
 
-One model can create multiple instances. Stopping an instance does not delete the model. Restart creates a new instance.
+One model can create multiple instances. Stopping an instance does not delete the model. Restart creates a new instance (the old one becomes terminal).
+
+### Instances vs Instance History
+
+| Page | Shows | Actions |
+|------|-------|---------|
+| **Instances** | Active processes only (`starting`, `running`, `stopping`) | Logs, Stop, Restart |
+| **Instance History** | Terminal runs only (`exited`, `failed`, `stale`) | Logs, Cleanup |
+
+When an instance stops or fails, it moves from Instances to History automatically. History cleanup removes terminal instances (all, older than 7 days, or older than 30 days). Active instances are never deleted by cleanup.
+
+### Stop behavior
+
+- **User-initiated Stop** → instance reaches `exited` state (shown as STOPPED in UI). This is a normal, successful outcome.
+- **Unexpected process crash** → instance reaches `failed` state (shown as FAILED in UI).
+- **Restart** → old instance becomes `exited`, new instance becomes `running`.
 
 ### CLI Management
 
@@ -475,6 +490,10 @@ Returns the full command that will be executed.
 ---
 
 ## Runtimes
+
+### Name Uniqueness
+
+Runtime names must be unique (case-insensitive). Creating or renaming a runtime to an already-existing name returns a conflict error. This prevents ambiguity in selectors and replacement operations.
 
 ### Creating a Runtime
 
@@ -579,12 +598,24 @@ curl "http://127.0.0.1:8088/api/v1/logs?page=2&page_size=50"
 
 | Parameter | Value |
 |-----------|-------|
-| Authentication | HTTP-only cookies, session-based |
-| CSRF Protection | Yes, for all unsafe methods |
-| Rate Limiting | 100 requests/min per IP |
-| Login Rate Limit | 5 attempts / 5 minutes |
+| Authentication | HTTP-only cookies, session-based (bcrypt credential validation) |
+| CSRF Protection | Yes, for all unsafe methods (double-submit cookie) |
+| Rate Limiting | **Not implemented** (known limitation) |
 | Limit Request Body | http.MaxBytesReader |
 | Bind Address | 127.0.0.1 (localhost) by default |
+
+### Authentication
+
+When `authEnabled=true`:
+- Set `adminUser` and `adminPassword` in `goal.json` (both required, non-empty).
+- Login validates credentials against the bcrypt hash. Wrong password or unknown user → 401.
+- A session cookie is created on successful login. Logout destroys the session.
+- The authenticated username shown in the sidebar comes from the server-verified identity.
+
+When `authEnabled=false`:
+- All endpoints are accessible without credentials.
+- The sidebar shows "—" (no user). No login form is shown.
+- A prominent warning is emitted if bound to a non-loopback address.
 
 ### Configuring for Network Access
 

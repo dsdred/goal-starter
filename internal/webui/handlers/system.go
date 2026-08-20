@@ -19,6 +19,15 @@ import (
 	"github.com/dsdred/goal/internal/webui/security"
 )
 
+// logHistoryWire is the SSE wire format for replayed history events.
+type logHistoryWire struct {
+	Sequence   uint64    `json:"sequence"`
+	Timestamp  time.Time `json:"time"`
+	InstanceID string    `json:"instance_id,omitempty"`
+	Stream     string    `json:"stream"`
+	Message    string    `json:"message"`
+}
+
 // SystemHandlerOption configures the SystemHandler.
 type SystemHandlerOption func(*SystemHandler)
 
@@ -165,6 +174,24 @@ func (h *SystemHandler) serveLogStream(w http.ResponseWriter, r *http.Request, i
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.WriteHeader(http.StatusOK)
+	flusher.Flush()
+
+	// Replay stored history before entering the live stream.
+	history := h.supervisor.QueryLogs(process.LogQuery{Page: 1, PageSize: 1000}, instanceID)
+	for _, ev := range history.Items {
+		wire := logHistoryWire{
+			Sequence:   ev.Sequence,
+			Timestamp:  ev.Time,
+			InstanceID: instanceID,
+			Stream:     ev.Stream,
+			Message:    ev.Message,
+		}
+		data, err := json.Marshal(wire)
+		if err != nil {
+			continue
+		}
+		fmt.Fprintf(w, "id: %d\ndata: %s\n\n", ev.Sequence, data)
+	}
 	flusher.Flush()
 
 	sub := h.supervisor.SubscribeLogs(instanceID)

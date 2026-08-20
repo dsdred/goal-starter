@@ -70,6 +70,7 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		"csrf":          session.CSRFToken,
 		"csrf_token":    session.CSRFToken,
 		"authenticated": "true",
+		"user":          session.User,
 	})
 }
 

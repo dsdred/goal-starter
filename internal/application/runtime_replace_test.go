@@ -258,3 +258,52 @@ func TestCascadeDeleteRuntime_EmptyID(t *testing.T) {
 		t.Fatal("expected error for empty ID")
 	}
 }
+
+func assertConflict(t *testing.T, err error, msg string) {
+	t.Helper()
+	if err == nil {
+		t.Fatal(msg + ": expected error, got nil")
+	}
+	var apiErr *errors.APIError
+	if stderrors.As(err, &apiErr) {
+		if apiErr.Code != errors.CodeConflict {
+			t.Fatalf("%s: expected conflict code, got %q", msg, apiErr.Code)
+		}
+		return
+	}
+	t.Fatalf("%s: expected *errors.APIError, got %T: %v", msg, err, err)
+}
+
+func TestRuntimeService_DuplicateNameCreate(t *testing.T) {
+	runtimeSvc, _, _ := setupReplaceTest(t)
+	ctx := context.Background()
+
+	if err := runtimeSvc.CreateRuntime(ctx, &storage.RuntimeEntry{ID: "rt-1", Name: "TestRuntime", Executable: "a.exe"}); err != nil {
+		t.Fatalf("CreateRuntime: %v", err)
+	}
+
+	err := runtimeSvc.CreateRuntime(ctx, &storage.RuntimeEntry{ID: "rt-2", Name: "TestRuntime", Executable: "b.exe"})
+	assertConflict(t, err, "duplicate name create")
+
+	err = runtimeSvc.CreateRuntime(ctx, &storage.RuntimeEntry{ID: "rt-3", Name: "testruntime", Executable: "c.exe"})
+	assertConflict(t, err, "case-insensitive duplicate name create")
+}
+
+func TestRuntimeService_DuplicateNameUpdate(t *testing.T) {
+	runtimeSvc, _, _ := setupReplaceTest(t)
+	ctx := context.Background()
+
+	if err := runtimeSvc.CreateRuntime(ctx, &storage.RuntimeEntry{ID: "rt-1", Name: "Alpha", Executable: "a.exe"}); err != nil {
+		t.Fatalf("CreateRuntime rt-1: %v", err)
+	}
+	if err := runtimeSvc.CreateRuntime(ctx, &storage.RuntimeEntry{ID: "rt-2", Name: "Beta", Executable: "b.exe"}); err != nil {
+		t.Fatalf("CreateRuntime rt-2: %v", err)
+	}
+
+	err := runtimeSvc.UpdateRuntime(ctx, &storage.RuntimeEntry{ID: "rt-2", Name: "Alpha", Executable: "b.exe"})
+	assertConflict(t, err, "duplicate name update")
+
+	if err := runtimeSvc.UpdateRuntime(ctx, &storage.RuntimeEntry{ID: "rt-2", Name: "Beta", Executable: "b.exe"}); err != nil {
+		t.Fatalf("same name update should succeed: %v", err)
+	}
+}

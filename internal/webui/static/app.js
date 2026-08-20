@@ -25,7 +25,7 @@ function t(key, params) {
     let s = i18nDict[key] || key;
     if (params) {
         Object.keys(params).forEach(function (k) {
-            s = s.replace('{' + k + '}', params[k]);
+            s = s.split('{' + k + '}').join(String(params[k]));
         });
     }
     return s;
@@ -34,6 +34,9 @@ function t(key, params) {
 function applyI18n() {
     document.querySelectorAll('[data-i18n]').forEach(function (el) {
         el.textContent = t(el.dataset.i18n);
+    });
+    document.querySelectorAll('[data-i18n-placeholder]').forEach(function (el) {
+        el.placeholder = t(el.dataset.i18nPlaceholder);
     });
     document.title = t('app.title');
 }
@@ -123,14 +126,17 @@ async function checkAuth() {
 
 function updateSidebarAuth(user) {
     const el = document.getElementById('sidebar-auth');
-    if (user) {
+    const userEl = document.getElementById('sidebar-user');
+    const logoutBtn = document.getElementById('sidebar-logout');
+    if (user && user !== 'public') {
         el.style.display = 'flex';
-        document.getElementById('sidebar-user').textContent = user;
+        userEl.textContent = user;
+        if (logoutBtn) logoutBtn.style.display = '';
+    } else {
+        el.style.display = 'flex';
+        userEl.textContent = user || '—';
+        if (logoutBtn) logoutBtn.style.display = 'none';
     }
-    const setCard = document.getElementById('set-user-card');
-    if (setCard) setCard.style.display = user ? '' : 'none';
-    const setUser = document.getElementById('set-user');
-    if (setUser) setUser.textContent = user || '-';
 }
 
 function showLogin() {
@@ -163,8 +169,9 @@ async function handleLogin(e) {
             body: JSON.stringify({ username: u, password: p })
         });
         if (r.ok) {
+            const d = await r.json();
             await getCSRFToken();
-            updateSidebarAuth(u);
+            updateSidebarAuth(d.user || u);
             document.getElementById('login-modal').style.display = 'none';
             document.getElementById('app-shell').style.display = 'flex';
             await reloadAllData();
@@ -295,7 +302,7 @@ function fmtUptime(startedAt) {
 function fmtTime(ts) {
     if (!ts) return '—';
     const d = new Date(ts);
-    if (isNaN(d.getTime())) return '—';
+    if (isNaN(d.getTime()) || d.getUTCFullYear() < 1000) return '—';
     return d.toLocaleString();
 }
 
@@ -307,6 +314,10 @@ function esc(s) {
 
 function safeId(id) {
     return String(id).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+function iconBtn(icon, label, color, action, id) {
+    return '<button class="icon-btn icon-btn-' + color + '" title="' + esc(label) + '" aria-label="' + esc(label) + '" onclick="' + action + '(\'' + safeId(id) + '\')">' + icon + '</button>';
 }
 
 function parseArgs(raw) {
@@ -360,29 +371,28 @@ function renderModels() {
 
         let actionBtns = '';
         if (status === 'running') {
-            actionBtns = '<button class="btn btn-warning btn-sm" onclick="restartModel(\'' + safeId(m.id) + '\')">' + t('models.actions.restart') + '</button>' +
-                '<button class="btn btn-danger btn-sm" onclick="stopModel(\'' + safeId(m.id) + '\')">' + t('models.actions.stop') + '</button>';
+            actionBtns = iconBtn('↻', t('models.actions.restart'), 'warning', 'restartModel', m.id) +
+                iconBtn('■', t('models.actions.stop'), 'danger', 'stopModel', m.id);
         } else if (status === 'starting' || status === 'stopping') {
             actionBtns = '<span class="hint-text">' + status + '...</span>';
         } else {
-            actionBtns = '<button class="btn btn-success btn-sm" onclick="startModel(\'' + safeId(m.id) + '\')">' + t('models.actions.start') + '</button>';
+            actionBtns = iconBtn('▶', t('models.actions.start'), 'success', 'startModel', m.id);
         }
 
         return '<div class="model-row">' +
             '<div class="model-row-main">' +
-                '<div class="model-row-name">' + esc(m.name) + '</div>' +
+                '<div class="model-row-name">' + esc(m.name) + ' <span class="status-badge ' + status + '">' + t('models.status.' + status) + '</span></div>' +
                 '<div class="model-row-sub">' + esc(getRuntimeName(m.runtime_id)) +
                     (m.active ? ' <span class="autostart-indicator" title="' + t('models.autostart') + '">A</span>' : '') +
+                    (inst && inst.pid ? ' · PID ' + inst.pid : '') +
+                    (uptime ? ' · ' + uptime : '') +
                 '</div>' +
             '</div>' +
-            (inst && inst.pid ? '<span class="model-row-pid">PID ' + inst.pid + '</span>' : '') +
-            (uptime ? '<span class="model-row-uptime">' + uptime + '</span>' : '') +
-            '<span class="status-badge ' + status + '">' + t('models.status.' + status) + '</span>' +
             '<div class="model-row-actions">' +
                 actionBtns +
-                '<button class="btn btn-ghost btn-sm" onclick="viewInstanceLogs(\'' + (active.length ? safeId(active[0].id) : '') + '\')">' + t('models.actions.logs') + '</button>' +
-                '<button class="btn btn-ghost btn-sm" onclick="openWizard(\'' + safeId(m.id) + '\')">' + t('models.actions.edit') + '</button>' +
-                '<button class="btn btn-danger btn-sm" onclick="deleteModel(\'' + safeId(m.id) + '\')">' + t('models.actions.delete') + '</button>' +
+                iconBtn('📄', t('models.actions.logs'), 'ghost', 'viewInstanceLogs', active.length ? active[0].id : '') +
+                iconBtn('✎', t('models.actions.edit'), 'ghost', 'openWizard', m.id) +
+                iconBtn('🗑', t('models.actions.delete'), 'danger', 'deleteModel', m.id) +
             '</div>' +
         '</div>';
     }).join('');
@@ -512,13 +522,14 @@ function appendLogLine(d) {
     const search = document.getElementById('log-search').value.toLowerCase();
     const filter = document.getElementById('log-stream-filter').value;
     if (filter && stream !== filter) return;
-    if (search && !(d.message || '').toLowerCase().indexOf(search) !== -1) return;
+    if (search && (d.message || '').toLowerCase().indexOf(search) === -1) return;
 
     const view = document.getElementById('log-view');
     const div = document.createElement('div');
     div.className = 'log-line ' + stream;
     const ts = d.time ? new Date(d.time).toLocaleTimeString() : '';
-    div.innerHTML = '<span class="log-time">' + ts + '</span><span class="log-source">[' + esc(stream) + ']</span>' + esc(d.message);
+    const instLabel = d.instance_id ? '<span class="log-inst">' + esc(d.instance_id.substring(0, 8)) + '</span>' : '';
+    div.innerHTML = '<span class="log-time">' + ts + '</span>' + instLabel + '<span class="log-source">[' + esc(stream) + ']</span>' + esc(d.message);
     view.appendChild(div);
 
     while (view.children.length > 2000) view.removeChild(view.firstChild);
@@ -527,7 +538,17 @@ function appendLogLine(d) {
     }
 }
 
-function applyLogSearch() {}
+function applyLogSearch() {
+    const view = document.getElementById('log-view');
+    const search = document.getElementById('log-search').value.toLowerCase();
+    const filter = document.getElementById('log-stream-filter').value;
+    Array.from(view.children).forEach(function (div) {
+        const text = div.textContent.toLowerCase();
+        const streamMatch = !filter || div.className.indexOf(filter) !== -1;
+        const searchMatch = !search || text.indexOf(search) !== -1;
+        div.style.display = (streamMatch && searchMatch) ? '' : 'none';
+    });
+}
 
 function toggleLogPause() {
     logPaused = !logPaused;
@@ -590,8 +611,16 @@ function openWizard(modelId) {
             document.getElementById('wiz-delay-group').style.display = m.active ? '' : 'none';
             document.getElementById('wiz-autostart-delay').value = m.autostart_delay || 0;
             if (m.runtime_id) {
-                const card = document.querySelector('#wiz-rt-cards .rt-card[data-id="' + m.runtime_id + '"]');
-                if (card) card.classList.add('selected');
+                rtSelectedId = m.runtime_id;
+                const r = runtimesData.find(function (x) { return x.id === m.runtime_id; });
+                if (r) {
+                    document.getElementById('wiz-rt-search').value = r.name;
+                    const details = document.getElementById('wiz-rt-selected');
+                    details.innerHTML = '<div class="rt-detail"><strong>' + esc(r.name) + '</strong></div>' +
+                        (r.executable ? '<div class="rt-detail-sub">exe: ' + esc(r.executable) + '</div>' : '') +
+                        (r.working_directory ? '<div class="rt-detail-sub">cwd: ' + esc(r.working_directory) + '</div>' : '');
+                    details.style.display = 'block';
+                }
             }
         }
     }
@@ -602,22 +631,65 @@ function openWizard(modelId) {
 function closeWizard() { document.getElementById('wizard-modal').style.display = 'none'; }
 
 function loadWizardRuntimeCards() {
-    const container = document.getElementById('wiz-rt-cards');
-    if (runtimesData.length === 0) {
-        container.innerHTML = '<div class="hint-text">No runtimes. Create one below.</div>';
-        return;
-    }
-    container.innerHTML = runtimesData.map(function (r) {
-        return '<div class="rt-card" data-id="' + esc(r.id) + '" onclick="selectRtCard(this)">' +
-            '<div class="rt-card-name">' + esc(r.name) + '</div>' +
-            '<div class="rt-card-exe">' + esc(r.executable) + (r.working_directory ? ' (' + esc(r.working_directory) + ')' : '') + '</div>' +
-        '</div>';
-    }).join('');
+    document.getElementById('wiz-rt-search').value = '';
+    document.getElementById('wiz-rt-selected').style.display = 'none';
+    document.getElementById('wiz-rt-dropdown').style.display = 'none';
+    renderRtDropdown();
 }
 
-function selectRtCard(el) {
-    document.querySelectorAll('#wiz-rt-cards .rt-card').forEach(function (c) { c.classList.remove('selected'); });
-    el.classList.add('selected');
+var rtSelectedId = null;
+
+function renderRtDropdown() {
+    const query = document.getElementById('wiz-rt-search').value.toLowerCase();
+    const dd = document.getElementById('wiz-rt-dropdown');
+    const filtered = runtimesData.filter(function (r) {
+        return !query || r.name.toLowerCase().indexOf(query) !== -1;
+    });
+    if (filtered.length === 0) {
+        dd.innerHTML = '<div class="rt-dropdown-empty">' + esc(t('wizard.rt.none')) + '</div>';
+        dd.style.display = 'block';
+        return;
+    }
+    dd.innerHTML = filtered.map(function (r) {
+        const sel = r.id === rtSelectedId ? ' selected' : '';
+        return '<div class="rt-dropdown-item' + sel + '" data-id="' + esc(r.id) + '" onclick="selectRtItem(\'' + safeId(r.id) + '\')">' + esc(r.name) + '</div>';
+    }).join('');
+    dd.style.display = 'block';
+}
+
+function rtDropdownKeydown(e) {
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        const dd = document.getElementById('wiz-rt-dropdown');
+        const items = Array.from(dd.querySelectorAll('.rt-dropdown-item'));
+        if (items.length === 0) return;
+        let idx = items.findIndex(function (el) { return el.classList.contains('selected'); });
+        if (e.key === 'ArrowDown') idx = Math.min(idx + 1, items.length - 1);
+        else idx = Math.max(idx - 1, 0);
+        items.forEach(function (el) { el.classList.remove('selected'); });
+        items[idx].classList.add('selected');
+        items[idx].scrollIntoView({ block: 'nearest' });
+    } else if (e.key === 'Enter') {
+        e.preventDefault();
+        const dd = document.getElementById('wiz-rt-dropdown');
+        const sel = dd.querySelector('.rt-dropdown-item.selected');
+        if (sel) selectRtItem(sel.dataset.id);
+    } else if (e.key === 'Escape') {
+        document.getElementById('wiz-rt-dropdown').style.display = 'none';
+    }
+}
+
+function selectRtItem(id) {
+    rtSelectedId = id;
+    const r = runtimesData.find(function (x) { return x.id === id; });
+    if (!r) return;
+    document.getElementById('wiz-rt-search').value = r.name;
+    document.getElementById('wiz-rt-dropdown').style.display = 'none';
+    const details = document.getElementById('wiz-rt-selected');
+    details.innerHTML = '<div class="rt-detail"><strong>' + esc(r.name) + '</strong></div>' +
+        (r.executable ? '<div class="rt-detail-sub">exe: ' + esc(r.executable) + '</div>' : '') +
+        (r.working_directory ? '<div class="rt-detail-sub">cwd: ' + esc(r.working_directory) + '</div>' : '');
+    details.style.display = 'block';
 }
 
 function onWizRtModeChange() {
@@ -665,10 +737,9 @@ async function handleWizardSubmit(e) {
     const rtMode = document.querySelector('input[name=wiz-rt-mode]:checked').value;
     let runtimeId = '';
     if (rtMode === 'existing') {
-        const sel = document.querySelector('#wiz-rt-cards .rt-card.selected');
-        if (sel) runtimeId = sel.dataset.id;
+        runtimeId = rtSelectedId || '';
         if (!runtimeId) {
-            if (wizStep === 2) { wizError(t('wizard.error.runtime')); return; }
+            wizError(t('wizard.error.runtime')); return;
         }
     }
 
@@ -885,22 +956,24 @@ function deleteRuntime(id) {
 
 function closeRTDelete() {
     document.getElementById('rt-delete-modal').style.display = 'none';
-    rtDeleteId = null;
 }
 
 function openRTReplace() {
+    if (!rtDeleteId) return;
     closeRTDelete();
     const depCount = modelsData.filter(function (m) { return m.runtime_id === rtDeleteId; }).length;
     document.getElementById('rt-replace-msg').textContent = t('runtimes.replace.select', { count: depCount });
     const sel = document.getElementById('rt-replace-select');
     const otherRt = runtimesData.filter(function (r) { return r.id !== rtDeleteId; });
     sel.innerHTML = otherRt.map(function (r) {
-        return '<option value="' + esc(r.id) + '">' + esc(r.name) + ' (' + esc(r.executable) + ')</option>';
+        return '<option value="' + esc(r.id) + '">' + esc(r.name) + '</option>';
     }).join('');
     document.getElementById('rt-replace-modal').style.display = 'flex';
 }
 
-function closeRTReplace() { document.getElementById('rt-replace-modal').style.display = 'none'; }
+function closeRTReplace() {
+    document.getElementById('rt-replace-modal').style.display = 'none';
+}
 
 async function confirmRTReplace() {
     const newId = document.getElementById('rt-replace-select').value;
@@ -910,6 +983,7 @@ async function confirmRTReplace() {
     btn.textContent = t('confirm.executing');
     try {
         await api('/runtimes/' + rtDeleteId + '/replace', { method: 'POST', body: JSON.stringify({ new_runtime_id: newId }) });
+        rtDeleteId = null;
         closeRTReplace();
         showToast(t('common.saved'), 'success');
         await reloadAllData(); renderAll();
@@ -921,6 +995,7 @@ async function confirmRTReplace() {
 }
 
 function openRTCascade() {
+    if (!rtDeleteId) return;
     closeRTDelete();
     const depCount = modelsData.filter(function (m) { return m.runtime_id === rtDeleteId; }).length;
     document.getElementById('rt-cascade-msg').textContent = t('runtimes.cascade.confirm', { count: depCount });
@@ -936,6 +1011,7 @@ async function confirmRTCascade() {
     btn.textContent = t('confirm.executing');
     try {
         const res = await api('/runtimes/' + rtDeleteId + '/cascade-delete', { method: 'POST' });
+        rtDeleteId = null;
         closeRTCascade();
         showToast(t('common.deleted') + (res.models_deleted ? ' (' + res.models_deleted + ' models)' : ''), 'success');
         await reloadAllData(); renderAll();
@@ -950,21 +1026,21 @@ async function confirmRTCascade() {
 
 function renderAdvInstances() {
     const empty = document.getElementById('instances-empty');
-    if (instancesData.length === 0) {
-        document.getElementById('adv-instances-body').innerHTML = '';
-        if (empty) empty.style.display = 'block';
+    const active = instancesData.filter(function (i) { return isActive(i.state); });
+    if (active.length === 0) {
+        document.getElementById('adv-instances-body').innerHTML = '<tr class="empty-row"><td colspan="8"><div class="empty-state"><p>' + esc(t('instances.empty')) + '</p><small class="hint-text">' + esc(t('instances.empty.hint')) + '</small></div></td></tr>';
         return;
     }
     if (empty) empty.style.display = 'none';
-    document.getElementById('adv-instances-body').innerHTML = instancesData.map(function (i) {
+    document.getElementById('adv-instances-body').innerHTML = active.map(function (i) {
         return '<tr><td style="font-family:var(--font-mono);font-size:0.78rem;">' + esc(i.id.slice(0, 16)) + '</td>' +
             '<td>' + esc(getModelName(i.model_id)) + '</td>' +
             '<td><span class="status-badge ' + esc(i.state) + '">' + esc(i.state) + '</span></td>' +
             '<td>' + (i.pid || '—') + '</td><td>' + fmtTime(i.started_at) + '</td><td>' + fmtTime(i.stopped_at) + '</td>' +
             '<td>' + (i.exit_code != null ? i.exit_code : '—') + '</td>' +
             '<td class="actions-cell"><button class="btn btn-ghost btn-sm" onclick="viewInstanceLogs(\'' + safeId(i.id) + '\')">' + t('instances.actions.logs') + '</button>' +
-            (isActive(i.state) ? ' <button class="btn btn-danger btn-sm" onclick="stopInstance(\'' + safeId(i.id) + '\')">' + t('instances.actions.stop') + '</button> ' +
-            '<button class="btn btn-warning btn-sm" onclick="restartInstance(\'' + safeId(i.id) + '\')">' + t('instances.actions.restart') + '</button>' : '') + '</td></tr>';
+            ' <button class="btn btn-danger btn-sm" onclick="stopInstance(\'' + safeId(i.id) + '\')">' + t('instances.actions.stop') + '</button> ' +
+            '<button class="btn btn-warning btn-sm" onclick="restartInstance(\'' + safeId(i.id) + '\')">' + t('instances.actions.restart') + '</button>' + '</td></tr>';
     }).join('');
 }
 
@@ -980,16 +1056,17 @@ async function restartInstance(id) {
 
 // ─── Instance History (with filters) ────────────────────────────────────────
 
+function isTerminal(s) { return s === 'exited' || s === 'failed' || s === 'stale'; }
+
 function renderHistory() {
     const empty = document.getElementById('history-empty');
     const stateF = document.getElementById('hf-state').value;
     const modelF = document.getElementById('hf-model').value;
-    const activeOnly = document.getElementById('hf-active').checked;
 
     let filtered = instancesData.filter(function (i) {
+        if (!isTerminal(i.state)) return false;
         if (stateF && i.state !== stateF) return false;
         if (modelF && i.model_id !== modelF) return false;
-        if (activeOnly && !isActive(i.state)) return false;
         return true;
     });
     filtered.sort(function (a, b) {
@@ -999,8 +1076,7 @@ function renderHistory() {
     });
 
     if (filtered.length === 0) {
-        document.getElementById('history-body').innerHTML = '';
-        if (empty) empty.style.display = 'block';
+        document.getElementById('history-body').innerHTML = '<tr class="empty-row"><td colspan="8"><div class="empty-state"><p>' + esc(t('history.empty')) + '</p><small class="hint-text">' + esc(t('history.empty.hint')) + '</small></div></td></tr>';
         return;
     }
     if (empty) empty.style.display = 'none';

@@ -76,20 +76,6 @@ func NewApp(cfg *config.Config, repo storage.Repository, supervisor *process.Sup
 	return a, nil
 }
 
-// NewAppWithDefaults creates an App with default admin credentials.
-func NewAppWithDefaults(cfg *config.Config, repo storage.Repository, supervisor *process.Supervisor) (*App, error) {
-	a, err := NewApp(cfg, repo, supervisor)
-	if err != nil {
-		return nil, err
-	}
-
-	if err := a.passwordStore.SetPassword("admin", "admin"); err != nil {
-		return nil, fmt.Errorf("set default admin password: %w", err)
-	}
-
-	return a, nil
-}
-
 // Router returns the HTTP handler using the new RouteRegistry architecture.
 func (a *App) Router() http.Handler {
 	if a.reg != nil {

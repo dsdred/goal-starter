@@ -78,7 +78,7 @@
             </div>
             <p id="rt-replace-msg" class="confirm-text"></p>
             <div class="form-group">
-                <label data-i18n="runtimes.replace.select">Выберите новый Runtime:</label>
+                <label data-i18n="runtimes.replace.label">Выберите новый Runtime:</label>
                 <select id="rt-replace-select"></select>
             </div>
             <div class="modal-actions">
@@ -115,7 +115,6 @@
                 <label class="radio-option"><input type="radio" name="cleanup-mode" value="all_terminal" checked><span data-i18n="instances.cleanup.all_terminal">Все завершённые</span></label>
                 <label class="radio-option"><input type="radio" name="cleanup-mode" value="older_than_7d"><span data-i18n="instances.cleanup.7d">Старше 7 дней</span></label>
                 <label class="radio-option"><input type="radio" name="cleanup-mode" value="older_than_30d"><span data-i18n="instances.cleanup.30d">Старше 30 дней</span></label>
-                <label class="radio-option"><input type="radio" name="cleanup-mode" value="selected"><span data-i18n="instances.cleanup.selected">Выбранные</span></label>
             </div>
             <div class="modal-actions">
                 <button class="btn btn-danger" onclick="confirmCleanup()" data-i18n="instances.cleanup.confirm">Очистить</button>
@@ -161,10 +160,18 @@
                     </div>
                     <div id="wiz-rt-existing-section" class="form-group">
                         <label data-i18n="wizard.rt.select">Выберите Runtime</label>
-                        <div id="wiz-rt-cards" class="rt-card-list"></div>
+                        <div class="rt-selector">
+                            <input type="text" id="wiz-rt-search" class="rt-search-input" data-i18n-placeholder="wizard.rt.search_placeholder" placeholder="Search Runtime..." autocomplete="off" oninput="renderRtDropdown()" onkeydown="rtDropdownKeydown(event)">
+                            <div id="wiz-rt-dropdown" class="rt-dropdown" style="display:none;"></div>
+                            <div id="wiz-rt-selected" class="rt-selected-details" style="display:none;"></div>
+                        </div>
                     </div>
                     <div id="wiz-rt-new-section" class="form-group" style="display:none;">
                         <small class="hint" style="margin-bottom:8px;display:block;" data-i18n="wizard.rt.new.hint">Runtime будет создан автоматически.</small>
+                        <div class="form-group">
+                            <label data-i18n="wizard.rt.name">Имя Runtime *</label>
+                            <input type="text" id="wiz-rt-name" placeholder="llama.cpp 10444">
+                        </div>
                         <div class="form-group">
                             <label data-i18n="wizard.rt.workdir">Рабочая папка</label>
                             <input type="text" id="wiz-rt-workdir" placeholder="E:\tools\llama10444">
@@ -173,10 +180,6 @@
                             <label data-i18n="wizard.rt.executable">Исполняемый файл *</label>
                             <input type="text" id="wiz-rt-executable" placeholder="llama-server.exe">
                             <small class="hint" data-i18n="wizard.rt.executable.hint">Имя файла или абсолютный путь</small>
-                        </div>
-                        <div class="form-group">
-                            <label data-i18n="wizard.rt.name">Имя Runtime *</label>
-                            <input type="text" id="wiz-rt-name" placeholder="llama.cpp 10444">
                         </div>
                     </div>
                 </div>
@@ -247,26 +250,12 @@
             <div class="sidebar-footer">
                 <div class="server-status">
                     <span class="status-dot online"></span>
-                    <span data-i18n="sidebar.version">Сервер GoAl</span>
+                    <span data-i18n="sidebar.status">Сервер</span>
                 </div>
                 <div class="server-version" id="server-version"></div>
-                <div class="sidebar-footer-links">
-                    <a href="https://github.com/dsdred/goal-starter" target="_blank" rel="noopener noreferrer" class="sidebar-link" data-i18n="sidebar.repo">Репозиторий</a>
-                </div>
-                <div class="sidebar-footer-controls">
-                    <select id="theme-select" class="mini-select" onchange="setTheme(this.value)" title="Theme">
-                        <option value="system">System</option>
-                        <option value="dark">Dark</option>
-                        <option value="light">Light</option>
-                    </select>
-                    <select id="lang-select" class="mini-select" onchange="setLanguage(this.value)" title="Language">
-                        <option value="ru">RU</option>
-                        <option value="en">EN</option>
-                    </select>
-                </div>
-                <div class="sidebar-auth" id="sidebar-auth" style="display:none;">
+                <div class="sidebar-auth" id="sidebar-auth">
                     <span class="sidebar-auth-user" id="sidebar-user"></span>
-                    <button class="btn btn-ghost btn-sm" onclick="handleLogout()" data-i18n="auth.logout">Выйти</button>
+                    <button class="btn btn-ghost btn-sm" onclick="handleLogout()" data-i18n="auth.logout" id="sidebar-logout" style="display:none;">Выйти</button>
                 </div>
             </div>
         </aside>
@@ -280,16 +269,16 @@
                     <button class="btn btn-primary" onclick="openWizard()" data-i18n="models.add">+ Добавить модель</button>
                 </div>
                 <div class="filter-bar" id="models-filter-bar">
-                    <input type="text" id="mf-search" placeholder="Search..." oninput="renderModels()">
-                    <select id="mf-runtime" onchange="renderModels()"><option value="">All Runtimes</option></select>
+                    <input type="text" id="mf-search" placeholder="Поиск..." data-i18n-placeholder="models.filter.search" oninput="renderModels()">
+                    <select id="mf-runtime" onchange="renderModels()"><option value="" data-i18n="models.filter.all_runtimes">All Runtimes</option></select>
                     <select id="mf-state" onchange="renderModels()">
-                        <option value="">All States</option>
-                        <option value="running">Running</option>
-                        <option value="stopped">Stopped</option>
-                        <option value="starting">Starting</option>
-                        <option value="stopping">Stopping</option>
+                        <option value="" data-i18n="models.filter.all_states">All States</option>
+                        <option value="running">running</option>
+                        <option value="stopped">stopped</option>
+                        <option value="starting">starting</option>
+                        <option value="stopping">stopping</option>
                     </select>
-                    <label class="toggle-label"><input type="checkbox" id="mf-autostart" onchange="renderModels()"><span>Autostart</span></label>
+                    <label class="toggle-label"><input type="checkbox" id="mf-autostart" onchange="renderModels()"><span data-i18n="models.filter.autostart">Автостарт</span></label>
                 </div>
                 <div class="model-list" id="model-list"></div>
                 <div class="empty-state" id="models-empty" style="display:none;">
@@ -308,15 +297,15 @@
                     <small class="hint-text" data-i18n="logs.empty.hint">Запустите модель, чтобы увидеть логи в реальном времени.</small>
                 </div>
                 <div class="logs-toolbar">
-                    <select id="log-instance-select" onchange="switchLogInstance()"><option value="">All Instances</option></select>
-                    <select id="log-stream-filter">
-                        <option value="">All</option>
+                    <select id="log-instance-select" onchange="switchLogInstance()"><option value="" data-i18n="logs.select.all">All Instances</option></select>
+                    <select id="log-stream-filter" data-i18n-title="logs.filter.title">
+                        <option value="" data-i18n="logs.filter.all">All</option>
                         <option value="stdout">stdout</option>
                         <option value="stderr">stderr</option>
                         <option value="system">system</option>
                     </select>
-                    <input type="text" id="log-search" placeholder="Search..." oninput="applyLogSearch()">
-                    <label class="toggle-label"><input type="checkbox" id="log-autoscroll" checked><span data-i18n="logs.autoscroll">Автопрокрутка</span></label>
+                    <input type="text" id="log-search" placeholder="Search..." data-i18n-placeholder="logs.search" oninput="applyLogSearch()">
+                    <label class="toggle-label log-autoscroll-label"><input type="checkbox" id="log-autoscroll" checked><span data-i18n="logs.autoscroll">Автопрокрутка</span></label>
                     <button class="btn btn-ghost btn-sm" onclick="toggleLogPause()" id="log-pause-btn" data-i18n="logs.pause">Пауза</button>
                     <button class="btn btn-ghost btn-sm" onclick="clearLogView()" data-i18n="logs.clear">Очистить</button>
                 </div>
@@ -332,15 +321,12 @@
                 </div>
                 <div class="filter-bar">
                     <select id="hf-state" onchange="renderHistory()">
-                        <option value="">All States</option>
-                        <option value="running">running</option>
-                        <option value="starting">starting</option>
-                        <option value="stopping">stopping</option>
+                        <option value="" data-i18n="history.filter.state">All States</option>
                         <option value="exited">exited</option>
                         <option value="failed">failed</option>
+                        <option value="stale">stale</option>
                     </select>
-                    <select id="hf-model" onchange="renderHistory()"><option value="">All Models</option></select>
-                    <label class="toggle-label"><input type="checkbox" id="hf-active" onchange="renderHistory()"><span data-i18n="history.filter.only_active">Только активные</span></label>
+                    <select id="hf-model" onchange="renderHistory()"><option value="" data-i18n="history.filter.model">All Models</option></select>
                 </div>
                 <div class="empty-state" id="history-empty" style="display:none;">
                     <p data-i18n="history.empty">Экземпляры не найдены.</p>
@@ -432,8 +418,9 @@
                     <div class="settings-card">
                         <h3 data-i18n="settings.server.title">Сервер</h3>
                         <div class="setting-row"><span data-i18n="settings.server.listen">Адрес</span><span id="set-listen">-</span></div>
+                        <div class="setting-row"><span data-i18n="settings.server.port">Порт</span><span id="set-port">-</span></div>
                         <div class="setting-row"><span data-i18n="settings.server.auth">Авторизация</span><span id="set-auth">-</span></div>
-                        <p class="hint" style="margin-top:0.8rem;" data-i18n="settings.server.restart_hint">Изменения требуют перезапуск.</p>
+                        <p class="hint" style="margin-top:0.8rem;" data-i18n="settings.server.restart_hint">Серверные параметры задаются в goal.json и требуют перезапуск GoAl.</p>
                     </div>
                     <div class="settings-card">
                         <h3 data-i18n="settings.about.title">О программе</h3>
@@ -441,11 +428,9 @@
                         <div class="setting-row"><span data-i18n="settings.about.commit">Commit</span><span id="set-commit">-</span></div>
                         <div class="setting-row"><span data-i18n="settings.about.go">Go</span><span id="set-go">-</span></div>
                         <div class="setting-row"><span data-i18n="settings.about.platform">Platform</span><span id="set-platform">-</span></div>
-                    </div>
-                    <div class="settings-card" id="set-user-card">
-                        <h3 data-i18n="settings.auth.title">Пользователь</h3>
-                        <div class="setting-row"><span data-i18n="settings.auth.user">Логин</span><span id="set-user">-</span></div>
-                        <button class="btn btn-ghost btn-sm" onclick="handleLogout()" style="margin-top:1rem;" data-i18n="settings.auth.logout">Выйти</button>
+                        <div class="setting-row" style="margin-top:0.8rem;">
+                            <a href="https://github.com/dsdred/goal-starter" target="_blank" rel="noopener noreferrer" class="sidebar-link" data-i18n="settings.about.repo">Репозиторий проекта — поддержите автора звездой</a>
+                        </div>
                     </div>
                 </div>
             </section>
@@ -457,9 +442,9 @@
         <div class="modal-box">
             <div class="modal-header"><h2 data-i18n="runtimes.create.title">Создать Runtime</h2><button class="modal-close" onclick="closeModal('create-runtime-modal')">&times;</button></div>
             <form onsubmit="return handleCreateRuntime(event)">
+                <div class="form-group"><label data-i18n="runtimes.field.name">Имя *</label><input type="text" name="name" required placeholder="llama.cpp"></div>
                 <div class="form-group"><label data-i18n="runtimes.field.workdir">Рабочая папка</label><input type="text" name="working_directory" placeholder="E:\tools\llama10444"></div>
                 <div class="form-group"><label data-i18n="runtimes.field.executable">Исполняемый файл *</label><input type="text" name="executable" required placeholder="llama-server.exe"></div>
-                <div class="form-group"><label data-i18n="runtimes.field.name">Имя *</label><input type="text" name="name" required placeholder="llama.cpp"></div>
                 <div class="form-group"><label data-i18n="runtimes.field.env">Окружение</label><div id="rt-create-env-container"></div>
                 <button type="button" class="btn btn-ghost btn-sm" onclick="addEnvRow('rt-create-env-container')">+ Переменная</button></div>
                 <div class="modal-actions"><button type="submit" class="btn btn-primary" data-i18n="runtimes.btn.create">Создать</button><button type="button" class="btn btn-ghost" onclick="closeModal('create-runtime-modal')" data-i18n="common.cancel">Отмена</button></div>
@@ -473,9 +458,9 @@
             <div class="modal-header"><h2 data-i18n="runtimes.edit.title">Изменить Runtime</h2><button class="modal-close" onclick="closeModal('edit-runtime-modal')">&times;</button></div>
             <form onsubmit="return handleEditRuntime(event)">
                 <input type="hidden" name="id">
+                <div class="form-group"><label data-i18n="runtimes.field.name">Имя *</label><input type="text" name="name" required placeholder="llama.cpp"></div>
                 <div class="form-group"><label data-i18n="runtimes.field.workdir">Рабочая папка</label><input type="text" name="working_directory" placeholder="E:\tools\llama10444"></div>
                 <div class="form-group"><label data-i18n="runtimes.field.executable">Исполняемый файл *</label><input type="text" name="executable" required placeholder="llama-server.exe"></div>
-                <div class="form-group"><label data-i18n="runtimes.field.name">Имя *</label><input type="text" name="name" required placeholder="llama.cpp"></div>
                 <div class="form-group"><label data-i18n="runtimes.field.env">Окружение</label><div id="rt-edit-env-container"></div>
                 <button type="button" class="btn btn-ghost btn-sm" onclick="addEnvRow('rt-edit-env-container')">+ Переменная</button></div>
                 <div class="modal-actions"><button type="submit" class="btn btn-primary" data-i18n="runtimes.btn.save">Сохранить</button><button type="button" class="btn btn-ghost" onclick="closeModal('edit-runtime-modal')" data-i18n="common.cancel">Отмена</button></div>

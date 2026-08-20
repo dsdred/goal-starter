@@ -131,6 +131,11 @@ func (h *RuntimesHandler) Create(w http.ResponseWriter, r *http.Request) {
 			writeError(w, 400, "validation failed")
 			return
 		}
+		var apiErr *apierrors.APIError
+		if errors.As(err, &apiErr) {
+			writeError(w, 409, apiErr.Message)
+			return
+		}
 		writeError(w, 500, err.Error())
 		return
 	}
@@ -152,6 +157,11 @@ func (h *RuntimesHandler) Update(w http.ResponseWriter, r *http.Request) {
 	entry := request.entry()
 	entry.ID = id
 	if err := h.runtimeSvc.UpdateRuntime(r.Context(), &entry); err != nil {
+		var apiErr *apierrors.APIError
+		if errors.As(err, &apiErr) {
+			writeError(w, 409, apiErr.Message)
+			return
+		}
 		writeError(w, 500, err.Error())
 		return
 	}

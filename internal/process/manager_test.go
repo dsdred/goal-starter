@@ -550,3 +550,36 @@ func TestContextCancellation(t *testing.T) {
 		t.Fatalf("expected exited after Stop, got %s", status.State)
 	}
 }
+
+func TestStartStop_intentionalStopNotFailed(t *testing.T) {
+	fake := fakeRuntime(t)
+	mgr := newTestManager(t)
+
+	spec := process.CommandSpec{
+		Executable: fake,
+		Args:       []string{"infinite"},
+	}
+	if err := mgr.Start(context.Background(), spec); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	time.Sleep(300 * time.Millisecond)
+	status := mgr.Status()
+	if status.State != process.StateRunning {
+		t.Fatalf("expected running, got %s", status.State)
+	}
+
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer stopCancel()
+	if err := mgr.Stop(stopCtx); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+
+	status = mgr.Status()
+	if status.State != process.StateExited {
+		t.Fatalf("expected exited after intentional stop, got %s", status.State)
+	}
+	if status.ExitClass != process.ExitSignaled && status.ExitClass != process.ExitKilled && status.ExitClass != process.ExitNormal {
+		t.Errorf("intentional stop must be classified as signaled/killed/normal, got exit class: %s (code: %v)", status.ExitClass, status.ExitCode)
+	}
+}
