@@ -3,6 +3,7 @@ package handlers
 import (
 	"io/fs"
 	"net/http"
+	"strings"
 
 	"github.com/dsdred/goal/internal/application"
 	"github.com/dsdred/goal/internal/process"
@@ -147,9 +148,31 @@ func (r *RouteRegistry) Build() http.Handler {
 	}
 
 	var handler http.Handler = mux
+	handler = r.applyCachePolicy(handler)
 	handler = r.applyRateLimit(handler)
 	handler = r.applyLogging(handler)
 	return handler
+}
+
+// applyCachePolicy sets Cache-Control headers based on request path.
+// API/auth: no-store (never cache dynamic data).
+// Static assets: no-store (never cache; guarantees fresh content after binary
+//
+//	replacement with no reliance on browser revalidation of old entries).
+//
+// Index/other: no-cache (always revalidate the HTML document).
+func (r *RouteRegistry) applyCachePolicy(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		switch {
+		case strings.HasPrefix(req.URL.Path, "/api/"):
+			w.Header().Set("Cache-Control", "no-store, private")
+		case strings.HasPrefix(req.URL.Path, "/static/"):
+			w.Header().Set("Cache-Control", "no-store")
+		default:
+			w.Header().Set("Cache-Control", "no-cache")
+		}
+		next.ServeHTTP(w, req)
+	})
 }
 
 func (r *RouteRegistry) requireAuth(next http.HandlerFunc) http.HandlerFunc {
