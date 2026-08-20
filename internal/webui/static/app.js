@@ -54,7 +54,6 @@ async function loadI18n(lang) {
 function setLanguage(lang) {
     currentLang = lang;
     localStorage.setItem('goal_lang', lang);
-    document.getElementById('lang-select').value = lang;
     const setLang = document.getElementById('set-lang');
     if (setLang) setLang.value = lang;
     loadI18n(lang);
@@ -74,7 +73,6 @@ function setTheme(theme) {
     currentTheme = theme;
     localStorage.setItem('goal_theme', theme);
     applyTheme();
-    document.getElementById('theme-select').value = theme;
     const setThemeEl = document.getElementById('set-theme');
     if (setThemeEl) setThemeEl.value = theme;
 }
@@ -83,8 +81,10 @@ function setTheme(theme) {
 
 async function init() {
     applyTheme();
-    document.getElementById('theme-select').value = currentTheme;
-    document.getElementById('lang-select').value = currentLang;
+    const setThemeEl = document.getElementById('set-theme');
+    if (setThemeEl) setThemeEl.value = currentTheme;
+    const setLangEl = document.getElementById('set-lang');
+    if (setLangEl) setLangEl.value = currentLang;
     await loadI18n(currentLang);
     document.getElementById('wizard-form').addEventListener('submit', handleWizardSubmit);
     document.getElementById('wiz-autostart').addEventListener('change', function () {

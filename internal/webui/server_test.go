@@ -89,3 +89,34 @@ func TestEmbeddedJavaScriptWindowExportsResolve(t *testing.T) {
 		}
 	}
 }
+
+func TestEmbeddedJavaScriptDOMIDsExistInTemplate(t *testing.T) {
+	jsSrc, err := fs.ReadFile(staticFS, "static/app.js")
+	if err != nil {
+		t.Fatalf("read embedded app.js: %v", err)
+	}
+	htmlSrc, err := fs.ReadFile(templateFS, "templates/index.html")
+	if err != nil {
+		t.Fatalf("read embedded index.html: %v", err)
+	}
+	js := string(jsSrc)
+	html := string(htmlSrc)
+
+	idRe := regexp.MustCompile(`getElementById\('([^']+)'\)`)
+	ids := idRe.FindAllStringSubmatch(js, -1)
+	if len(ids) == 0 {
+		t.Fatal("no getElementById calls found in app.js")
+	}
+
+	seen := map[string]bool{}
+	for _, m := range ids {
+		id := m[1]
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		if !strings.Contains(html, `id="`+id+`"`) && !strings.Contains(html, `id='`+id+`'`) {
+			t.Errorf("getElementById('%s') in app.js has no matching id in index.html", id)
+		}
+	}
+}
