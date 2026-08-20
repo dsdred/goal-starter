@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -52,5 +53,39 @@ func TestEmbeddedJavaScriptResetsLoginStateAcrossAuthTransitions(t *testing.T) {
 
 	if got := strings.Count(js, "showLogin();"); got < 3 {
 		t.Fatalf("showLogin() calls = %d, want at least 3 for logout and session-check failure paths", got)
+	}
+}
+
+func TestEmbeddedJavaScriptWindowExportsResolve(t *testing.T) {
+	source, err := fs.ReadFile(staticFS, "static/app.js")
+	if err != nil {
+		t.Fatalf("read embedded app.js: %v", err)
+	}
+	js := string(source)
+
+	exportRe := regexp.MustCompile(`window\.(\w+)\s*=\s*(\w+);`)
+	exports := exportRe.FindAllStringSubmatch(js, -1)
+	if len(exports) == 0 {
+		t.Fatal("no window exports found in app.js")
+	}
+
+	definedRe := regexp.MustCompile(`(?m)(?:function\s+(\w+)\b|const\s+(\w+)\s*=|let\s+(\w+)\s*=|var\s+(\w+)\s*=)`)
+	defined := map[string]bool{}
+	for _, m := range definedRe.FindAllStringSubmatch(js, -1) {
+		for _, g := range m[1:] {
+			if g != "" {
+				defined[g] = true
+			}
+		}
+	}
+
+	for _, exp := range exports {
+		prop, val := exp[1], exp[2]
+		if prop != val {
+			continue
+		}
+		if !defined[val] {
+			t.Errorf("window.%s export references undefined symbol %q — would cause ReferenceError at init", prop, val)
+		}
 	}
 }

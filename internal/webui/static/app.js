@@ -1235,7 +1235,6 @@ window.addEnvRow = addEnvRow;
 window.onWizRtModeChange = onWizRtModeChange;
 window.setTheme = setTheme;
 window.setLanguage = setLanguage;
-window.selectRtCard = selectRtCard;
 window.renderModels = renderModels;
 window.renderHistory = renderHistory;
 window.closeRTDelete = closeRTDelete;
