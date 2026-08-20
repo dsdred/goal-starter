@@ -58,7 +58,7 @@ GoAl Windows-релизы на данный момент **не подписан
 - HTTP-only session cookies, bcrypt-хеширование паролей
 - CSRF-защита для всех unsafe методов
 - Bind по умолчанию: `127.0.0.1`
-- `authEnabled=false` отклоняется для non-loopback адресов
+- `authEnabled=false` на non-loopback адресе разрешён с prominent WARN (startup не блокируется)
 - **Предупреждение публичного режима:** если авторизация отключена и GoAl привязан к `0.0.0.0`, все API-эндпоинты доступны без credentials.
 > Подробнее: [SECURITY.md](docs/SECURITY.md)
 

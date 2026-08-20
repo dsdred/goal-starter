@@ -78,7 +78,7 @@ preserves the stored map, `{}` clears it, and an explicit map replaces it.
 Each model entry in `goal.json` uses the legacy v5 format. At startup, `SeedFromConfig`
 folds old model data (`path`, `arguments`) into the launch args of the corresponding
 GoAl 2.0 Model (derived from `profiles`). New models created via the API/UI use the
-simplified format: `id`, `name`, `runtimeId`, `args`, `environment`.
+simplified format: `id`, `name`, `runtime_id`, `args`, `environment`.
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|

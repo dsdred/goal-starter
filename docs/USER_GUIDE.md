@@ -117,7 +117,7 @@ The `goal.json` file is located in the same directory as the binary. It is **exc
 | `webPort` | HTTP server port | `8088` | No |
 | `dataDir` | Directory for storing data | `./data` | No |
 | `adminUser` | Administrator username | `admin` | No |
-| `adminPassword` | Administrator password (empty = no auth) | `""` | No |
+| `adminPassword` | Administrator password (required when `authEnabled=true`) | `""` | Conditional |
 | `authEnabled` | Enable authentication | `false` | No |
 | `runtimes` | List of AI runtimes | `[]` | No |
 | `models` | List of models | `[]` | No |
@@ -385,7 +385,7 @@ this file is not an encrypted secret vault.
 - **Model** — configured launch definition (runtime reference + launch args + environment)
 - **Instance** — a process launch (runtime entity) with a lifecycle state
 
-One model can create multiple instances. Stopping an instance does not delete the model. Restart creates a new instance (the old one becomes terminal).
+One model can create multiple instances. Stopping an instance does not delete the model. Restart reuses the same instance: the old process is stopped and a new process is started under the same instance ID.
 
 ### Instances vs Instance History
 
@@ -400,7 +400,7 @@ When an instance stops or fails, it moves from Instances to History automaticall
 
 - **User-initiated Stop** → instance reaches `exited` state (shown as STOPPED in UI). This is a normal, successful outcome.
 - **Unexpected process crash** → instance reaches `failed` state (shown as FAILED in UI).
-- **Restart** → old instance becomes `exited`, new instance becomes `running`.
+- **Restart** → the same instance transitions from terminal back to `running` (new PID, same instance ID).
 
 ### CLI Management
 
@@ -454,7 +454,7 @@ curl -X POST http://127.0.0.1:8088/api/v1/models \
   -d '{
     "id": "my-model",
     "name": "My Model",
-    "runtimeId": "ollama",
+    "runtime_id": "ollama",
     "active": true
   }'
 ```
@@ -469,7 +469,7 @@ curl -X POST http://127.0.0.1:8088/api/v1/models \
   -d '{
     "id": "qwen-35b",
     "name": "Qwen 3.6 35B",
-    "runtimeId": "llama-cpp",
+    "runtime_id": "llama-cpp",
     "args": ["-m", "E:\\models\\qwen\\Qwen.gguf", "--mmproj", "E:\\models\\qwen\\mmproj.gguf", "-ngl", "99", "-c", "131072", "--host", "127.0.0.1", "--port", "8085"],
     "active": true
   }'

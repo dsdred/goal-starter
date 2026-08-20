@@ -117,7 +117,7 @@ sudo ./goal          # Linux
 | `webPort` | Порт HTTP-сервера | `8088` | Нет |
 | `dataDir` | Каталог для хранения данных | `./data` | Нет |
 | `adminUser` | Имя администратора | `admin` | Нет |
-| `adminPassword` | Пароль администратора (пустой = без авторизации) | `""` | Нет |
+| `adminPassword` | Пароль администратора (обязателен при `authEnabled=true`) | `""` | Условное |
 | `authEnabled` | Включить авторизацию | `false` | Нет |
 | `runtimes` | Список AI-рантайнов | `[]` | Нет |
 | `models` | Список моделей | `[]` | Нет |
@@ -379,7 +379,7 @@ sudo ./goal          # Linux
 - **Model** — настроенное определение запуска (ссылка на рантайм + аргументы + окружение)
 - **Instance** — запущенный процесс (runtime entity)
 
-Одна модель может создавать множество экземпляров. Остановка экземпляра не удаляет модель. Перезапуск создаёт новый экземпляр.
+Одна модель может создавать множество экземпляров. Остановка экземпляра не удаляет модель. Перезапуск переиспользует тот же экземпляр: старый процесс останавливается, новый процесс запускается под тем же ID экземпляра.
 
 ### Управление через CLI
 
@@ -433,7 +433,7 @@ curl -X POST http://127.0.0.1:8088/api/v1/models \
   -d '{
     "id": "my-model",
     "name": "Моя модель",
-    "runtimeId": "ollama",
+    "runtime_id": "ollama",
     "active": true
   }'
 ```
@@ -448,7 +448,7 @@ curl -X POST http://127.0.0.1:8088/api/v1/models \
   -d '{
     "id": "qwen-35b",
     "name": "Qwen 3.6 35B",
-    "runtimeId": "llama-cpp",
+    "runtime_id": "llama-cpp",
     "args": ["-m", "E:\\models\\qwen\\Qwen.gguf", "--mmproj", "E:\\models\\qwen\\mmproj.gguf", "-ngl", "99", "-c", "131072", "--host", "127.0.0.1", "--port", "8085"],
     "active": true
   }'
@@ -575,8 +575,7 @@ curl "http://127.0.0.1:8088/api/v1/logs?page=2&page_size=50"
 |----------|---------|
 | Аутентификация | HTTP-only cookies, session-based |
 | CSRF защита | Да, для всех unsafe методов |
-| Rate limiting | 100 запросов/мин на IP |
-| Login rate limit | 5 попыток / 5 минут |
+| Rate limiting | **Не реализован** (известное ограничение) |
 | Limit request body | http.MaxBytesReader |
 | Bind по умолчанию | 127.0.0.1 (localhost) |
 
