@@ -10,6 +10,7 @@ let refreshTimer = null;
 let runtimesData = [];
 let modelsData = [];
 let instancesData = [];
+let historyData = [];
 
 let wizStep = 1;
 let wizEditId = null;
@@ -37,6 +38,9 @@ function applyI18n() {
     });
     document.querySelectorAll('[data-i18n-placeholder]').forEach(function (el) {
         el.placeholder = t(el.dataset.i18nPlaceholder);
+    });
+    document.querySelectorAll('[data-i18n-title]').forEach(function (el) {
+        el.title = t(el.dataset.i18nTitle);
     });
     document.title = t('app.title');
 }
@@ -133,9 +137,7 @@ function updateSidebarAuth(user) {
         userEl.textContent = user;
         if (logoutBtn) logoutBtn.style.display = '';
     } else {
-        el.style.display = 'flex';
-        userEl.textContent = user || '—';
-        if (logoutBtn) logoutBtn.style.display = 'none';
+        el.style.display = 'none';
     }
 }
 
@@ -221,12 +223,13 @@ async function api(path, opts) {
 // ─── Data loading ───────────────────────────────────────────────────────────
 
 async function reloadAllData() {
-    const [rt, mo, ins] = await Promise.allSettled([
-        api('/runtimes'), api('/models'), api('/instances')
+    const [rt, mo, ins, hist] = await Promise.allSettled([
+        api('/runtimes'), api('/models'), api('/instances'), api('/history')
     ]);
     runtimesData = rt.status === 'fulfilled' ? rt.value : [];
     modelsData = mo.status === 'fulfilled' ? mo.value : [];
     instancesData = ins.status === 'fulfilled' ? ins.value : [];
+    historyData = hist.status === 'fulfilled' ? hist.value : [];
     loadVersion();
     updateFilterOptions();
 }
@@ -357,7 +360,7 @@ function renderModels() {
         list.innerHTML = '';
         empty.style.display = modelsData.length === 0 ? 'block' : 'none';
         if (modelsData.length > 0) {
-            list.innerHTML = '<div class="empty-state" style="padding:1.5rem;"><p style="font-size:0.85rem;">No matching models.</p></div>';
+            list.innerHTML = '<div class="empty-state" style="padding:1.5rem;"><p style="font-size:0.85rem;">' + esc(t('models.filter.no_match')) + '</p></div>';
         }
         return;
     }
@@ -374,15 +377,17 @@ function renderModels() {
             actionBtns = iconBtn('↻', t('models.actions.restart'), 'warning', 'restartModel', m.id) +
                 iconBtn('■', t('models.actions.stop'), 'danger', 'stopModel', m.id);
         } else if (status === 'starting' || status === 'stopping') {
-            actionBtns = '<span class="hint-text">' + status + '...</span>';
+            actionBtns = '<span class="hint-text model-transitional">' + t('models.status.' + status) + '</span>';
         } else {
             actionBtns = iconBtn('▶', t('models.actions.start'), 'success', 'startModel', m.id);
         }
 
         return '<div class="model-row">' +
             '<div class="model-row-main">' +
-                '<div class="model-row-name">' + esc(m.name) + ' <span class="status-badge ' + status + '">' + t('models.status.' + status) + '</span></div>' +
-                '<div class="model-row-sub">' + esc(getRuntimeName(m.runtime_id)) +
+                '<div class="model-row-name">' + esc(m.name) + '</div>' +
+                '<div class="model-row-sub">' +
+                    '<span class="status-badge ' + status + '">' + t('models.status.' + status) + '</span>' +
+                    ' ' + esc(getRuntimeName(m.runtime_id)) +
                     (m.active ? ' <span class="autostart-indicator" title="' + t('models.autostart') + '">A</span>' : '') +
                     (inst && inst.pid ? ' · PID ' + inst.pid : '') +
                     (uptime ? ' · ' + uptime : '') +
@@ -403,7 +408,7 @@ function renderModels() {
 async function startModel(modelId) {
     try {
         await api('/models/' + modelId + '/start', { method: 'POST' });
-        showToast(t('common.loading'), 'success');
+        showToast(t('common.started'), 'success');
         await reloadAllData(); renderAll();
     } catch (e) { showToast(friendlyError(e), 'error'); }
 }
@@ -411,7 +416,7 @@ async function startModel(modelId) {
 async function stopModel(modelId) {
     try {
         await api('/models/' + modelId + '/stop', { method: 'POST' });
-        showToast(t('common.loading'), 'success');
+        showToast(t('common.stopped'), 'success');
         await reloadAllData(); renderAll();
     } catch (e) { showToast(friendlyError(e), 'error'); }
 }
@@ -419,7 +424,7 @@ async function stopModel(modelId) {
 async function restartModel(modelId) {
     try {
         await api('/models/' + modelId + '/restart', { method: 'POST' });
-        showToast(t('common.loading'), 'success');
+        showToast(t('common.restarted'), 'success');
         await reloadAllData(); renderAll();
     } catch (e) { showToast(friendlyError(e), 'error'); }
 }
@@ -428,8 +433,8 @@ function deleteModel(id) {
     const m = modelsData.find(function (x) { return x.id === id; });
     const name = m ? m.name : id;
     const activeInsts = getActiveInstances(id);
-    let msg = 'Delete "' + name + '"?';
-    if (activeInsts.length > 0) msg += '\n' + activeInsts.length + ' active instance(s) will be stopped.';
+    let msg = t('models.delete.confirm', { name: name });
+    if (activeInsts.length > 0) msg += '\n' + t('models.delete.active_warning', { count: activeInsts.length });
     showConfirm(msg, async function () {
         try {
             await api('/models/' + id, { method: 'DELETE' });
@@ -474,7 +479,8 @@ function updateLogInstanceSelect() {
     if (logsEmpty) logsEmpty.style.display = allInsts.length === 0 ? 'block' : 'none';
     sel.innerHTML = '<option value="">' + t('logs.select.all') + '</option>' +
         allInsts.map(function (i) {
-            const label = getModelName(i.model_id) + ' | ' + i.id.slice(0, 12) + '… | ' + i.state;
+            const stateLabel = historyStateLabel(i.state);
+            const label = getModelName(i.model_id) + ' | ' + i.id.slice(0, 12) + '… | ' + stateLabel;
             return '<option value="' + esc(i.id) + '">' + esc(label) + '</option>';
         }).join('');
     sel.value = cur;
@@ -493,10 +499,11 @@ function updateLogInstanceBar(instId) {
     const inst = instancesData.find(function (i) { return i.id === instId; });
     if (!inst) { bar.style.display = 'none'; return; }
     const started = fmtTime(inst.started_at);
+    const stateLabel = historyStateLabel(inst.state);
     bar.innerHTML = '<span class="log-bar-label">' + t('logs.bar.model') + ':</span> ' + esc(getModelName(inst.model_id)) +
         ' &nbsp;|&nbsp; <span class="log-bar-label">' + t('logs.bar.instance') + ':</span> <code>' + esc(inst.id.slice(0, 16)) + '</code>' +
         ' &nbsp;|&nbsp; <span class="log-bar-label">' + t('logs.bar.pid') + ':</span> ' + (inst.pid || '—') +
-        ' &nbsp;|&nbsp; <span class="log-bar-label">' + t('logs.bar.state') + ':</span> <span class="status-badge ' + esc(inst.state) + '">' + esc(inst.state) + '</span>' +
+        ' &nbsp;|&nbsp; <span class="log-bar-label">' + t('logs.bar.state') + ':</span> <span class="status-badge ' + esc(inst.state) + '">' + esc(stateLabel) + '</span>' +
         ' &nbsp;|&nbsp; <span class="log-bar-label">' + t('logs.bar.started') + ':</span> ' + started;
     bar.style.display = 'flex';
 }
@@ -525,6 +532,9 @@ function appendLogLine(d) {
     if (search && (d.message || '').toLowerCase().indexOf(search) === -1) return;
 
     const view = document.getElementById('log-view');
+    const emptyEl = document.getElementById('logs-empty');
+    if (emptyEl) emptyEl.style.display = 'none';
+
     const div = document.createElement('div');
     div.className = 'log-line ' + stream;
     const ts = d.time ? new Date(d.time).toLocaleTimeString() : '';
@@ -532,7 +542,8 @@ function appendLogLine(d) {
     div.innerHTML = '<span class="log-time">' + ts + '</span>' + instLabel + '<span class="log-source">[' + esc(stream) + ']</span>' + esc(d.message);
     view.appendChild(div);
 
-    while (view.children.length > 2000) view.removeChild(view.firstChild);
+    const lines = view.querySelectorAll('.log-line');
+    while (lines.length > 2000) lines[0].remove();
     if (document.getElementById('log-autoscroll').checked) {
         view.scrollTop = view.scrollHeight;
     }
@@ -634,14 +645,26 @@ function loadWizardRuntimeCards() {
     document.getElementById('wiz-rt-search').value = '';
     document.getElementById('wiz-rt-selected').style.display = 'none';
     document.getElementById('wiz-rt-dropdown').style.display = 'none';
+    if (runtimesData.length === 0 && !wizEditId) {
+        document.querySelector('input[name=wiz-rt-mode][value=new]').checked = true;
+        onWizRtModeChange();
+    }
     renderRtDropdown();
 }
 
 var rtSelectedId = null;
 
 function renderRtDropdown() {
-    const query = document.getElementById('wiz-rt-search').value.toLowerCase();
     const dd = document.getElementById('wiz-rt-dropdown');
+    const search = document.getElementById('wiz-rt-search');
+    if (runtimesData.length === 0) {
+        if (search) search.style.display = 'none';
+        dd.innerHTML = '<div class="rt-dropdown-empty">' + esc(t('wizard.rt.empty')) + '</div>';
+        dd.style.display = 'block';
+        return;
+    }
+    if (search) search.style.display = '';
+    const query = search ? search.value.toLowerCase() : '';
     const filtered = runtimesData.filter(function (r) {
         return !query || r.name.toLowerCase().indexOf(query) !== -1;
     });
@@ -753,7 +776,7 @@ async function handleWizardSubmit(e) {
         if (rtMode === 'new') {
             const rtName = document.getElementById('wiz-rt-name').value.trim();
             const rtExe = document.getElementById('wiz-rt-executable').value.trim();
-            if (!rtName || !rtExe) { wizError('Fill runtime fields'); return; }
+            if (!rtName || !rtExe) { wizError(t('common.error.fill_rt')); return; }
             const rtBody = { name: rtName, executable: rtExe };
             const rtWd = document.getElementById('wiz-rt-workdir').value.trim();
             if (rtWd) rtBody.working_directory = rtWd;
@@ -781,7 +804,7 @@ async function handleWizardSubmit(e) {
             showToast('"' + name + '" ' + t('common.saved'), 'success');
         } else {
             await api('/models', { method: 'POST', body: JSON.stringify(body) });
-            showToast('"' + name + '" created', 'success');
+            showToast('"' + name + '" ' + t('common.created'), 'success');
         }
         closeWizard();
         await reloadAllData(); renderAll();
@@ -830,12 +853,15 @@ function collectEnvRows(containerId) {
 
 function renderAdvRuntimes() {
     const empty = document.getElementById('runtimes-empty');
+    const tableWrap = document.getElementById('runtimes-table-wrap');
     if (runtimesData.length === 0) {
         document.getElementById('adv-runtimes-body').innerHTML = '';
         if (empty) empty.style.display = 'block';
+        if (tableWrap) tableWrap.style.display = 'none';
         return;
     }
     if (empty) empty.style.display = 'none';
+    if (tableWrap) tableWrap.style.display = '';
     document.getElementById('adv-runtimes-body').innerHTML = runtimesData.map(function (r) {
         return '<tr><td>' + esc(r.name) + '</td><td>' + esc(r.executable) + '</td><td>' + esc(r.working_directory || '—') + '</td>' +
             '<td class="actions-cell"><button class="btn btn-ghost btn-sm" onclick="editRuntime(\'' + safeId(r.id) + '\')">' + t('runtimes.actions.edit') + '</button> ' +
@@ -1026,16 +1052,20 @@ async function confirmRTCascade() {
 
 function renderAdvInstances() {
     const empty = document.getElementById('instances-empty');
+    const tableWrap = document.getElementById('instances-table-wrap');
     const active = instancesData.filter(function (i) { return isActive(i.state); });
     if (active.length === 0) {
-        document.getElementById('adv-instances-body').innerHTML = '<tr class="empty-row"><td colspan="8"><div class="empty-state"><p>' + esc(t('instances.empty')) + '</p><small class="hint-text">' + esc(t('instances.empty.hint')) + '</small></div></td></tr>';
+        document.getElementById('adv-instances-body').innerHTML = '';
+        if (empty) empty.style.display = 'block';
+        if (tableWrap) tableWrap.style.display = 'none';
         return;
     }
     if (empty) empty.style.display = 'none';
+    if (tableWrap) tableWrap.style.display = '';
     document.getElementById('adv-instances-body').innerHTML = active.map(function (i) {
         return '<tr><td style="font-family:var(--font-mono);font-size:0.78rem;">' + esc(i.id.slice(0, 16)) + '</td>' +
             '<td>' + esc(getModelName(i.model_id)) + '</td>' +
-            '<td><span class="status-badge ' + esc(i.state) + '">' + esc(i.state) + '</span></td>' +
+            '<td><span class="status-badge ' + esc(i.state) + '">' + esc(t('models.status.' + i.state) || i.state) + '</span></td>' +
             '<td>' + (i.pid || '—') + '</td><td>' + fmtTime(i.started_at) + '</td><td>' + fmtTime(i.stopped_at) + '</td>' +
             '<td>' + (i.exit_code != null ? i.exit_code : '—') + '</td>' +
             '<td class="actions-cell"><button class="btn btn-ghost btn-sm" onclick="viewInstanceLogs(\'' + safeId(i.id) + '\')">' + t('instances.actions.logs') + '</button>' +
@@ -1058,13 +1088,22 @@ async function restartInstance(id) {
 
 function isTerminal(s) { return s === 'exited' || s === 'failed' || s === 'stale'; }
 
+function historyStateLabel(s) {
+    var key = 'history.state.' + s;
+    var val = t(key);
+    if (val !== key) return val;
+    var mkey = 'models.status.' + s;
+    var mval = t(mkey);
+    return mval !== mkey ? mval : s;
+}
+
 function renderHistory() {
     const empty = document.getElementById('history-empty');
+    const tableWrap = document.getElementById('history-table-wrap');
     const stateF = document.getElementById('hf-state').value;
     const modelF = document.getElementById('hf-model').value;
 
-    let filtered = instancesData.filter(function (i) {
-        if (!isTerminal(i.state)) return false;
+    let filtered = historyData.filter(function (i) {
         if (stateF && i.state !== stateF) return false;
         if (modelF && i.model_id !== modelF) return false;
         return true;
@@ -1076,14 +1115,16 @@ function renderHistory() {
     });
 
     if (filtered.length === 0) {
-        document.getElementById('history-body').innerHTML = '<tr class="empty-row"><td colspan="8"><div class="empty-state"><p>' + esc(t('history.empty')) + '</p><small class="hint-text">' + esc(t('history.empty.hint')) + '</small></div></td></tr>';
+        if (empty) empty.style.display = 'block';
+        if (tableWrap) tableWrap.style.display = 'none';
         return;
     }
     if (empty) empty.style.display = 'none';
+    if (tableWrap) tableWrap.style.display = '';
     document.getElementById('history-body').innerHTML = filtered.slice(0, 200).map(function (i) {
         return '<tr><td>' + esc(getModelName(i.model_id)) + '</td>' +
             '<td style="font-family:var(--font-mono);font-size:0.78rem;">' + esc(i.id.slice(0, 12)) + '</td>' +
-            '<td><span class="status-badge ' + esc(i.state) + '">' + esc(i.state) + '</span></td>' +
+            '<td><span class="status-badge ' + esc(i.state) + '">' + esc(historyStateLabel(i.state)) + '</span></td>' +
             '<td>' + (i.pid || '—') + '</td>' +
             '<td>' + fmtTime(i.started_at) + '</td><td>' + fmtTime(i.stopped_at) + '</td>' +
             '<td>' + (i.exit_code != null ? i.exit_code : '—') + '</td>' +
@@ -1118,7 +1159,8 @@ async function confirmCleanup() {
 async function loadSettings() {
     try {
         const m = await api('/metrics');
-        document.getElementById('set-listen').textContent = (m.listen_address || '127.0.0.1') + ':' + (m.web_port || '');
+        document.getElementById('set-listen').textContent = m.listen_address || '127.0.0.1';
+        document.getElementById('set-port').textContent = m.web_port ? String(m.web_port) : '-';
         document.getElementById('set-auth').textContent = m.auth_enabled ? t('settings.server.auth.on') : t('settings.server.auth.off');
     } catch {}
 }
@@ -1126,19 +1168,20 @@ async function loadSettings() {
 // ─── Error messages ─────────────────────────────────────────────────────────
 
 function friendlyError(err) {
-    let msg = (err && err.message) || 'Unknown error';
+    let msg = (err && err.message) || '';
     const patterns = [
-        [/model not found/i, 'Model not found. It may have been deleted.'],
-        [/runtime not found/i, 'Runtime not found. It may have been deleted.'],
-        [/instance not found/i, 'Instance not found.'],
-        [/in use|referenced|depend/i, 'Object is used by other records and cannot be deleted.'],
-        [/port.*in use|address already in use/i, 'Port is already in use by another process.'],
-        [/executable.*not found|no such file/i, 'Executable not found. Check the path.'],
+        [/model not found/i, 'err.model_not_found'],
+        [/runtime not found/i, 'err.runtime_not_found'],
+        [/instance not found/i, 'err.instance_not_found'],
+        [/in use|referenced|depend/i, 'err.in_use'],
+        [/port.*in use|address already in use/i, 'err.port_in_use'],
+        [/executable.*not found|no such file/i, 'err.executable_not_found'],
     ];
     for (let i = 0; i < patterns.length; i++) {
-        if (patterns[i][0].test(msg)) return patterns[i][1];
+        if (patterns[i][0].test(msg)) return t(patterns[i][1]);
     }
-    return msg.charAt(0).toUpperCase() + msg.slice(1);
+    if (!msg) return t('err.unknown');
+    return msg;
 }
 
 // ─── Modal helpers ──────────────────────────────────────────────────────────
@@ -1233,6 +1276,9 @@ window.reloadAllData = reloadAllData;
 window.addWizEnvRow = addWizEnvRow;
 window.addEnvRow = addEnvRow;
 window.onWizRtModeChange = onWizRtModeChange;
+window.renderRtDropdown = renderRtDropdown;
+window.rtDropdownKeydown = rtDropdownKeydown;
+window.selectRtItem = selectRtItem;
 window.setTheme = setTheme;
 window.setLanguage = setLanguage;
 window.renderModels = renderModels;

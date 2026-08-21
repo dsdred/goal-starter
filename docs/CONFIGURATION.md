@@ -161,12 +161,16 @@ Hot-reload is implemented in `internal/config` but not yet wired into main start
 
 ## Active Instances vs Instance History
 
-| Page | States shown | Actions |
-|------|-------------|---------|
-| **Instances** (Экземпляры) | Active only: `starting`, `running`, `stopping` | Logs, Stop, Restart |
-| **Instance History** (История) | Terminal only: `exited`, `failed`, `stale` | Logs, Cleanup |
+| Page | States shown | Source | Actions |
+|------|-------------|--------|---------|
+| **Instances** (Экземпляры) | Active only: `starting`, `running`, `stopping` | In-memory supervisor | Logs, Stop, Restart |
+| **Instance History** (История) | Terminal only: `exited`, `failed`, `stale` | Persistent repository (`goal_repo.json`) | Logs, Cleanup |
 
-Terminal instances move from Instances to History automatically when they reach a terminal state. History cleanup deletes terminal instances only; active instances are never affected.
+Terminal instances move from Instances to History automatically when they reach a terminal state. History is repository-backed: records persist across GoAl restarts. The `GET /api/v1/history` endpoint reads terminal instances directly from the persistent store, ensuring they remain visible after process restart. History cleanup deletes terminal instances only; active instances are never affected.
+
+## Web UI Sidebar
+
+The sidebar footer contains compact Theme and Language selectors, a server status indicator with version, and (when authentication is enabled) the authenticated username with a Logout button. When authentication is disabled, no username or Logout is displayed.
 
 ## Server settings in Web UI
 

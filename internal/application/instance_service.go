@@ -100,6 +100,23 @@ func (s *InstanceService) GetModelStatus(ctx context.Context, modelID string) (*
 	return summary, nil
 }
 
+// ListHistory returns terminal instances from the persistent repository.
+// Unlike ListInstances (in-memory supervisor), this survives GoAl restart.
+func (s *InstanceService) ListHistory(ctx context.Context) ([]*domain.LaunchInstance, error) {
+	entries, err := s.repo.ListInstances()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*domain.LaunchInstance, 0, len(entries))
+	for _, e := range entries {
+		dom := domain.ToDomain(e)
+		if dom.IsTerminal() {
+			out = append(out, dom)
+		}
+	}
+	return out, nil
+}
+
 // ModelStatusSummary holds instance summary for a model.
 type ModelStatusSummary struct {
 	ModelID    string                       `json:"model_id"`

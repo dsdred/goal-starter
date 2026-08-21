@@ -268,10 +268,11 @@ After starting, GoAl is available at: **http://127.0.0.1:8088**
 - **Instance Management** — start, stop, restart
 - **Runtime CRUD** — configure AI runtimes
 - **Model CRUD** — configure launch definitions (runtime + launch args + environment)
+- **Instance History** — persistent terminal instance records (survives restart)
 - **Health Monitoring** — check runtime availability
 - **Metrics** — built-in application metrics
-- **Theme** — System / Dark / Light (persisted in browser localStorage)
-- **Language** — Russian / English (persisted in browser localStorage)
+- **Theme** — System / Dark / Light (sidebar footer, persisted in browser localStorage)
+- **Language** — Russian / English (sidebar footer, persisted in browser localStorage)
 
 ### Theme and Language
 
@@ -318,6 +319,7 @@ All API calls start with: `http://127.0.0.1:8088`
 |--------|------|-------------|
 | GET | `/api/v1/instances` | List all instances |
 | GET | `/api/v1/instances/{id}` | Instance status |
+| GET | `/api/v1/history` | Terminal instances (persists across restart) |
 | POST | `/api/v1/instances/{id}/stop` | Stop instance |
 | POST | `/api/v1/instances/{id}/restart` | Restart instance |
 
@@ -394,7 +396,11 @@ One model can create multiple instances. Stopping an instance does not delete th
 | **Instances** | Active processes only (`starting`, `running`, `stopping`) | Logs, Stop, Restart |
 | **Instance History** | Terminal runs only (`exited`, `failed`, `stale`) | Logs, Cleanup |
 
-When an instance stops or fails, it moves from Instances to History automatically. History cleanup removes terminal instances (all, older than 7 days, or older than 30 days). Active instances are never deleted by cleanup.
+When an instance stops or fails, it moves from Instances to History automatically.
+History is **repository-backed**: terminal instances are persisted in `goal_repo.json`
+and survive GoAl restart. The `/api/v1/history` endpoint returns these persistent
+records. History cleanup removes terminal instances (all, older than 7 days, or
+older than 30 days). Active instances are never deleted by cleanup.
 
 ### Stop behavior
 

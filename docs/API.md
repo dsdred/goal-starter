@@ -60,6 +60,7 @@ Instances are running processes created from models.
 |--------|------|------|------|-------------|
 | `GET` | `/api/v1/instances` | Yes | — | List all instances. |
 | `GET` | `/api/v1/instances/{id}` | Yes | — | Instance detail. |
+| `GET` | `/api/v1/history` | Yes | — | List terminal instances (repository-backed, persists across restart). |
 | `POST` | `/api/v1/instances/start` | Yes | Yes | Start a new instance from a model. |
 | `POST` | `/api/v1/instances/{id}/stop` | Yes | Yes | Stop an instance. |
 | `POST` | `/api/v1/instances/{id}/restart` | Yes | Yes | Restart an instance. |

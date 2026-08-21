@@ -248,11 +248,22 @@
                 <button class="nav-item nav-adv" data-view="adv-settings" onclick="navigate('adv-settings')"><span data-i18n="nav.settings">Настройки</span></button>
             </nav>
             <div class="sidebar-footer">
+                <div class="sidebar-footer-controls">
+                    <select id="set-theme" class="mini-select" onchange="setTheme(this.value)" title="">
+                        <option value="system" data-i18n="settings.interface.theme.system">System</option>
+                        <option value="dark" data-i18n="settings.interface.theme.dark">Dark</option>
+                        <option value="light" data-i18n="settings.interface.theme.light">Light</option>
+                    </select>
+                    <select id="set-lang" class="mini-select" onchange="setLanguage(this.value)" title="">
+                        <option value="ru" data-i18n="settings.interface.language.ru">Рус</option>
+                        <option value="en" data-i18n="settings.interface.language.en">EN</option>
+                    </select>
+                </div>
                 <div class="server-status">
                     <span class="status-dot online"></span>
                     <span data-i18n="sidebar.status">Сервер</span>
+                    <span class="server-version-inline" id="server-version"></span>
                 </div>
-                <div class="server-version" id="server-version"></div>
                 <div class="sidebar-auth" id="sidebar-auth">
                     <span class="sidebar-auth-user" id="sidebar-user"></span>
                     <button class="btn btn-ghost btn-sm" onclick="handleLogout()" data-i18n="auth.logout" id="sidebar-logout" style="display:none;">Выйти</button>
@@ -273,10 +284,10 @@
                     <select id="mf-runtime" onchange="renderModels()"><option value="" data-i18n="models.filter.all_runtimes">All Runtimes</option></select>
                     <select id="mf-state" onchange="renderModels()">
                         <option value="" data-i18n="models.filter.all_states">All States</option>
-                        <option value="running">running</option>
-                        <option value="stopped">stopped</option>
-                        <option value="starting">starting</option>
-                        <option value="stopping">stopping</option>
+                        <option value="running" data-i18n="models.status.running">Running</option>
+                        <option value="stopped" data-i18n="models.status.stopped">Stopped</option>
+                        <option value="starting" data-i18n="models.status.starting">Starting</option>
+                        <option value="stopping" data-i18n="models.status.stopping">Stopping</option>
                     </select>
                     <label class="toggle-label"><input type="checkbox" id="mf-autostart" onchange="renderModels()"><span data-i18n="models.filter.autostart">Автостарт</span></label>
                 </div>
@@ -292,25 +303,26 @@
                 <div class="view-header">
                     <h1 data-i18n="logs.title">Логи</h1>
                 </div>
-                <div class="empty-state" id="logs-empty" style="display:none;">
-                    <p data-i18n="logs.empty">Нет экземпляров для просмотра логов.</p>
-                    <small class="hint-text" data-i18n="logs.empty.hint">Запустите модель, чтобы увидеть логи в реальном времени.</small>
-                </div>
                 <div class="logs-toolbar">
                     <select id="log-instance-select" onchange="switchLogInstance()"><option value="" data-i18n="logs.select.all">All Instances</option></select>
-                    <select id="log-stream-filter" data-i18n-title="logs.filter.title">
+                    <select id="log-stream-filter" title="">
                         <option value="" data-i18n="logs.filter.all">All</option>
                         <option value="stdout">stdout</option>
                         <option value="stderr">stderr</option>
                         <option value="system">system</option>
                     </select>
                     <input type="text" id="log-search" placeholder="Search..." data-i18n-placeholder="logs.search" oninput="applyLogSearch()">
-                    <label class="toggle-label log-autoscroll-label"><input type="checkbox" id="log-autoscroll" checked><span data-i18n="logs.autoscroll">Автопрокрутка</span></label>
+                    <label class="toggle-label"><input type="checkbox" id="log-autoscroll" checked><span data-i18n="logs.autoscroll">Автопрокрутка</span></label>
                     <button class="btn btn-ghost btn-sm" onclick="toggleLogPause()" id="log-pause-btn" data-i18n="logs.pause">Пауза</button>
                     <button class="btn btn-ghost btn-sm" onclick="clearLogView()" data-i18n="logs.clear">Очистить</button>
                 </div>
+                <div class="log-view" id="log-view">
+                    <div class="empty-state" id="logs-empty" style="display:none;">
+                        <p data-i18n="logs.empty">Нет экземпляров для просмотра логов.</p>
+                        <small class="hint-text" data-i18n="logs.empty.hint">Запустите модель, чтобы увидеть логи в реальном времени.</small>
+                    </div>
+                </div>
                 <div class="log-instance-bar" id="log-instance-bar" style="display:none;"></div>
-                <div class="log-view" id="log-view"></div>
             </section>
 
             <!-- View: Instance History -->
@@ -321,10 +333,10 @@
                 </div>
                 <div class="filter-bar">
                     <select id="hf-state" onchange="renderHistory()">
-                        <option value="" data-i18n="history.filter.state">All States</option>
-                        <option value="exited">exited</option>
-                        <option value="failed">failed</option>
-                        <option value="stale">stale</option>
+                        <option value="" data-i18n="history.state.all">All States</option>
+                        <option value="exited" data-i18n="history.state.exited">Exited</option>
+                        <option value="failed" data-i18n="history.state.failed">Failed</option>
+                        <option value="stale" data-i18n="history.state.stale">Stale</option>
                     </select>
                     <select id="hf-model" onchange="renderHistory()"><option value="" data-i18n="history.filter.model">All Models</option></select>
                 </div>
@@ -332,39 +344,44 @@
                     <p data-i18n="history.empty">Экземпляры не найдены.</p>
                     <small class="hint-text" data-i18n="history.empty.hint">Завершённые экземпляры появятся здесь.</small>
                 </div>
-                <table class="data-table">
-                    <thead><tr>
-                        <th data-i18n="history.col.model">Модель</th>
-                        <th data-i18n="history.col.instance">Instance</th>
-                        <th data-i18n="history.col.state">Состояние</th>
-                        <th data-i18n="history.col.pid">PID</th>
-                        <th data-i18n="history.col.started">Запущен</th>
-                        <th data-i18n="history.col.stopped">Остановлен</th>
-                        <th data-i18n="history.col.exit">Exit</th>
-                        <th></th>
-                    </tr></thead>
-                    <tbody id="history-body"></tbody>
-                </table>
+                <div id="history-table-wrap" style="display:none;">
+                    <table class="data-table">
+                        <thead><tr>
+                            <th data-i18n="history.col.model">Модель</th>
+                            <th data-i18n="history.col.instance">Instance</th>
+                            <th data-i18n="history.col.state">Состояние</th>
+                            <th data-i18n="history.col.pid">PID</th>
+                            <th data-i18n="history.col.started">Запущен</th>
+                            <th data-i18n="history.col.stopped">Остановлен</th>
+                            <th data-i18n="history.col.exit">Exit</th>
+                            <th></th>
+                        </tr></thead>
+                        <tbody id="history-body"></tbody>
+                    </table>
+                </div>
             </section>
 
             <!-- View: Advanced - Runtimes -->
             <section class="view" id="view-adv-runtimes">
                 <div class="view-header">
-                    <h1 data-i18n="runtimes.title">Рантаймы</h1>
-                    <button class="btn btn-primary" onclick="showCreateRuntimeModal()" data-i18n="runtimes.add">+ Добавить</button>
+                    <h1 data-i18n="runtimes.title">Runtime</h1>
+                    <button class="btn btn-primary" onclick="showCreateRuntimeModal()" data-i18n="runtimes.add">+ Добавить Runtime</button>
                 </div>
                 <div class="empty-state" id="runtimes-empty" style="display:none;">
-                    <p data-i18n="runtimes.empty">Рантаймы не добавлены.</p>
+                    <p data-i18n="runtimes.empty">Runtime не добавлены.</p>
+                    <small class="hint-text" data-i18n="runtimes.empty.hint">Добавьте Runtime, чтобы создавать модели.</small>
                 </div>
-                <table class="data-table">
-                    <thead><tr>
-                        <th data-i18n="runtimes.col.name">Имя</th>
-                        <th data-i18n="runtimes.col.executable">Executable</th>
-                        <th data-i18n="runtimes.col.workdir">Рабочая папка</th>
-                        <th></th>
-                    </tr></thead>
-                    <tbody id="adv-runtimes-body"></tbody>
-                </table>
+                <div id="runtimes-table-wrap" style="display:none;">
+                    <table class="data-table">
+                        <thead><tr>
+                            <th data-i18n="runtimes.col.name">Имя</th>
+                            <th data-i18n="runtimes.col.executable">Executable</th>
+                            <th data-i18n="runtimes.col.workdir">Рабочая папка</th>
+                            <th></th>
+                        </tr></thead>
+                        <tbody id="adv-runtimes-body"></tbody>
+                    </table>
+                </div>
             </section>
 
             <!-- View: Advanced - Instances -->
@@ -373,22 +390,24 @@
                     <h1 data-i18n="instances.title">Экземпляры</h1>
                 </div>
                 <div class="empty-state" id="instances-empty" style="display:none;">
-                    <p data-i18n="instances.empty">Экземпляры не запущены.</p>
-                    <small class="hint-text" data-i18n="instances.empty.hint">Запустите модель из «Мои модели».</small>
+                    <p data-i18n="instances.empty">Экземпляры не найдены.</p>
+                    <small class="hint-text" data-i18n="instances.empty.hint">Запустите модель из «Мои модели», чтобы увидеть экземпляр здесь.</small>
                 </div>
-                <table class="data-table">
-                    <thead><tr>
-                        <th data-i18n="instances.col.id">ID</th>
-                        <th data-i18n="instances.col.model">Модель</th>
-                        <th data-i18n="instances.col.state">Состояние</th>
-                        <th data-i18n="instances.col.pid">PID</th>
-                        <th data-i18n="instances.col.started">Запущен</th>
-                        <th data-i18n="instances.col.stopped">Остановлен</th>
-                        <th data-i18n="instances.col.exit">Exit</th>
-                        <th></th>
-                    </tr></thead>
-                    <tbody id="adv-instances-body"></tbody>
-                </table>
+                <div id="instances-table-wrap" style="display:none;">
+                    <table class="data-table">
+                        <thead><tr>
+                            <th data-i18n="instances.col.id">ID</th>
+                            <th data-i18n="instances.col.model">Модель</th>
+                            <th data-i18n="instances.col.state">Состояние</th>
+                            <th data-i18n="instances.col.pid">PID</th>
+                            <th data-i18n="instances.col.started">Запущен</th>
+                            <th data-i18n="instances.col.stopped">Остановлен</th>
+                            <th data-i18n="instances.col.exit">Exit</th>
+                            <th></th>
+                        </tr></thead>
+                        <tbody id="adv-instances-body"></tbody>
+                    </table>
+                </div>
             </section>
 
             <!-- View: Advanced - Settings -->
@@ -396,33 +415,14 @@
                 <div class="view-header">
                     <h1 data-i18n="settings.title">Настройки</h1>
                 </div>
-                <div class="settings-grid">
-                    <div class="settings-card">
-                        <h3 data-i18n="settings.interface.title">Интерфейс</h3>
-                        <div class="setting-row">
-                            <span data-i18n="settings.interface.theme">Тема</span>
-                            <select id="set-theme" class="mini-select" onchange="setTheme(this.value)">
-                                <option value="system">System</option>
-                                <option value="dark">Dark</option>
-                                <option value="light">Light</option>
-                            </select>
-                        </div>
-                        <div class="setting-row">
-                            <span data-i18n="settings.interface.language">Язык</span>
-                            <select id="set-lang" class="mini-select" onchange="setLanguage(this.value)">
-                                <option value="ru">Русский</option>
-                                <option value="en">English</option>
-                            </select>
-                        </div>
-                    </div>
-                    <div class="settings-card">
+                <div class="settings-compact">
+                    <div class="settings-section">
                         <h3 data-i18n="settings.server.title">Сервер</h3>
                         <div class="setting-row"><span data-i18n="settings.server.listen">Адрес</span><span id="set-listen">-</span></div>
                         <div class="setting-row"><span data-i18n="settings.server.port">Порт</span><span id="set-port">-</span></div>
                         <div class="setting-row"><span data-i18n="settings.server.auth">Авторизация</span><span id="set-auth">-</span></div>
-                        <p class="hint" style="margin-top:0.8rem;" data-i18n="settings.server.restart_hint">Серверные параметры задаются в goal.json и требуют перезапуск GoAl.</p>
                     </div>
-                    <div class="settings-card">
+                    <div class="settings-section">
                         <h3 data-i18n="settings.about.title">О программе</h3>
                         <div class="setting-row"><span data-i18n="settings.about.version">Версия</span><span id="set-version">-</span></div>
                         <div class="setting-row"><span data-i18n="settings.about.commit">Commit</span><span id="set-commit">-</span></div>

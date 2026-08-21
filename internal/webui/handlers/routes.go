@@ -2,7 +2,9 @@ package handlers
 
 import (
 	"io/fs"
+	"net"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/dsdred/goal/internal/application"
@@ -44,8 +46,18 @@ func WithWebAssets(templateFS, staticFS fs.FS) RouteRegistryOption {
 
 func WithServerInfo(listenAddr string, webPort int, authEnabled bool) RouteRegistryOption {
 	return func(r *RouteRegistry) {
-		r.systemHandler.listenAddr = listenAddr
-		r.systemHandler.webPort = webPort
+		host, port, err := net.SplitHostPort(listenAddr)
+		if err != nil {
+			r.systemHandler.listenAddr = listenAddr
+			r.systemHandler.webPort = webPort
+		} else {
+			r.systemHandler.listenAddr = host
+			if p, convErr := strconv.Atoi(port); convErr == nil {
+				r.systemHandler.webPort = p
+			} else {
+				r.systemHandler.webPort = webPort
+			}
+		}
 		r.systemHandler.authEnabled = authEnabled
 	}
 }
@@ -97,6 +109,7 @@ func (r *RouteRegistry) Build() http.Handler {
 	mux.HandleFunc("GET /api/v1/metrics", r.requireAuth(r.systemHandler.Metrics))
 	mux.HandleFunc("GET /api/v1/instances", r.requireAuth(r.instanceHandler.List))
 	mux.HandleFunc("GET /api/v1/instances/{id}", r.requireAuth(r.instanceHandler.Get))
+	mux.HandleFunc("GET /api/v1/history", r.requireAuth(r.instanceHandler.History))
 	mux.HandleFunc("GET /api/v1/logs", r.requireAuth(r.systemHandler.QueryLogs))
 	mux.HandleFunc("GET /api/v1/logs/stream", r.requireAuth(r.systemHandler.LogsStream))
 	mux.HandleFunc("GET /api/v1/admin/users", r.requireAuth(r.systemHandler.AdminUsers))

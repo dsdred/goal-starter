@@ -135,6 +135,20 @@ func (h *InstancesHandler) Cleanup(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"status": "cleaned", "deleted": deleted})
 }
 
+// History handles GET /api/v1/history — returns terminal instances from the
+// repository (persistent), so records survive GoAl restart.
+func (h *InstancesHandler) History(w http.ResponseWriter, r *http.Request) {
+	all, err := h.instanceSvc.ListHistory(r.Context())
+	if err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	for i := range all {
+		all[i].Environment = nil
+	}
+	writeJSON(w, http.StatusOK, all)
+}
+
 // Status handles GET /api/v1/instances/status
 func (h *InstancesHandler) Status(w http.ResponseWriter, r *http.Request) {
 	instances, err := h.instanceSvc.ListInstances(r.Context())
