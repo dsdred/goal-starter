@@ -37,6 +37,7 @@ const (
 type LaunchInstance struct {
 	ID        InstanceID `json:"id"`
 	ModelID   string     `json:"model_id"`
+	ModelName string     `json:"model_name,omitempty"`
 	RuntimeID string     `json:"runtime_id"`
 
 	// Process info populated at launch time.
@@ -135,6 +136,7 @@ func ToStorageEntry(i *LaunchInstance) *LaunchInstanceEntry {
 	return &LaunchInstanceEntry{
 		ID:               string(i.ID),
 		ModelID:          i.ModelID,
+		ModelName:        i.ModelName,
 		RuntimeID:        i.RuntimeID,
 		Executable:       i.Executable,
 		Args:             i.Args,
@@ -162,6 +164,7 @@ func ToDomain(e *LaunchInstanceEntry) *LaunchInstance {
 	return &LaunchInstance{
 		ID:               InstanceID(e.ID),
 		ModelID:          e.ModelID,
+		ModelName:        e.ModelName,
 		RuntimeID:        e.RuntimeID,
 		PID:              e.PID,
 		State:            InstanceState(e.State),

@@ -213,6 +213,7 @@ func (r *LaunchResolver) ResolveToInstance(
 	return &LaunchInstance{
 		ID:               id,
 		ModelID:          model.ID,
+		ModelName:        model.Name,
 		RuntimeID:        runtime.ID,
 		State:            InstanceStatePending,
 		Executable:       spec.Executable,

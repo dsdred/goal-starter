@@ -30,6 +30,7 @@ var staticFS embed.FS
 // App holds server dependencies and state.
 type App struct {
 	cfg           *config.Config
+	configPath    string
 	supervisor    *process.Supervisor
 	instanceSvc   *application.InstanceService
 	runtimeSvc    *application.RuntimeService
@@ -41,6 +42,11 @@ type App struct {
 	hc            *health.HealthChecker
 	reg           *handlers.RouteRegistry
 	authEnabled   bool
+}
+
+// SetConfigPath sets the config file path for settings save.
+func (a *App) SetConfigPath(path string) {
+	a.configPath = path
 }
 
 // NewApp creates server dependencies.
@@ -98,6 +104,7 @@ func (a *App) InitRegistry() {
 		handlers.WithAuthEnabled(a.authEnabled),
 		handlers.WithWebAssets(templateFS, staticFS),
 		handlers.WithServerInfo(a.cfg.ListenAddress, a.cfg.WebPort, a.authEnabled),
+		handlers.WithConfigPath(a.configPath),
 	)
 }
 

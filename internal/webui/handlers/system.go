@@ -6,14 +6,17 @@ import (
 	"html/template"
 	"io/fs"
 	"log/slog"
+	"net"
 	"net/http"
 	"runtime"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/dsdred/goal/internal/application"
+	"github.com/dsdred/goal/internal/config"
 	"github.com/dsdred/goal/internal/process"
 	"github.com/dsdred/goal/internal/version"
 	"github.com/dsdred/goal/internal/webui/security"
@@ -57,6 +60,7 @@ type SystemHandler struct {
 	listenAddr  string
 	webPort     int
 	authEnabled bool
+	configPath  string
 }
 
 // NewSystemHandler creates a new SystemHandler.
@@ -113,6 +117,79 @@ func (h *SystemHandler) Metrics(w http.ResponseWriter, r *http.Request) {
 		resp["auth_enabled"] = h.authEnabled
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// isValidListenAddress checks if the address is a valid bind address without
+// performing a port bind. Accepts IPv4, IPv6, "*", or a basic hostname.
+func isValidListenAddress(addr string) bool {
+	if addr == "*" {
+		return true
+	}
+	if ip := net.ParseIP(addr); ip != nil {
+		return true
+	}
+	if len(addr) > 253 {
+		return false
+	}
+	for i, c := range addr {
+		if c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '/' || c == ':' {
+			return false
+		}
+		if i == 0 && c == '-' {
+			return false
+		}
+		if !unicode.IsLetter(c) && !unicode.IsDigit(c) && c != '.' && c != '-' && c != '_' {
+			return false
+		}
+	}
+	return true
+}
+
+// SaveSettings handles PUT /api/v1/settings — updates server configuration.
+func (h *SystemHandler) SaveSettings(w http.ResponseWriter, r *http.Request) {
+	if h.configPath == "" {
+		writeError(w, 500, "config path not available")
+		return
+	}
+	var body struct {
+		ListenAddress string `json:"listen_address"`
+		WebPort       int    `json:"web_port"`
+		AuthEnabled   bool   `json:"auth_enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, 400, "invalid JSON")
+		return
+	}
+	if body.ListenAddress == "" {
+		writeError(w, 400, "listen_address is required")
+		return
+	}
+	if !isValidListenAddress(body.ListenAddress) {
+		writeError(w, 400, "listen_address is not a valid bind address")
+		return
+	}
+	if body.WebPort < 1 || body.WebPort > 65535 {
+		writeError(w, 400, "web_port must be 1-65535")
+		return
+	}
+	cfg, err := config.Load(h.configPath)
+	if err != nil {
+		writeError(w, 500, "failed to load config: "+err.Error())
+		return
+	}
+	cfg.ListenAddress = body.ListenAddress
+	cfg.WebPort = body.WebPort
+	cfg.AuthEnabled = body.AuthEnabled
+	if cfg.AuthEnabled && (cfg.AdminUser == "" || cfg.AdminPassword == "") {
+		writeError(w, 400, "cannot enable auth: adminUser and adminPassword must be configured")
+		return
+	}
+	if err := config.Save(h.configPath, cfg); err != nil {
+		writeError(w, 500, "failed to save config: "+err.Error())
+		return
+	}
+	slog.Info("settings saved", "listen", body.ListenAddress, "port", body.WebPort, "auth", body.AuthEnabled)
+	writeJSON(w, http.StatusOK, map[string]string{"status": "saved", "hint": "restart_required"})
 }
 
 // LogsStream handles GET /api/v1/logs/stream

@@ -660,3 +660,118 @@ func TestInstancesHandler_List_StripsEnvironment(t *testing.T) {
 		}
 	}
 }
+
+func TestHistory_ModelNamePersisted(t *testing.T) {
+	repo := newTestRepo(t)
+	sup := newTestSupervisor(t)
+	insSvc := application.NewInstanceService(sup, repo)
+	h := NewInstancesHandler(insSvc, nil)
+
+	// Create an instance with ModelName set (simulates new record).
+	err := repo.CreateInstance(&storage.LaunchInstanceEntry{
+		ID:        "hist-1",
+		ModelID:   "model-123",
+		ModelName: "Qwen3.8-27B",
+		RuntimeID: "rt-1",
+		State:     "exited",
+		StoppedAt: time.Now().Add(-time.Hour),
+		CreatedAt: time.Now().Add(-time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("CreateInstance: %v", err)
+	}
+
+	// Create an instance WITHOUT ModelName (simulates old record).
+	err = repo.CreateInstance(&storage.LaunchInstanceEntry{
+		ID:        "hist-2",
+		ModelID:   "model-456",
+		RuntimeID: "rt-1",
+		State:     "exited",
+		StoppedAt: time.Now().Add(-time.Hour),
+		CreatedAt: time.Now().Add(-time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("CreateInstance old: %v", err)
+	}
+
+	// Query history.
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/history", nil)
+	w := httptest.NewRecorder()
+	h.History(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("History: expected 200, got %d, body %s", w.Code, w.Body.String())
+	}
+
+	var items []struct {
+		ID        string `json:"id"`
+		ModelID   string `json:"model_id"`
+		ModelName string `json:"model_name"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&items); err != nil {
+		t.Fatalf("decode history: %v", err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("expected 2 history items, got %d", len(items))
+	}
+
+	for _, item := range items {
+		switch item.ID {
+		case "hist-1":
+			if item.ModelName != "Qwen3.8-27B" {
+				t.Errorf("hist-1: expected model_name=Qwen3.8-27B, got %q", item.ModelName)
+			}
+		case "hist-2":
+			// Old record: model_name should be empty (no snapshot).
+			// Frontend will fall back to getModelName(model_id).
+			if item.ModelName != "" {
+				t.Errorf("hist-2: expected empty model_name for old record, got %q", item.ModelName)
+			}
+		}
+	}
+}
+
+func TestHistory_ModelNameSurvivesModelDeletion(t *testing.T) {
+	repo := newTestRepo(t)
+	sup := newTestSupervisor(t)
+	insSvc := application.NewInstanceService(sup, repo)
+	h := NewInstancesHandler(insSvc, nil)
+
+	// Create instance with model name snapshot.
+	err := repo.CreateInstance(&storage.LaunchInstanceEntry{
+		ID:        "hist-del-1",
+		ModelID:   "model-del",
+		ModelName: "Deleted Model Name",
+		RuntimeID: "rt-1",
+		State:     "exited",
+		StoppedAt: time.Now().Add(-time.Hour),
+		CreatedAt: time.Now().Add(-time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("CreateInstance: %v", err)
+	}
+
+	// Simulate model deletion by not having it in the repository.
+	// The model was never created in the repo, so getModelName would fail.
+	// But the history record still has the snapshot.
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/history", nil)
+	w := httptest.NewRecorder()
+	h.History(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("History: expected 200, got %d", w.Code)
+	}
+
+	var items []struct {
+		ID        string `json:"id"`
+		ModelName string `json:"model_name"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&items); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(items))
+	}
+	if items[0].ModelName != "Deleted Model Name" {
+		t.Errorf("expected model_name=Deleted Model Name, got %q", items[0].ModelName)
+	}
+}

@@ -101,6 +101,9 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Set config path for settings save endpoint.
+	app.SetConfigPath(*configPath)
+
 	// Initialize route registry.
 	app.InitRegistry()
 

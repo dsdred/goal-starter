@@ -161,7 +161,7 @@
                     <div id="wiz-rt-existing-section" class="form-group">
                         <label data-i18n="wizard.rt.select">Выберите Runtime</label>
                         <div class="rt-selector">
-                            <input type="text" id="wiz-rt-search" class="rt-search-input" data-i18n-placeholder="wizard.rt.search_placeholder" placeholder="Search Runtime..." autocomplete="off" oninput="renderRtDropdown()" onkeydown="rtDropdownKeydown(event)">
+                            <input type="text" id="wiz-rt-search" class="rt-search-input" data-i18n-placeholder="wizard.rt.search_placeholder" placeholder="Search Runtime..." autocomplete="off" onfocus="openRtDropdown()" oninput="renderRtDropdown()" onkeydown="rtDropdownKeydown(event)">
                             <div id="wiz-rt-dropdown" class="rt-dropdown" style="display:none;"></div>
                             <div id="wiz-rt-selected" class="rt-selected-details" style="display:none;"></div>
                         </div>
@@ -220,6 +220,14 @@
 
     <!-- App Shell -->
     <div class="app-shell" id="app-shell" style="display:none;">
+        <!-- Mobile Top Bar -->
+        <div class="mobile-topbar" id="mobile-topbar">
+            <button class="hamburger" onclick="toggleDrawer()" aria-label="Menu">
+                <svg viewBox="0 0 24 24"><path d="M3 6h18v2H3V6zm0 5h18v2H3v-2zm0 5h18v2H3v-2z"/></svg>
+            </button>
+            <span class="topbar-title">GoAl</span>
+        </div>
+        <div class="drawer-overlay" id="drawer-overlay" onclick="closeDrawer()"></div>
         <!-- Sidebar -->
         <aside class="sidebar" id="sidebar">
             <div class="sidebar-logo">
@@ -289,7 +297,7 @@
                         <option value="starting" data-i18n="models.status.starting">Starting</option>
                         <option value="stopping" data-i18n="models.status.stopping">Stopping</option>
                     </select>
-                    <label class="toggle-label"><input type="checkbox" id="mf-autostart" onchange="renderModels()"><span data-i18n="models.filter.autostart">Автостарт</span></label>
+                    <label class="filter-switch"><span class="toggle-switch"><input type="checkbox" id="mf-autostart" onchange="renderModels()"><span class="toggle-slider"></span></span><span data-i18n="models.filter.autostart">Автостарт</span></label>
                 </div>
                 <div class="model-list" id="model-list"></div>
                 <div class="empty-state" id="models-empty" style="display:none;">
@@ -304,25 +312,19 @@
                     <h1 data-i18n="logs.title">Логи</h1>
                 </div>
                 <div class="logs-toolbar">
+                    <label class="filter-switch"><span class="toggle-switch"><input type="checkbox" id="log-autoscroll" checked><span class="toggle-slider"></span></span><span data-i18n="logs.autoscroll">Автопрокрутка</span></label>
                     <select id="log-instance-select" onchange="switchLogInstance()"><option value="" data-i18n="logs.select.all">All Instances</option></select>
-                    <select id="log-stream-filter" title="">
-                        <option value="" data-i18n="logs.filter.all">All</option>
-                        <option value="stdout">stdout</option>
-                        <option value="stderr">stderr</option>
-                        <option value="system">system</option>
-                    </select>
                     <input type="text" id="log-search" placeholder="Search..." data-i18n-placeholder="logs.search" oninput="applyLogSearch()">
-                    <label class="toggle-label"><input type="checkbox" id="log-autoscroll" checked><span data-i18n="logs.autoscroll">Автопрокрутка</span></label>
                     <button class="btn btn-ghost btn-sm" onclick="toggleLogPause()" id="log-pause-btn" data-i18n="logs.pause">Пауза</button>
                     <button class="btn btn-ghost btn-sm" onclick="clearLogView()" data-i18n="logs.clear">Очистить</button>
                 </div>
+                <div class="log-instance-bar" id="log-instance-bar" style="display:none;"></div>
                 <div class="log-view" id="log-view">
                     <div class="empty-state" id="logs-empty" style="display:none;">
                         <p data-i18n="logs.empty">Нет экземпляров для просмотра логов.</p>
                         <small class="hint-text" data-i18n="logs.empty.hint">Запустите модель, чтобы увидеть логи в реальном времени.</small>
                     </div>
                 </div>
-                <div class="log-instance-bar" id="log-instance-bar" style="display:none;"></div>
             </section>
 
             <!-- View: Instance History -->
@@ -414,6 +416,7 @@
             <section class="view" id="view-adv-settings">
                 <div class="view-header">
                     <h1 data-i18n="settings.title">Настройки</h1>
+                    <button class="btn btn-primary" onclick="openSettingsEdit()" data-i18n="settings.edit">Изменить настройки</button>
                 </div>
                 <div class="settings-compact">
                     <div class="settings-section">
@@ -465,6 +468,23 @@
                 <button type="button" class="btn btn-ghost btn-sm" onclick="addEnvRow('rt-edit-env-container')">+ Переменная</button></div>
                 <div class="modal-actions"><button type="submit" class="btn btn-primary" data-i18n="runtimes.btn.save">Сохранить</button><button type="button" class="btn btn-ghost" onclick="closeModal('edit-runtime-modal')" data-i18n="common.cancel">Отмена</button></div>
             </form>
+        </div>
+    </div>
+
+    <!-- Settings Edit Modal -->
+    <div id="settings-edit-modal" class="modal-overlay" style="display:none;">
+        <div class="modal-box">
+            <div class="modal-header"><h2 data-i18n="settings.edit.title">Изменить настройки</h2><button class="modal-close" onclick="closeSettingsEdit()">&times;</button></div>
+            <p class="hint-text" data-i18n="settings.server.restart_hint" style="margin-bottom:1rem;">Изменения настроек сервера требуют перезапуск GoAl.</p>
+            <div class="form-group"><label data-i18n="settings.server.listen">Адрес</label><input type="text" id="set-edit-listen" placeholder="127.0.0.1"></div>
+            <div class="form-group"><label data-i18n="settings.server.port">Порт</label><input type="number" id="set-edit-port" min="1" max="65535" placeholder="8088"></div>
+            <div class="form-group"><label data-i18n="settings.server.auth">Авторизация</label>
+                <label class="filter-switch"><span class="toggle-switch"><input type="checkbox" id="set-edit-auth"><span class="toggle-slider"></span></span><span data-i18n="settings.server.auth.enable">Включить</span></label>
+            </div>
+            <div class="modal-actions">
+                <button type="button" class="btn btn-primary" onclick="saveSettingsEdit()" data-i18n="common.saved">Сохранить</button>
+                <button type="button" class="btn btn-ghost" onclick="closeSettingsEdit()" data-i18n="common.cancel">Отмена</button>
+            </div>
         </div>
     </div>
 

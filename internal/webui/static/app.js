@@ -192,6 +192,8 @@ async function handleLogin(e) {
 
 async function handleLogout() {
     try { await fetch('/api/v1/auth/logout', { method: 'POST', headers: { 'X-CSRF-Token': csrfToken } }); } catch {}
+    csrfToken = '';
+    updateSidebarAuth(null);
     resetLoginState();
     showLogin();
 }
@@ -540,8 +542,6 @@ function connectLogStream(instanceId) {
 function appendLogLine(d) {
     const stream = d.stream || 'stdout';
     const search = document.getElementById('log-search').value.toLowerCase();
-    const filter = document.getElementById('log-stream-filter').value;
-    if (filter && stream !== filter) return;
     if (search && (d.message || '').toLowerCase().indexOf(search) === -1) return;
 
     const view = document.getElementById('log-view');
@@ -565,12 +565,9 @@ function appendLogLine(d) {
 function applyLogSearch() {
     const view = document.getElementById('log-view');
     const search = document.getElementById('log-search').value.toLowerCase();
-    const filter = document.getElementById('log-stream-filter').value;
     Array.from(view.children).forEach(function (div) {
         const text = div.textContent.toLowerCase();
-        const streamMatch = !filter || div.className.indexOf(filter) !== -1;
-        const searchMatch = !search || text.indexOf(search) !== -1;
-        div.style.display = (streamMatch && searchMatch) ? '' : 'none';
+        div.style.display = (!search || text.indexOf(search) !== -1) ? '' : 'none';
     });
 }
 
@@ -615,6 +612,7 @@ function navigate(view) {
 function openWizard(modelId) {
     wizStep = 1;
     wizEditId = modelId || null;
+    rtSelectedId = null;
     const form = document.getElementById('wizard-form');
     form.reset();
     document.getElementById('wizard-error').style.display = 'none';
@@ -655,6 +653,7 @@ function openWizard(modelId) {
 function closeWizard() { document.getElementById('wizard-modal').style.display = 'none'; }
 
 function loadWizardRuntimeCards() {
+    rtSelectedId = null;
     document.getElementById('wiz-rt-search').value = '';
     document.getElementById('wiz-rt-selected').style.display = 'none';
     document.getElementById('wiz-rt-dropdown').style.display = 'none';
@@ -662,21 +661,30 @@ function loadWizardRuntimeCards() {
         document.querySelector('input[name=wiz-rt-mode][value=new]').checked = true;
         onWizRtModeChange();
     }
-    renderRtDropdown();
 }
 
 var rtSelectedId = null;
 
-function renderRtDropdown() {
+function openRtDropdown() {
     const dd = document.getElementById('wiz-rt-dropdown');
     const search = document.getElementById('wiz-rt-search');
     if (runtimesData.length === 0) {
-        if (search) search.style.display = 'none';
+        search.style.display = 'none';
         dd.innerHTML = '<div class="rt-dropdown-empty">' + esc(t('wizard.rt.empty')) + '</div>';
         dd.style.display = 'block';
         return;
     }
-    if (search) search.style.display = '';
+    search.style.display = '';
+    renderRtDropdown();
+}
+
+function closeRtDropdown() {
+    document.getElementById('wiz-rt-dropdown').style.display = 'none';
+}
+
+function renderRtDropdown() {
+    const dd = document.getElementById('wiz-rt-dropdown');
+    const search = document.getElementById('wiz-rt-search');
     const query = search ? search.value.toLowerCase() : '';
     const filtered = runtimesData.filter(function (r) {
         return !query || r.name.toLowerCase().indexOf(query) !== -1;
@@ -688,10 +696,17 @@ function renderRtDropdown() {
     }
     dd.innerHTML = filtered.map(function (r) {
         const sel = r.id === rtSelectedId ? ' selected' : '';
-        return '<div class="rt-dropdown-item' + sel + '" data-id="' + esc(r.id) + '" onclick="selectRtItem(\'' + safeId(r.id) + '\')">' + esc(r.name) + '</div>';
+        return '<div class="rt-dropdown-item' + sel + '" data-id="' + esc(r.id) + '" onmousedown="selectRtItem(\'' + safeId(r.id) + '\')">' + esc(r.name) + '</div>';
     }).join('');
     dd.style.display = 'block';
 }
+
+function rtDropdownOutsideClick(e) {
+    const sel = document.querySelector('.rt-selector');
+    if (sel && !sel.contains(e.target)) closeRtDropdown();
+}
+
+document.addEventListener('click', rtDropdownOutsideClick);
 
 function rtDropdownKeydown(e) {
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
@@ -720,7 +735,7 @@ function selectRtItem(id) {
     const r = runtimesData.find(function (x) { return x.id === id; });
     if (!r) return;
     document.getElementById('wiz-rt-search').value = r.name;
-    document.getElementById('wiz-rt-dropdown').style.display = 'none';
+    closeRtDropdown();
     const details = document.getElementById('wiz-rt-selected');
     details.innerHTML = '<div class="rt-detail"><strong>' + esc(r.name) + '</strong></div>' +
         (r.executable ? '<div class="rt-detail-sub">exe: ' + esc(r.executable) + '</div>' : '') +
@@ -1135,12 +1150,14 @@ function renderHistory() {
     if (empty) empty.style.display = 'none';
     if (tableWrap) tableWrap.style.display = '';
     document.getElementById('history-body').innerHTML = filtered.slice(0, 200).map(function (i) {
-        return '<tr><td>' + esc(getModelName(i.model_id)) + '</td>' +
+        const modelName = i.model_name || getModelName(i.model_id);
+        const exitTitle = i.exit_code != null ? ' title="' + esc(String(i.exit_code)) + '"' : '';
+        return '<tr><td>' + esc(modelName) + '</td>' +
             '<td style="font-family:var(--font-mono);font-size:0.78rem;">' + esc(i.id.slice(0, 12)) + '</td>' +
             '<td><span class="status-badge ' + esc(i.state) + '">' + esc(historyStateLabel(i.state)) + '</span></td>' +
             '<td>' + (i.pid || '—') + '</td>' +
             '<td>' + fmtTime(i.started_at) + '</td><td>' + fmtTime(i.stopped_at) + '</td>' +
-            '<td>' + (i.exit_code != null ? i.exit_code : '—') + '</td>' +
+            '<td' + exitTitle + '>' + (i.exit_code != null ? i.exit_code : '—') + '</td>' +
             '<td class="actions-cell"><button class="btn btn-ghost btn-sm" onclick="viewInstanceLogs(\'' + safeId(i.id) + '\')">' + t('instances.actions.logs') + '</button></td></tr>';
     }).join('');
 }
@@ -1172,6 +1189,7 @@ async function confirmCleanup() {
 async function loadSettings() {
     try {
         const m = await api('/metrics');
+        lastMetrics = m;
         document.getElementById('set-listen').textContent = m.listen_address || '127.0.0.1';
         document.getElementById('set-port').textContent = m.web_port ? String(m.web_port) : '-';
         document.getElementById('set-auth').textContent = m.auth_enabled ? t('settings.server.auth.on') : t('settings.server.auth.off');
@@ -1257,6 +1275,66 @@ function startRefresh() {
     }, 3000);
 }
 
+// ─── Mobile Drawer ──────────────────────────────────────────────────────────
+
+function toggleDrawer() {
+    const sidebar = document.getElementById('sidebar');
+    const overlay = document.getElementById('drawer-overlay');
+    const isOpen = sidebar.classList.contains('open');
+    if (isOpen) { closeDrawer(); } else {
+        sidebar.classList.add('open');
+        overlay.classList.add('open');
+    }
+}
+
+function closeDrawer() {
+    document.getElementById('sidebar').classList.remove('open');
+    document.getElementById('drawer-overlay').classList.remove('open');
+}
+
+document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') {
+        closeDrawer();
+        closeRtDropdown();
+    }
+});
+
+// Override navigate to close drawer on mobile
+const _origNavigate = navigate;
+navigate = function (view) {
+    _origNavigate(view);
+    closeDrawer();
+};
+
+// ─── Settings Edit ──────────────────────────────────────────────────────────
+
+function openSettingsEdit() {
+    const m = lastMetrics;
+    document.getElementById('set-edit-listen').value = m.listen_address || '127.0.0.1';
+    document.getElementById('set-edit-port').value = m.web_port || 8088;
+    document.getElementById('set-edit-auth').checked = !!m.auth_enabled;
+    document.getElementById('settings-edit-modal').style.display = 'flex';
+}
+
+function closeSettingsEdit() {
+    document.getElementById('settings-edit-modal').style.display = 'none';
+}
+
+async function saveSettingsEdit() {
+    const addr = document.getElementById('set-edit-listen').value.trim();
+    const port = parseInt(document.getElementById('set-edit-port').value) || 0;
+    const auth = document.getElementById('set-edit-auth').checked;
+    if (!addr) { showToast(t('settings.edit.err.addr'), 'error'); return; }
+    if (port < 1 || port > 65535) { showToast(t('settings.edit.err.port'), 'error'); return; }
+    try {
+        await api('/settings', { method: 'PUT', body: JSON.stringify({ listen_address: addr, web_port: port, auth_enabled: auth }) });
+        closeSettingsEdit();
+        showToast(t('settings.edit.saved'), 'success');
+    } catch (e) { showToast(friendlyError(e), 'error'); }
+}
+
+let lastMetrics = {};
+
 // ─── Expose to global scope for inline onclick handlers ────────────────────
 
 window.handleLogin = handleLogin;
@@ -1306,6 +1384,13 @@ window.confirmRTCascade = confirmRTCascade;
 window.openCleanup = openCleanup;
 window.closeCleanup = closeCleanup;
 window.confirmCleanup = confirmCleanup;
+window.toggleDrawer = toggleDrawer;
+window.closeDrawer = closeDrawer;
+window.openRtDropdown = openRtDropdown;
+window.closeRtDropdown = closeRtDropdown;
+window.openSettingsEdit = openSettingsEdit;
+window.closeSettingsEdit = closeSettingsEdit;
+window.saveSettingsEdit = saveSettingsEdit;
 
 // ─── Boot ───────────────────────────────────────────────────────────────────
 

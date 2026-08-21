@@ -36,6 +36,7 @@ type snapshot struct {
 type domainInstanceJSON struct {
 	ID               string            `json:"id"`
 	ModelID          string            `json:"model_id"`
+	ModelName        string            `json:"model_name,omitempty"`
 	RuntimeID        string            `json:"runtime_id"`
 	PID              int               `json:"pid,omitempty"`
 	State            string            `json:"state"`
@@ -199,6 +200,7 @@ func (s *InstanceStoreJSON) save() error {
 		dij := domainInstanceJSON{
 			ID:               string(inst.ID),
 			ModelID:          inst.ModelID,
+			ModelName:        inst.ModelName,
 			RuntimeID:        inst.RuntimeID,
 			PID:              inst.PID,
 			State:            string(inst.State),
@@ -263,6 +265,7 @@ func (s *InstanceStoreJSON) load() error {
 		inst := &domain.LaunchInstance{
 			ID:               domain.InstanceID(dij.ID),
 			ModelID:          dij.ModelID,
+			ModelName:        dij.ModelName,
 			RuntimeID:        dij.RuntimeID,
 			PID:              dij.PID,
 			State:            domain.InstanceState(dij.State),

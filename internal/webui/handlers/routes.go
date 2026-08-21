@@ -62,6 +62,12 @@ func WithServerInfo(listenAddr string, webPort int, authEnabled bool) RouteRegis
 	}
 }
 
+func WithConfigPath(path string) RouteRegistryOption {
+	return func(r *RouteRegistry) {
+		r.systemHandler.configPath = path
+	}
+}
+
 func NewRouteRegistry(
 	instanceSvc *application.InstanceService,
 	runtimeSvc *application.RuntimeService,
@@ -107,6 +113,7 @@ func (r *RouteRegistry) Build() http.Handler {
 	mux.HandleFunc("GET /api/v1/auth/session", r.authHandler.CheckSession)
 
 	mux.HandleFunc("GET /api/v1/metrics", r.requireAuth(r.systemHandler.Metrics))
+	mux.HandleFunc("PUT /api/v1/settings", r.requireAuthCSRF(r.systemHandler.SaveSettings))
 	mux.HandleFunc("GET /api/v1/instances", r.requireAuth(r.instanceHandler.List))
 	mux.HandleFunc("GET /api/v1/instances/{id}", r.requireAuth(r.instanceHandler.Get))
 	mux.HandleFunc("GET /api/v1/history", r.requireAuth(r.instanceHandler.History))

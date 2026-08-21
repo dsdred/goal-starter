@@ -8,6 +8,7 @@ import "time"
 type LaunchInstanceEntry struct {
 	ID               string            `json:"id"`
 	ModelID          string            `json:"model_id"`
+	ModelName        string            `json:"model_name,omitempty"`
 	RuntimeID        string            `json:"runtime_id"`
 	Executable       string            `json:"executable,omitempty"`
 	Args             []string          `json:"args,omitempty"`

@@ -51,6 +51,7 @@ Error codes: `bad_request`, `unauthorized`, `forbidden`, `not_found`, `conflict`
 | `GET` | `/api/v1/admin/users` | Yes | — | List configured users. |
 | `GET` | `/api/v1/admin/sessions` | Yes | — | List active sessions. |
 | `GET` | `/api/v1/metrics` | Yes | — | Application metrics. |
+| `PUT` | `/api/v1/settings` | Yes | Yes | Save server settings (listen_address, web_port, auth_enabled). Requires restart. |
 
 ## Instances (processes)
 
