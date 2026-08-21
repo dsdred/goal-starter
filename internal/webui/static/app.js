@@ -323,6 +323,15 @@ function iconBtn(icon, label, color, action, id) {
     return '<button class="icon-btn icon-btn-' + color + '" title="' + esc(label) + '" aria-label="' + esc(label) + '" onclick="' + action + '(\'' + safeId(id) + '\')">' + icon + '</button>';
 }
 
+var ICONS = {
+    start: '<svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>',
+    stop: '<svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="1"/></svg>',
+    restart: '<svg viewBox="0 0 24 24"><path d="M17.65 6.35A7.96 7.96 0 0012 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0112 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg>',
+    logs: '<svg viewBox="0 0 24 24"><path d="M3 18h12v-2H3v2zM3 6v2h18V6H3zm0 7h18v-2H3v2z"/></svg>',
+    edit: '<svg viewBox="0 0 24 24"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1 1 0 000-1.41l-2.34-2.34a1 1 0 00-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>',
+    del: '<svg viewBox="0 0 24 24"><path d="M6 19c0 1.1.9 2 2 2h8a2 2 0 002-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>'
+};
+
 function parseArgs(raw) {
     if (!raw) return [];
     return raw.trim().split(/\s+/).filter(Boolean);
@@ -374,30 +383,34 @@ function renderModels() {
 
         let actionBtns = '';
         if (status === 'running') {
-            actionBtns = iconBtn('↻', t('models.actions.restart'), 'warning', 'restartModel', m.id) +
-                iconBtn('■', t('models.actions.stop'), 'danger', 'stopModel', m.id);
+            actionBtns = iconBtn(ICONS.restart, t('models.actions.restart'), 'warning', 'restartModel', m.id) +
+                iconBtn(ICONS.stop, t('models.actions.stop'), 'danger', 'stopModel', m.id);
         } else if (status === 'starting' || status === 'stopping') {
             actionBtns = '<span class="hint-text model-transitional">' + t('models.status.' + status) + '</span>';
         } else {
-            actionBtns = iconBtn('▶', t('models.actions.start'), 'success', 'startModel', m.id);
+            actionBtns = iconBtn(ICONS.start, t('models.actions.start'), 'success', 'startModel', m.id);
         }
+
+        const autoBadge = m.active ? '<span class="autostart-indicator" title="' + esc(t('models.autostart')) + '">A</span>' : '';
 
         return '<div class="model-row">' +
             '<div class="model-row-main">' +
-                '<div class="model-row-name">' + esc(m.name) + '</div>' +
+                '<div class="model-row-name">' +
+                    autoBadge +
+                    '<span class="status-badge ' + status + '">' + t('models.status.' + status) + '</span> ' +
+                    esc(m.name) +
+                '</div>' +
                 '<div class="model-row-sub">' +
-                    '<span class="status-badge ' + status + '">' + t('models.status.' + status) + '</span>' +
-                    ' ' + esc(getRuntimeName(m.runtime_id)) +
-                    (m.active ? ' <span class="autostart-indicator" title="' + t('models.autostart') + '">A</span>' : '') +
-                    (inst && inst.pid ? ' · PID ' + inst.pid : '') +
-                    (uptime ? ' · ' + uptime : '') +
+                    esc(getRuntimeName(m.runtime_id)) +
+                    (inst && inst.pid ? ' &middot; PID ' + inst.pid : '') +
+                    (uptime ? ' &middot; ' + uptime : '') +
                 '</div>' +
             '</div>' +
             '<div class="model-row-actions">' +
                 actionBtns +
-                iconBtn('📄', t('models.actions.logs'), 'ghost', 'viewInstanceLogs', active.length ? active[0].id : '') +
-                iconBtn('✎', t('models.actions.edit'), 'ghost', 'openWizard', m.id) +
-                iconBtn('🗑', t('models.actions.delete'), 'danger', 'deleteModel', m.id) +
+                iconBtn(ICONS.logs, t('models.actions.logs'), 'ghost', 'viewInstanceLogs', active.length ? active[0].id : '') +
+                iconBtn(ICONS.edit, t('models.actions.edit'), 'ghost', 'openWizard', m.id) +
+                iconBtn(ICONS.del, t('models.actions.delete'), 'danger', 'deleteModel', m.id) +
             '</div>' +
         '</div>';
     }).join('');

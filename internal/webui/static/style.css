@@ -201,13 +201,14 @@ code { font-family: var(--font-mono); font-size: 0.9em; background: var(--bg-inp
     margin-bottom: 1rem; padding: 10px 12px;
     background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-sm);
 }
-.filter-bar input, .filter-bar select {
+.filter-bar input[type="text"], .filter-bar select {
     padding: 6px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm);
     background: var(--bg-input); color: var(--text-primary); font-size: 0.82rem; font-family: var(--font);
 }
-.filter-bar input:focus, .filter-bar select:focus { outline: none; border-color: var(--accent); }
-.filter-bar input { min-width: 140px; }
-.toggle-label { display: flex; align-items: center; gap: 5px; font-size: 0.82rem; color: var(--text-secondary); cursor: pointer; white-space: nowrap; }
+.filter-bar input[type="text"]:focus, .filter-bar select:focus { outline: none; border-color: var(--accent); }
+.filter-bar input[type="text"] { min-width: 140px; }
+.toggle-label { display: inline-flex; align-items: center; gap: 5px; font-size: 0.82rem; color: var(--text-secondary); cursor: pointer; white-space: nowrap; flex-shrink: 0; }
+.toggle-label input[type="checkbox"] { width: 14px; height: 14px; margin: 0; accent-color: var(--accent); cursor: pointer; }
 
 /* Model List (compact rows) */
 .model-list { display: flex; flex-direction: column; gap: 6px; }
@@ -218,29 +219,32 @@ code { font-family: var(--font-mono); font-size: 0.9em; background: var(--bg-inp
 }
 .model-row:hover { background: var(--bg-card-hover); border-color: var(--accent); }
 .model-row-main { flex: 1; min-width: 0; }
-.model-row-name { font-size: 0.95rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.model-row-sub { font-size: 0.78rem; color: var(--text-muted); display: flex; align-items: center; gap: 6px; }
+.model-row-name { display: flex; align-items: center; gap: 6px; font-size: 0.95rem; font-weight: 600; min-width: 0; }
+.model-row-name > *:last-child { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.model-row-sub { font-size: 0.78rem; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
 .autostart-indicator {
     display: inline-flex; align-items: center; justify-content: center;
-    width: 16px; height: 16px; border-radius: 3px; font-size: 0.6rem; font-weight: 700;
-    background: var(--accent-subtle); color: var(--accent);
+    width: 20px; height: 20px; border-radius: 4px; font-size: 0.72rem; font-weight: 700;
+    background: var(--accent-subtle); color: var(--accent); flex-shrink: 0;
 }
 .model-row-pid { font-family: var(--font-mono); font-size: 0.75rem; color: var(--text-muted); white-space: nowrap; }
 .model-row-uptime { font-family: var(--font-mono); font-size: 0.75rem; color: var(--text-secondary); white-space: nowrap; }
-.model-row-actions { display: flex; gap: 4px; flex-wrap: nowrap; align-items: center; }
+.model-row-actions { display: flex; gap: 4px; flex-wrap: nowrap; align-items: center; flex-shrink: 0; }
 .icon-btn {
     display: inline-flex; align-items: center; justify-content: center;
-    width: 32px; height: 32px; border-radius: 6px; border: none;
-    font-size: 1rem; cursor: pointer; background: transparent;
+    width: 34px; height: 34px; border-radius: 6px; border: none;
+    font-size: 1.15rem; cursor: pointer; background: transparent;
     color: var(--text-secondary); transition: background 0.15s, color 0.15s;
+    flex-shrink: 0;
 }
+.icon-btn svg { width: 18px; height: 18px; fill: currentColor; }
 .icon-btn:hover { background: var(--bg-input); }
 .icon-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .icon-btn-success { color: var(--success); }
 .icon-btn-danger { color: var(--danger); }
 .icon-btn-warning { color: var(--warning); }
 .icon-btn-ghost { color: var(--text-muted); }
-.icon-btn-ghost:hover { background: var(--bg-input); }
+.icon-btn-ghost:hover { background: var(--bg-input); color: var(--text-primary); }
 .model-transitional { font-size: 0.78rem; font-style: italic; padding: 0 4px; }
 
 /* Status Badges */
@@ -377,11 +381,12 @@ code { font-family: var(--font-mono); font-size: 0.9em; background: var(--bg-inp
     .sidebar-footer { display: none; }
     .app-shell { flex-direction: column; }
     .main-content { margin-left: 0; padding: 1rem; }
-    .model-row { flex-wrap: wrap; }
-    .model-row-actions { width: 100%; }
+    .model-row { flex-wrap: wrap; gap: 8px; }
+    .model-row-actions { width: 100%; justify-content: flex-end; }
     .form-row { grid-template-columns: 1fr; }
     .modal-box { max-height: 85vh; }
     .filter-bar { flex-direction: column; align-items: stretch; }
+    .toggle-label { justify-content: flex-start; }
 }
 @media (max-width: 480px) {
     .view-header { flex-direction: column; align-items: flex-start; gap: 0.8rem; }
