@@ -26,12 +26,22 @@
   - Design gate: [ADR 005](docs/adr/005-recovery-pid-reattach-orphan.md) (**Proposed** — decision agreed 2026-08-22, implementation pending) defines the `orphan`/`stale` state model, the identity contract (PID + executable path + start time; bare PID forbidden; conservative fallback), safe Dismiss/reconciliation, and the user-facing explanation. First implementation scope **excludes kill**. Implementation is the next step and sets ADR 005 to **Accepted** as it is implemented; the agreed `orphan`/`stale` semantics are implemented together (no partial "stale-only" step).
 - [ ] Recovery: kill of an orphan (destructive) — separate item; requires its own contract/security review (ADR) of identity-verification sufficiency before implementation
 - [ ] Login rate limiting (complete) + full audit logging
+- [ ] Secure credential storage: migrate `adminPassword` from plaintext in config JSON to stored hash (bcrypt/Argon2id) with backward-compatible migration (detect plaintext → hash on first load); no hash in API responses; UI password-set semantics preserved
+  - Design gate: security ADR (hash algorithm, work factor, migration strategy, API contract)
 - [ ] JSON durability: fsync after rename on all platforms; transactional backup before every write
 - [ ] Hot-reload wired into main startup
 - [ ] Maintained real-Chrome acceptance as a release gate (build-out under Product/UX → Browser Acceptance Suite)
 
 ### P1 — Product & reliability
 - [ ] Pipeline MVP (see Pipeline contract below)
+- [ ] Windows Service / Background Mode: true SCM integration (service registration, graceful stop, diagnostics without console, service-mode paths); compatible with Recovery (ADR 005); uninstall safety
+  - Design gate: lifecycle ADR (SCM contract, interaction with Supervisor/Recovery, service vs foreground mode)
+  - Pre-implementation: forensic of existing `deploy/windows/install-service.ps1`, `uninstall-service.ps1`, and `internal/updater` service integration to avoid a parallel mechanism
+- [ ] Native HTTPS / TLS: binary serves HTTPS directly (cert/key config, HTTP/HTTPS mode toggle, Secure cookie, TLS version defaults, diagnostics); no reverse proxy required; independent security-hardening direction (not blocked by Secure Credential Storage)
+  - Design gate: security/config ADR (TLS config model, certificate loading, Secure-cookie activation)
+- [ ] Portable Configuration & Path Variables: config export/import, environment-variable expansion (`${VAR}`), built-in GoAl variables, resolve-at-consumption, undefined-variable diagnostic, backward-compatible load, secret-safe export
+  - Design gate: architecture ADR (config model, variable resolution semantics, security policy for exported secrets)
+  - Constraint (not a hard dependency): secret-safe export must account for Secure Credential Storage (P0) and future TLS private keys; the portable-config ADR defines the export security contract, but implementation is not blocked until both directions land
 - [ ] Persistent logs
 - [ ] Configurable log storage location
 - [ ] Prometheus-compatible monitoring
@@ -61,6 +71,7 @@
 - [ ] SQLite storage — only through an explicit architecture decision (ADR)
 - [ ] Auto-update
 - [ ] Advanced Pipeline: DAG / dependencies / readiness / resource scheduling
+- [ ] ACME / automatic certificate management (depends on Native HTTPS / TLS)
 
 ## Product/UX evolution (multi-release)
 
