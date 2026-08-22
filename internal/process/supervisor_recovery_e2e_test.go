@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -113,20 +114,41 @@ func TestRecovery_E2E_Orphan_Detect_Dismiss(t *testing.T) {
 	t.Log("✓ Helper process still alive after Dismiss (no signal sent)")
 }
 
-// findFakeRuntime locates the fake-runtime test binary.
+// findFakeRuntime locates or builds the fake-runtime test binary.
 func findFakeRuntime(t *testing.T) string {
 	t.Helper()
-	candidates := []string{
-		filepath.Join("..", "..", "testdata", "fake-runtime", "fake-runtime"),
-		filepath.Join("..", "..", "testdata", "fake-runtime", "fake-runtime.exe"),
+	var name string
+	if runtime.GOOS == "windows" {
+		name = "fake-runtime.exe"
+	} else {
+		name = "fake-runtime"
 	}
-	for _, c := range candidates {
-		if info, err := os.Stat(c); err == nil && !info.IsDir() {
-			return c
+	binPath := filepath.Join("..", "..", "testdata", "fake-runtime", name)
+	srcDir := filepath.Join("..", "..", "testdata", "fake-runtime")
+
+	build := func() error {
+		cmd := exec.Command("go", "build", "-o", binPath, ".")
+		cmd.Dir = srcDir
+		return cmd.Run()
+	}
+
+	if info, err := os.Stat(binPath); err == nil && !info.IsDir() {
+		if runtime.GOOS != "windows" {
+			if info.Mode()&0111 == 0 {
+				if err := build(); err != nil {
+					t.Skipf("fake-runtime not executable and rebuild failed: %v", err)
+					return ""
+				}
+			}
 		}
+		return binPath
 	}
-	t.Skip("fake-runtime binary not found; skipping e2e test")
-	return ""
+
+	if err := build(); err != nil {
+		t.Skipf("fake-runtime binary not found and build failed: %v", err)
+		return ""
+	}
+	return binPath
 }
 
 // platform_IsProcessAlive wraps the platform prober for test use.
