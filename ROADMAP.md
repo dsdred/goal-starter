@@ -23,6 +23,7 @@
 
 ### P0 — Production hardening
 - [ ] Recovery: full PID reattachment + orphan handling on restart
+  - Design gate: requires an ADR before implementation. The recovery design must define: when an instance is stale/orphan, when PID reattachment is possible, when process ownership is confirmed, handling of orphan processes, the state persisted in history, and its user-facing explanation (v2.0.1 manual acceptance observed the STALE/«УСТАРЕВШИЙ» history state). No STALE-semantics change without this ADR.
 - [ ] Login rate limiting (complete) + full audit logging
 - [ ] JSON durability: fsync after rename on all platforms; transactional backup before every write
 - [ ] Hot-reload wired into main startup
@@ -76,6 +77,7 @@
 - [ ] Zoom (80 / 100 / 125 / 150%) correctness
 - [ ] No horizontal body scroll guarantee
 - [ ] Reusable compact-row pattern across entities
+- [ ] Fix non-monotonic breakpoint in the Runtime view (table → cards → table snap-back on width change); once the compact view is reached it must stay compact (v2.0.1 manual-acceptance finding)
 
 ### Maintained Browser Acceptance Suite
 - [ ] Replace one-off scratch acceptance scripts with a maintained suite
@@ -89,6 +91,7 @@
 - [ ] Immutable history snapshots
 - [ ] Retention / cleanup policy
 - [ ] Optional history details view
+- [ ] History: move the clear-history action into the filter toolbar (natural wrap on narrow widths) and label it «Очистить» (currently a separate «Очистка» control beside the heading)
 
 ### Settings UX
 - [ ] Settings grouping
