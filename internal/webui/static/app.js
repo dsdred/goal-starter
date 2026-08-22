@@ -311,6 +311,29 @@ function fmtTime(ts) {
     return d.toLocaleString();
 }
 
+function fmtHM(ts) {
+    const d = new Date(ts);
+    return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+}
+
+function fmtMD(ts) {
+    const d = new Date(ts);
+    return (d.getMonth() + 1) + '.' + d.getDate();
+}
+
+function sameDay(a, b) {
+    const da = new Date(a), db = new Date(b);
+    return da.getFullYear() === db.getFullYear() && da.getMonth() === db.getMonth() && da.getDate() === db.getDate();
+}
+
+function fmtRange(a, b) {
+    if (!a || !b) return '';
+    const da = new Date(a), db = new Date(b);
+    if (isNaN(da.getTime()) || isNaN(db.getTime())) return '';
+    if (sameDay(a, b)) return fmtHM(a) + '→' + fmtHM(b);
+    return fmtMD(a) + ' ' + fmtHM(a) + '→' + fmtMD(b) + ' ' + fmtHM(b);
+}
+
 function esc(s) {
     const d = document.createElement('div');
     d.textContent = s || '';
@@ -515,11 +538,11 @@ function updateLogInstanceBar(instId) {
     if (!inst) { bar.style.display = 'none'; return; }
     const started = fmtTime(inst.started_at);
     const stateLabel = historyStateLabel(inst.state);
-    bar.innerHTML = '<span class="log-bar-label">' + t('logs.bar.model') + ':</span> ' + esc(getModelName(inst.model_id)) +
-        ' &nbsp;|&nbsp; <span class="log-bar-label">' + t('logs.bar.instance') + ':</span> <code>' + esc(inst.id.slice(0, 16)) + '</code>' +
-        ' &nbsp;|&nbsp; <span class="log-bar-label">' + t('logs.bar.pid') + ':</span> ' + (inst.pid || '—') +
-        ' &nbsp;|&nbsp; <span class="log-bar-label">' + t('logs.bar.state') + ':</span> <span class="status-badge ' + esc(inst.state) + '">' + esc(stateLabel) + '</span>' +
-        ' &nbsp;|&nbsp; <span class="log-bar-label">' + t('logs.bar.started') + ':</span> ' + started;
+    bar.innerHTML = '<span class="log-bar-model" title="' + esc(getModelName(inst.model_id)) + '">' + esc(getModelName(inst.model_id)) + '</span>' +
+        ' <span class="log-sep">|</span> <code>' + esc(inst.id.slice(0, 16)) + '</code>' +
+        ' <span class="log-sep">|</span> ' + t('logs.bar.pid') + ': ' + (inst.pid || '—') +
+        ' <span class="log-sep">|</span> <span class="status-badge ' + esc(inst.state) + '">' + esc(stateLabel) + '</span>' +
+        ' <span class="log-sep">|</span> ' + t('logs.bar.started') + ': ' + started;
     bar.style.display = 'flex';
 }
 
@@ -634,15 +657,7 @@ function openWizard(modelId) {
             document.getElementById('wiz-autostart-delay').value = m.autostart_delay || 0;
             if (m.runtime_id) {
                 rtSelectedId = m.runtime_id;
-                const r = runtimesData.find(function (x) { return x.id === m.runtime_id; });
-                if (r) {
-                    document.getElementById('wiz-rt-search').value = r.name;
-                    const details = document.getElementById('wiz-rt-selected');
-                    details.innerHTML = '<div class="rt-detail"><strong>' + esc(r.name) + '</strong></div>' +
-                        (r.executable ? '<div class="rt-detail-sub">exe: ' + esc(r.executable) + '</div>' : '') +
-                        (r.working_directory ? '<div class="rt-detail-sub">cwd: ' + esc(r.working_directory) + '</div>' : '');
-                    details.style.display = 'block';
-                }
+                renderRtDropdown();
             }
         }
     }
@@ -655,58 +670,42 @@ function closeWizard() { document.getElementById('wizard-modal').style.display =
 function loadWizardRuntimeCards() {
     rtSelectedId = null;
     document.getElementById('wiz-rt-search').value = '';
-    document.getElementById('wiz-rt-selected').style.display = 'none';
-    document.getElementById('wiz-rt-dropdown').style.display = 'none';
     if (runtimesData.length === 0 && !wizEditId) {
         document.querySelector('input[name=wiz-rt-mode][value=new]').checked = true;
         onWizRtModeChange();
     }
+    renderRtDropdown();
 }
 
 var rtSelectedId = null;
 
-function openRtDropdown() {
-    const dd = document.getElementById('wiz-rt-dropdown');
-    const search = document.getElementById('wiz-rt-search');
-    if (runtimesData.length === 0) {
-        search.style.display = 'none';
-        dd.innerHTML = '<div class="rt-dropdown-empty">' + esc(t('wizard.rt.empty')) + '</div>';
-        dd.style.display = 'block';
-        return;
-    }
-    search.style.display = '';
-    renderRtDropdown();
-}
-
-function closeRtDropdown() {
-    document.getElementById('wiz-rt-dropdown').style.display = 'none';
-}
-
 function renderRtDropdown() {
     const dd = document.getElementById('wiz-rt-dropdown');
     const search = document.getElementById('wiz-rt-search');
-    const query = search ? search.value.toLowerCase() : '';
+    if (!dd || !search) return;
+    if (runtimesData.length === 0) {
+        dd.innerHTML = '<div class="rt-dropdown-empty">' + esc(t('wizard.rt.empty')) + '</div>';
+        return;
+    }
+    const query = search.value.toLowerCase();
     const filtered = runtimesData.filter(function (r) {
         return !query || r.name.toLowerCase().indexOf(query) !== -1;
     });
     if (filtered.length === 0) {
         dd.innerHTML = '<div class="rt-dropdown-empty">' + esc(t('wizard.rt.none')) + '</div>';
-        dd.style.display = 'block';
         return;
     }
     dd.innerHTML = filtered.map(function (r) {
-        const sel = r.id === rtSelectedId ? ' selected' : '';
-        return '<div class="rt-dropdown-item' + sel + '" data-id="' + esc(r.id) + '" onmousedown="selectRtItem(\'' + safeId(r.id) + '\')">' + esc(r.name) + '</div>';
+        const sel = r.id === rtSelectedId;
+        const path = r.executable || r.working_directory || '';
+        const title = [r.executable, r.working_directory ? 'cwd: ' + r.working_directory : ''].filter(Boolean).join(' · ');
+        return '<div class="rt-dropdown-item' + (sel ? ' selected' : '') + '" data-id="' + esc(r.id) + '" title="' + esc(title) + '" onmousedown="selectRtItem(\'' + safeId(r.id) + '\')">' +
+            (sel ? '<span class="rt-check">✓</span>' : '') +
+            '<span class="rt-name">' + esc(r.name) + '</span>' +
+            (path ? '<span class="rt-sep"> · </span><span class="rt-path">' + esc(path) + '</span>' : '') +
+        '</div>';
     }).join('');
-    dd.style.display = 'block';
 }
-
-function rtDropdownOutsideClick(e) {
-    const sel = document.querySelector('.rt-selector');
-    if (sel && !sel.contains(e.target)) closeRtDropdown();
-}
-
-document.addEventListener('click', rtDropdownOutsideClick);
 
 function rtDropdownKeydown(e) {
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
@@ -717,16 +716,16 @@ function rtDropdownKeydown(e) {
         let idx = items.findIndex(function (el) { return el.classList.contains('selected'); });
         if (e.key === 'ArrowDown') idx = Math.min(idx + 1, items.length - 1);
         else idx = Math.max(idx - 1, 0);
-        items.forEach(function (el) { el.classList.remove('selected'); });
-        items[idx].classList.add('selected');
+        items.forEach(function (el) { el.classList.remove('kb-focus'); });
+        items[idx].classList.add('kb-focus');
         items[idx].scrollIntoView({ block: 'nearest' });
     } else if (e.key === 'Enter') {
         e.preventDefault();
         const dd = document.getElementById('wiz-rt-dropdown');
-        const sel = dd.querySelector('.rt-dropdown-item.selected');
+        const sel = dd.querySelector('.rt-dropdown-item.kb-focus') || dd.querySelector('.rt-dropdown-item.selected');
         if (sel) selectRtItem(sel.dataset.id);
     } else if (e.key === 'Escape') {
-        document.getElementById('wiz-rt-dropdown').style.display = 'none';
+        e.stopPropagation();
     }
 }
 
@@ -734,13 +733,8 @@ function selectRtItem(id) {
     rtSelectedId = id;
     const r = runtimesData.find(function (x) { return x.id === id; });
     if (!r) return;
-    document.getElementById('wiz-rt-search').value = r.name;
-    closeRtDropdown();
-    const details = document.getElementById('wiz-rt-selected');
-    details.innerHTML = '<div class="rt-detail"><strong>' + esc(r.name) + '</strong></div>' +
-        (r.executable ? '<div class="rt-detail-sub">exe: ' + esc(r.executable) + '</div>' : '') +
-        (r.working_directory ? '<div class="rt-detail-sub">cwd: ' + esc(r.working_directory) + '</div>' : '');
-    details.style.display = 'block';
+    document.getElementById('wiz-rt-search').value = '';
+    renderRtDropdown();
 }
 
 function onWizRtModeChange() {
@@ -885,16 +879,36 @@ function renderAdvRuntimes() {
     if (runtimesData.length === 0) {
         document.getElementById('adv-runtimes-body').innerHTML = '';
         if (empty) empty.style.display = 'block';
-        if (tableWrap) tableWrap.style.display = 'none';
+        if (tableWrap) tableWrap.classList.remove('visible');
+        const compact = document.getElementById('runtimes-compact');
+        if (compact) compact.classList.remove('visible');
         return;
     }
     if (empty) empty.style.display = 'none';
-    if (tableWrap) tableWrap.style.display = '';
+    if (tableWrap) tableWrap.classList.add('visible');
     document.getElementById('adv-runtimes-body').innerHTML = runtimesData.map(function (r) {
-        return '<tr><td>' + esc(r.name) + '</td><td>' + esc(r.executable) + '</td><td>' + esc(r.working_directory || '—') + '</td>' +
+        return '<tr><td>' + esc(r.name) + '</td><td title="' + esc(r.executable || '') + '">' + esc(r.executable) + '</td><td title="' + esc(r.working_directory || '') + '">' + esc(r.working_directory || '—') + '</td>' +
             '<td class="actions-cell"><button class="btn btn-ghost btn-sm" onclick="editRuntime(\'' + safeId(r.id) + '\')">' + t('runtimes.actions.edit') + '</button> ' +
             '<button class="btn btn-danger btn-sm" onclick="deleteRuntime(\'' + safeId(r.id) + '\')">' + t('runtimes.actions.delete') + '</button></td></tr>';
     }).join('');
+    const compact = document.getElementById('runtimes-compact');
+    if (compact) {
+        compact.classList.add('visible');
+        compact.innerHTML = runtimesData.map(function (r) {
+            const path = r.executable || r.working_directory || '—';
+            const title = [r.executable, r.working_directory ? 'cwd: ' + r.working_directory : ''].filter(Boolean).join(' · ');
+            return '<div class="compact-row crt-row">' +
+                '<div class="compact-main">' +
+                    '<div class="compact-l1">' + esc(r.name) + '</div>' +
+                    '<div class="compact-l2" title="' + esc(title) + '">' + esc(path) + '</div>' +
+                '</div>' +
+                '<div class="compact-actions">' +
+                    iconBtn(ICONS.edit, t('runtimes.actions.edit'), 'ghost', 'editRuntime', r.id) +
+                    iconBtn(ICONS.del, t('runtimes.actions.delete'), 'danger', 'deleteRuntime', r.id) +
+                '</div>' +
+            '</div>';
+        }).join('');
+    }
 }
 
 function showCreateRuntimeModal() {
@@ -1085,21 +1099,44 @@ function renderAdvInstances() {
     if (active.length === 0) {
         document.getElementById('adv-instances-body').innerHTML = '';
         if (empty) empty.style.display = 'block';
-        if (tableWrap) tableWrap.style.display = 'none';
+        if (tableWrap) tableWrap.classList.remove('visible');
+        const compact = document.getElementById('instances-compact');
+        if (compact) compact.classList.remove('visible');
         return;
     }
     if (empty) empty.style.display = 'none';
-    if (tableWrap) tableWrap.style.display = '';
+    if (tableWrap) tableWrap.classList.add('visible');
     document.getElementById('adv-instances-body').innerHTML = active.map(function (i) {
         return '<tr><td style="font-family:var(--font-mono);font-size:0.78rem;">' + esc(i.id.slice(0, 16)) + '</td>' +
-            '<td>' + esc(getModelName(i.model_id)) + '</td>' +
+            '<td title="' + esc(getModelName(i.model_id)) + '">' + esc(getModelName(i.model_id)) + '</td>' +
             '<td><span class="status-badge ' + esc(i.state) + '">' + esc(t('models.status.' + i.state) || i.state) + '</span></td>' +
-            '<td>' + (i.pid || '—') + '</td><td>' + fmtTime(i.started_at) + '</td><td>' + fmtTime(i.stopped_at) + '</td>' +
+            '<td>' + (i.pid || '—') + '</td><td title="' + esc(fmtTime(i.started_at)) + '">' + fmtTime(i.started_at) + '</td><td>' + fmtTime(i.stopped_at) + '</td>' +
             '<td>' + (i.exit_code != null ? i.exit_code : '—') + '</td>' +
             '<td class="actions-cell"><button class="btn btn-ghost btn-sm" onclick="viewInstanceLogs(\'' + safeId(i.id) + '\')">' + t('instances.actions.logs') + '</button>' +
             ' <button class="btn btn-danger btn-sm" onclick="stopInstance(\'' + safeId(i.id) + '\')">' + t('instances.actions.stop') + '</button> ' +
             '<button class="btn btn-warning btn-sm" onclick="restartInstance(\'' + safeId(i.id) + '\')">' + t('instances.actions.restart') + '</button>' + '</td></tr>';
     }).join('');
+    const compact = document.getElementById('instances-compact');
+    if (compact) {
+        compact.classList.add('visible');
+        compact.innerHTML = active.map(function (i) {
+            const range = fmtRange(i.started_at, i.stopped_at) || fmtUptime(i.started_at);
+            return '<div class="compact-row cinst-row">' +
+                '<div class="compact-main">' +
+                    '<div class="compact-l1">' +
+                        '<span class="status-badge ' + esc(i.state) + '">' + esc(t('models.status.' + i.state) || i.state) + '</span>' +
+                        '<span class="compact-title" title="' + esc(getModelName(i.model_id)) + '">' + esc(getModelName(i.model_id)) + '</span>' +
+                    '</div>' +
+                    '<div class="compact-l2">' + esc(i.id.slice(0, 12)) + ' · PID ' + (i.pid || '—') + (range ? ' · ' + range : '') + '</div>' +
+                '</div>' +
+                '<div class="compact-actions">' +
+                    iconBtn(ICONS.logs, t('instances.actions.logs'), 'ghost', 'viewInstanceLogs', i.id) +
+                    iconBtn(ICONS.stop, t('instances.actions.stop'), 'danger', 'stopInstance', i.id) +
+                    iconBtn(ICONS.restart, t('instances.actions.restart'), 'warning', 'restartInstance', i.id) +
+                '</div>' +
+            '</div>';
+        }).join('');
+    }
 }
 
 async function stopInstance(id) {
@@ -1144,22 +1181,47 @@ function renderHistory() {
 
     if (filtered.length === 0) {
         if (empty) empty.style.display = 'block';
-        if (tableWrap) tableWrap.style.display = 'none';
+        if (tableWrap) tableWrap.classList.remove('visible');
+        const compact = document.getElementById('history-compact');
+        if (compact) compact.classList.remove('visible');
         return;
     }
     if (empty) empty.style.display = 'none';
-    if (tableWrap) tableWrap.style.display = '';
+    if (tableWrap) tableWrap.classList.add('visible');
     document.getElementById('history-body').innerHTML = filtered.slice(0, 200).map(function (i) {
         const modelName = i.model_name || getModelName(i.model_id);
         const exitTitle = i.exit_code != null ? ' title="' + esc(String(i.exit_code)) + '"' : '';
-        return '<tr><td>' + esc(modelName) + '</td>' +
+        return '<tr><td title="' + esc(modelName) + '">' + esc(modelName) + '</td>' +
             '<td style="font-family:var(--font-mono);font-size:0.78rem;">' + esc(i.id.slice(0, 12)) + '</td>' +
             '<td><span class="status-badge ' + esc(i.state) + '">' + esc(historyStateLabel(i.state)) + '</span></td>' +
             '<td>' + (i.pid || '—') + '</td>' +
-            '<td>' + fmtTime(i.started_at) + '</td><td>' + fmtTime(i.stopped_at) + '</td>' +
+            '<td title="' + esc(fmtTime(i.started_at)) + '">' + fmtTime(i.started_at) + '</td><td title="' + esc(fmtTime(i.stopped_at)) + '">' + fmtTime(i.stopped_at) + '</td>' +
             '<td' + exitTitle + '>' + (i.exit_code != null ? i.exit_code : '—') + '</td>' +
             '<td class="actions-cell"><button class="btn btn-ghost btn-sm" onclick="viewInstanceLogs(\'' + safeId(i.id) + '\')">' + t('instances.actions.logs') + '</button></td></tr>';
     }).join('');
+    const compact = document.getElementById('history-compact');
+    if (compact) {
+        compact.classList.add('visible');
+        compact.innerHTML = filtered.slice(0, 200).map(function (i) {
+            const modelName = i.model_name || getModelName(i.model_id);
+            const range = fmtRange(i.started_at, i.stopped_at);
+            const title = [fmtTime(i.started_at), fmtTime(i.stopped_at)].join(' → ');
+            const rangeTitle = range ? ' title="' + esc(title) + '"' : '';
+            const exitPart = i.exit_code != null ? ' · Exit ' + i.exit_code : '';
+            return '<div class="compact-row chist-row">' +
+                '<div class="compact-main">' +
+                    '<div class="compact-l1">' +
+                        '<span class="status-badge ' + esc(i.state) + '">' + esc(historyStateLabel(i.state)) + '</span>' +
+                        '<span class="compact-title" title="' + esc(modelName) + '">' + esc(modelName) + '</span>' +
+                    '</div>' +
+                    '<div class="compact-l2"' + rangeTitle + '>' + esc(i.id.slice(0, 12)) + ' · PID ' + (i.pid || '—') + exitPart + (range ? ' · ' + range : '') + '</div>' +
+                '</div>' +
+                '<div class="compact-actions">' +
+                    iconBtn(ICONS.logs, t('instances.actions.logs'), 'ghost', 'viewInstanceLogs', i.id) +
+                '</div>' +
+            '</div>';
+        }).join('');
+    }
 }
 
 // ─── Instance Cleanup ───────────────────────────────────────────────────────
@@ -1292,10 +1354,15 @@ function closeDrawer() {
     document.getElementById('drawer-overlay').classList.remove('open');
 }
 
+if (window.matchMedia) {
+    window.matchMedia('(max-width: 768px)').addEventListener('change', function () {
+        closeDrawer();
+    });
+}
+
 document.addEventListener('keydown', function (e) {
     if (e.key === 'Escape') {
         closeDrawer();
-        closeRtDropdown();
     }
 });
 
@@ -1386,8 +1453,6 @@ window.closeCleanup = closeCleanup;
 window.confirmCleanup = confirmCleanup;
 window.toggleDrawer = toggleDrawer;
 window.closeDrawer = closeDrawer;
-window.openRtDropdown = openRtDropdown;
-window.closeRtDropdown = closeRtDropdown;
 window.openSettingsEdit = openSettingsEdit;
 window.closeSettingsEdit = closeSettingsEdit;
 window.saveSettingsEdit = saveSettingsEdit;

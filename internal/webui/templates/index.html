@@ -161,9 +161,8 @@
                     <div id="wiz-rt-existing-section" class="form-group">
                         <label data-i18n="wizard.rt.select">Выберите Runtime</label>
                         <div class="rt-selector">
-                            <input type="text" id="wiz-rt-search" class="rt-search-input" data-i18n-placeholder="wizard.rt.search_placeholder" placeholder="Search Runtime..." autocomplete="off" onfocus="openRtDropdown()" oninput="renderRtDropdown()" onkeydown="rtDropdownKeydown(event)">
-                            <div id="wiz-rt-dropdown" class="rt-dropdown" style="display:none;"></div>
-                            <div id="wiz-rt-selected" class="rt-selected-details" style="display:none;"></div>
+                            <input type="text" id="wiz-rt-search" class="rt-search-input" data-i18n-placeholder="wizard.rt.search_placeholder" placeholder="Search Runtime..." autocomplete="off" oninput="renderRtDropdown()" onkeydown="rtDropdownKeydown(event)">
+                            <div id="wiz-rt-dropdown" class="rt-list"></div>
                         </div>
                     </div>
                     <div id="wiz-rt-new-section" class="form-group" style="display:none;">
@@ -288,6 +287,7 @@
                     <button class="btn btn-primary" onclick="openWizard()" data-i18n="models.add">+ Добавить модель</button>
                 </div>
                 <div class="filter-bar" id="models-filter-bar">
+                    <label class="filter-switch"><span class="toggle-switch"><input type="checkbox" id="mf-autostart" onchange="renderModels()"><span class="toggle-slider"></span></span><span data-i18n="models.filter.autostart">Автостарт</span></label>
                     <input type="text" id="mf-search" placeholder="Поиск..." data-i18n-placeholder="models.filter.search" oninput="renderModels()">
                     <select id="mf-runtime" onchange="renderModels()"><option value="" data-i18n="models.filter.all_runtimes">All Runtimes</option></select>
                     <select id="mf-state" onchange="renderModels()">
@@ -297,7 +297,6 @@
                         <option value="starting" data-i18n="models.status.starting">Starting</option>
                         <option value="stopping" data-i18n="models.status.stopping">Stopping</option>
                     </select>
-                    <label class="filter-switch"><span class="toggle-switch"><input type="checkbox" id="mf-autostart" onchange="renderModels()"><span class="toggle-slider"></span></span><span data-i18n="models.filter.autostart">Автостарт</span></label>
                 </div>
                 <div class="model-list" id="model-list"></div>
                 <div class="empty-state" id="models-empty" style="display:none;">
@@ -346,7 +345,8 @@
                     <p data-i18n="history.empty">Экземпляры не найдены.</p>
                     <small class="hint-text" data-i18n="history.empty.hint">Завершённые экземпляры появятся здесь.</small>
                 </div>
-                <div id="history-table-wrap" style="display:none;">
+                <div id="history-compact" class="compact-list"></div>
+                <div id="history-table-wrap">
                     <table class="data-table">
                         <thead><tr>
                             <th data-i18n="history.col.model">Модель</th>
@@ -373,7 +373,8 @@
                     <p data-i18n="runtimes.empty">Runtime не добавлены.</p>
                     <small class="hint-text" data-i18n="runtimes.empty.hint">Добавьте Runtime, чтобы создавать модели.</small>
                 </div>
-                <div id="runtimes-table-wrap" style="display:none;">
+                <div id="runtimes-compact" class="compact-list"></div>
+                <div id="runtimes-table-wrap">
                     <table class="data-table">
                         <thead><tr>
                             <th data-i18n="runtimes.col.name">Имя</th>
@@ -395,7 +396,8 @@
                     <p data-i18n="instances.empty">Экземпляры не найдены.</p>
                     <small class="hint-text" data-i18n="instances.empty.hint">Запустите модель из «Мои модели», чтобы увидеть экземпляр здесь.</small>
                 </div>
-                <div id="instances-table-wrap" style="display:none;">
+                <div id="instances-compact" class="compact-list"></div>
+                <div id="instances-table-wrap">
                     <table class="data-table">
                         <thead><tr>
                             <th data-i18n="instances.col.id">ID</th>
