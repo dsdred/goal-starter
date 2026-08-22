@@ -22,8 +22,9 @@
 ## Next: production hardening + product
 
 ### P0 — Production hardening
-- [ ] Recovery: full PID reattachment + orphan handling on restart
-  - Design gate: requires an ADR before implementation. The recovery design must define: when an instance is stale/orphan, when PID reattachment is possible, when process ownership is confirmed, handling of orphan processes, the state persisted in history, and its user-facing explanation (v2.0.1 manual acceptance observed the STALE/«УСТАРЕВШИЙ» history state). No STALE-semantics change without this ADR.
+- [ ] Recovery: identity-verified orphan detection and restart reconciliation
+  - Design gate: [ADR 005](docs/adr/005-recovery-pid-reattach-orphan.md) (**Proposed** — decision agreed 2026-08-22, implementation pending) defines the `orphan`/`stale` state model, the identity contract (PID + executable path + start time; bare PID forbidden; conservative fallback), safe Dismiss/reconciliation, and the user-facing explanation. First implementation scope **excludes kill**. Implementation is the next step and sets ADR 005 to **Accepted** as it is implemented; the agreed `orphan`/`stale` semantics are implemented together (no partial "stale-only" step).
+- [ ] Recovery: kill of an orphan (destructive) — separate item; requires its own contract/security review (ADR) of identity-verification sufficiency before implementation
 - [ ] Login rate limiting (complete) + full audit logging
 - [ ] JSON durability: fsync after rename on all platforms; transactional backup before every write
 - [ ] Hot-reload wired into main startup
