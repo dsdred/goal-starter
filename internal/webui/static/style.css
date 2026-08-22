@@ -386,14 +386,15 @@ code { font-family: var(--font-mono); font-size: 0.9em; background: var(--bg-inp
 .compact-actions .icon-btn { width: 40px; height: 40px; }
 .compact-actions .icon-btn svg { width: 20px; height: 20px; }
 
-/* Layout switch: compact rows below 1024px, desktop tables above */
+/* Layout switch: driven by JS on the actual content width (#main-content).
+   .visible = the renderer has data for this entity; .show = the current mode
+   (table vs compact) chosen by updateTableLayout(). Both are required to
+   display, so an empty entity shows neither representation. A fixed viewport
+   breakpoint cannot account for the sidebar, which is why the mode is computed
+   from measured content width rather than the window width. */
 #runtimes-table-wrap, #instances-table-wrap, #history-table-wrap { display: none; }
-@media (min-width: 1025px) {
-    #runtimes-table-wrap.visible, #instances-table-wrap.visible, #history-table-wrap.visible { display: block; }
-}
-@media (max-width: 1024px) {
-    #runtimes-compact.visible, #instances-compact.visible, #history-compact.visible { display: flex; }
-}
+#runtimes-table-wrap.visible.show, #instances-table-wrap.visible.show, #history-table-wrap.visible.show { display: block; }
+#runtimes-compact.visible.show, #instances-compact.visible.show, #history-compact.visible.show { display: flex; }
 
 /* Empty state */
 .empty-state { text-align: center; padding: 2rem 1rem; color: var(--text-muted); }
@@ -408,6 +409,10 @@ code { font-family: var(--font-mono); font-size: 0.9em; background: var(--bg-inp
 .settings-section h3 { font-size: 0.85rem; font-weight: 600; margin-bottom: 0.6rem; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.03em; }
 .setting-row { display: flex; justify-content: space-between; align-items: center; padding: 5px 0; font-size: 0.85rem; }
 .setting-row span:first-child { color: var(--text-muted); }
+.settings-section-actions { display: flex; justify-content: flex-end; margin-top: 0.8rem; }
+.auth-creds { margin-bottom: 1rem; padding: 0.9rem 1rem; background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.auth-creds .form-group { margin-bottom: 0.8rem; }
+.auth-creds .form-group:last-child { margin-bottom: 0; }
 
 /* Runtime delete options */
 .rt-delete-options { display: flex; flex-direction: column; gap: 8px; margin: 1rem 0; }

@@ -174,14 +174,17 @@ The sidebar footer contains compact Theme and Language selectors, a server statu
 
 ## Server settings in Web UI
 
-Server parameters (`listenAddress`, `webPort`, `authEnabled`, `adminUser`, `adminPassword`) are **read-only** in the Web UI. They are displayed in Settings → Server but cannot be edited through the interface.
+Server parameters (`listenAddress`, `webPort`, `authEnabled`, `adminUser`, `adminPassword`) can be edited from **Settings → Server → Edit**. The edit modal is where the "Enable authentication" toggle and the admin username / password fields live.
 
-To change server configuration:
+Behavior:
+- **Restart required.** Server settings are written to `goal.json` but only take effect after GoAl is restarted (hot-reconfiguration of the HTTP listener and auth state is not supported). The UI shows a restart hint after a save.
+- **Credentials.** Enabling authentication requires a non-empty `adminUser` and `adminPassword`. When a password is already configured, the password field may be left empty to **keep the current password** (an empty value never erases the stored one); entering a value replaces it. The stored password is never returned by the API — `GET /api/v1/metrics` only reports `admin_user` and a boolean `admin_password_set`.
+- **Validation.** The server rejects enabling auth without both credentials (`400 cannot enable auth: ...`), invalid bind addresses, and out-of-range ports.
+
+To change server configuration without the UI:
 1. Stop GoAl.
 2. Edit `goal.json` (path via `GOAL_CONFIG` or default location).
 3. Start GoAl again.
-
-This is by design: hot-reconfiguration of the HTTP listener and auth state is not supported by the current architecture.
 
 ## Security implications
 

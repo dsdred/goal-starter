@@ -41,6 +41,47 @@ Production-ready single-binary manager for local AI runtimes and models.
 - [ ] ARM64 builds and tests
 - [ ] Windows MSI installer (via WiX)
 - [ ] Release automation via GitHub Actions
+- [ ] Reproducible Windows/Linux artifacts (deterministic build inputs)
+- [ ] PE version metadata (Windows) + ELF version fields (Linux) in release binaries
+- [ ] SHA-256 checksums for all artifacts + verification workflow
+- [ ] Distinguish verification binaries (pre-release) from signed release artifacts
+
+## Product & UX Evolution (multi-release)
+
+### Authentication & User Management
+- [ ] Multi-user support (beyond the single admin)
+- [ ] User CRUD + lifecycle (create / disable / delete, password reset)
+- [ ] Password lifecycle (rotation, expiry policy, forced change)
+- [ ] Session management (list / revoke active sessions)
+- [ ] Roles & permissions — separate architecture / design task (ADR)
+
+### Responsive UI Contract
+- [ ] Canonical content-width (not viewport) breakpoint strategy
+- [ ] Desktop table → compact row transition per entity
+- [ ] Sidebar-aware width accounting
+- [ ] Zoom (80 / 100 / 125 / 150%) correctness
+- [ ] No horizontal body scroll guarantee
+- [ ] Reusable compact-row pattern across entities
+
+### Maintained Browser Acceptance Suite
+- [ ] Replace one-off scratch acceptance scripts with a maintained suite
+- [ ] Deterministic fixtures (fake-runtime, seeded config / data)
+- [ ] Real Chrome / Chromium coverage
+- [ ] Responsive, auth, and wizard scenarios
+- [ ] CI integration (headless)
+
+### Instance History
+- [ ] Human-readable exit reason (normal stop / crash / forced termination)
+- [ ] Immutable history snapshots
+- [ ] Retention / cleanup policy
+- [ ] Optional history details view
+
+### Settings UX
+- [ ] Settings grouping
+- [ ] Field-level validation + save status
+- [ ] Pending-restart indication
+- [ ] Configured vs effective value display
+- [ ] Secret-safe expansion (never expose stored secrets)
 
 ## Future
 

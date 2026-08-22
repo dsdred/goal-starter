@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"os"
 	"runtime"
 	"strconv"
 	"strings"
@@ -115,8 +116,34 @@ func (h *SystemHandler) Metrics(w http.ResponseWriter, r *http.Request) {
 		resp["listen_address"] = h.listenAddr
 		resp["web_port"] = h.webPort
 		resp["auth_enabled"] = h.authEnabled
+		if user, passwordSet := h.adminConfigFields(); h.configPath != "" {
+			resp["admin_user"] = user
+			resp["admin_password_set"] = passwordSet
+		}
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// adminConfigFields returns the configured admin username and whether a
+// non-empty admin password is stored on disk. It never returns the password
+// or its hash — only a boolean signal so the client can offer a
+// "leave empty to keep the current password" workflow.
+func (h *SystemHandler) adminConfigFields() (user string, passwordSet bool) {
+	if h.configPath == "" {
+		return "", false
+	}
+	data, err := os.ReadFile(h.configPath)
+	if err != nil {
+		return "", false
+	}
+	var c struct {
+		AdminUser     string `json:"adminUser"`
+		AdminPassword string `json:"adminPassword"`
+	}
+	if err := json.Unmarshal(data, &c); err != nil {
+		return "", false
+	}
+	return c.AdminUser, c.AdminPassword != ""
 }
 
 // isValidListenAddress checks if the address is a valid bind address without
@@ -155,6 +182,8 @@ func (h *SystemHandler) SaveSettings(w http.ResponseWriter, r *http.Request) {
 		ListenAddress string `json:"listen_address"`
 		WebPort       int    `json:"web_port"`
 		AuthEnabled   bool   `json:"auth_enabled"`
+		AdminUser     string `json:"admin_user"`
+		AdminPassword string `json:"admin_password"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, 400, "invalid JSON")
@@ -180,6 +209,15 @@ func (h *SystemHandler) SaveSettings(w http.ResponseWriter, r *http.Request) {
 	cfg.ListenAddress = body.ListenAddress
 	cfg.WebPort = body.WebPort
 	cfg.AuthEnabled = body.AuthEnabled
+	// Credentials: a non-empty value updates the field; an empty value
+	// preserves whatever is already stored on disk (an empty password never
+	// erases the existing one).
+	if body.AdminUser != "" {
+		cfg.AdminUser = body.AdminUser
+	}
+	if body.AdminPassword != "" {
+		cfg.AdminPassword = body.AdminPassword
+	}
 	if cfg.AuthEnabled && (cfg.AdminUser == "" || cfg.AdminPassword == "") {
 		writeError(w, 400, "cannot enable auth: adminUser and adminPassword must be configured")
 		return

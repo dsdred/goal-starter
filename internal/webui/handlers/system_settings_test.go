@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"testing/fstest"
 
@@ -45,6 +46,27 @@ func newTestSettingsHandler(t *testing.T, configPath string) *SystemHandler {
 	h.webPort = 8088
 	h.authEnabled = false
 	return h
+}
+
+// newBareConfigFile writes a config that has NO admin credentials, used to
+// exercise the "first-time enable auth" path.
+func newBareConfigFile(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "goal.json")
+	cfg := config.Config{
+		Version:       2,
+		ListenAddress: "127.0.0.1",
+		WebPort:       8088,
+		DataDir:       dir,
+		AdminUser:     "",
+		AdminPassword: "",
+		AuthEnabled:   false,
+	}
+	if err := config.Save(path, cfg); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+	return path
 }
 
 func TestSettings_Save_Success(t *testing.T) {
@@ -415,5 +437,161 @@ func TestSettings_Security_ValidSessionAndCSRF(t *testing.T) {
 	cfg, _ := config.Load(path)
 	if cfg.WebPort != 9999 {
 		t.Errorf("port not saved: got %d", cfg.WebPort)
+	}
+}
+
+// --- Admin credential workflow (single-admin) ---
+
+func TestSettings_Save_EnableAuthWithCredentials(t *testing.T) {
+	path := newBareConfigFile(t)
+	h := newTestSettingsHandler(t, path)
+
+	body := `{"listen_address":"127.0.0.1","web_port":8088,"auth_enabled":true,"admin_user":"admin","admin_password":"secret123"}`
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/settings", bytes.NewBufferString(body))
+	w := httptest.NewRecorder()
+	h.SaveSettings(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d, body: %s", w.Code, w.Body.String())
+	}
+	saved, _ := config.Load(path)
+	if !saved.AuthEnabled {
+		t.Error("auth not enabled")
+	}
+	if saved.AdminUser != "admin" || saved.AdminPassword != "secret123" {
+		t.Errorf("credentials not saved: user=%q pass=%q", saved.AdminUser, saved.AdminPassword)
+	}
+}
+
+func TestSettings_Save_EnableAuthWithoutUsername(t *testing.T) {
+	path := newBareConfigFile(t)
+	h := newTestSettingsHandler(t, path)
+
+	body := `{"listen_address":"127.0.0.1","web_port":8088,"auth_enabled":true,"admin_password":"secret123"}`
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/settings", bytes.NewBufferString(body))
+	w := httptest.NewRecorder()
+	h.SaveSettings(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d, body: %s", w.Code, w.Body.String())
+	}
+	saved, _ := config.Load(path)
+	if saved.AuthEnabled {
+		t.Error("auth was enabled despite missing username")
+	}
+}
+
+func TestSettings_Save_EnableAuthWithoutPassword(t *testing.T) {
+	path := newBareConfigFile(t)
+	h := newTestSettingsHandler(t, path)
+
+	body := `{"listen_address":"127.0.0.1","web_port":8088,"auth_enabled":true,"admin_user":"admin"}`
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/settings", bytes.NewBufferString(body))
+	w := httptest.NewRecorder()
+	h.SaveSettings(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d, body: %s", w.Code, w.Body.String())
+	}
+	saved, _ := config.Load(path)
+	if saved.AuthEnabled {
+		t.Error("auth was enabled despite missing password")
+	}
+}
+
+func TestSettings_Save_PreservePasswordWhenOmitted(t *testing.T) {
+	path := newTestConfigFile(t) // admin / secret123, auth disabled
+	h := newTestSettingsHandler(t, path)
+
+	// Enable auth, provide the username, but omit the password entirely.
+	body := `{"listen_address":"127.0.0.1","web_port":8088,"auth_enabled":true,"admin_user":"admin"}`
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/settings", bytes.NewBufferString(body))
+	w := httptest.NewRecorder()
+	h.SaveSettings(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d, body: %s", w.Code, w.Body.String())
+	}
+	saved, _ := config.Load(path)
+	if saved.AdminPassword != "secret123" {
+		t.Errorf("existing password was lost: got %q", saved.AdminPassword)
+	}
+}
+
+func TestSettings_Save_ChangePasswordWhenSupplied(t *testing.T) {
+	path := newTestConfigFile(t) // admin / secret123, auth disabled
+	h := newTestSettingsHandler(t, path)
+
+	body := `{"listen_address":"127.0.0.1","web_port":8088,"auth_enabled":true,"admin_user":"admin","admin_password":"newpass456"}`
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/settings", bytes.NewBufferString(body))
+	w := httptest.NewRecorder()
+	h.SaveSettings(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d, body: %s", w.Code, w.Body.String())
+	}
+	saved, _ := config.Load(path)
+	if saved.AdminPassword != "newpass456" {
+		t.Errorf("password not changed: got %q", saved.AdminPassword)
+	}
+}
+
+// --- GET /metrics exposes admin state without leaking the secret ---
+
+func newTestMetricsHandler(t *testing.T, configPath string) *SystemHandler {
+	t.Helper()
+	repo, err := storage.NewJSONRepository(filepath.Join(t.TempDir(), "repo.json"))
+	if err != nil {
+		t.Fatalf("create repo: %v", err)
+	}
+	supervisor := process.NewSupervisor(repo)
+	h := NewSystemHandler(supervisor, nil, nil, application.NewInstanceService(supervisor, repo))
+	h.configPath = configPath
+	h.listenAddr = "127.0.0.1"
+	h.webPort = 8088
+	h.authEnabled = true
+	return h
+}
+
+func TestSettings_Metrics_AdminFieldsNoSecret(t *testing.T) {
+	path := newTestConfigFile(t) // admin / secret123
+	h := newTestMetricsHandler(t, path)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/metrics", nil)
+	w := httptest.NewRecorder()
+	h.Metrics(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	body := w.Body.String()
+	var resp map[string]any
+	if err := json.Unmarshal([]byte(body), &resp); err != nil {
+		t.Fatalf("decode metrics: %v", err)
+	}
+	if got := resp["admin_user"]; got != "admin" {
+		t.Errorf("admin_user: expected admin, got %v", got)
+	}
+	if got := resp["admin_password_set"]; got != true {
+		t.Errorf("admin_password_set: expected true, got %v", got)
+	}
+	if strings.Contains(body, "secret123") {
+		t.Errorf("metrics response leaked the password: %s", body)
+	}
+}
+
+func TestSettings_Metrics_BareConfigPasswordNotSet(t *testing.T) {
+	path := newBareConfigFile(t)
+	h := newTestMetricsHandler(t, path)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/metrics", nil)
+	w := httptest.NewRecorder()
+	h.Metrics(w, req)
+	var resp map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode metrics: %v", err)
+	}
+	if got := resp["admin_password_set"]; got != false {
+		t.Errorf("admin_password_set: expected false, got %v", got)
+	}
+	if got := resp["admin_user"]; got != "" {
+		t.Errorf("admin_user: expected empty, got %v", got)
 	}
 }

@@ -50,8 +50,8 @@ Error codes: `bad_request`, `unauthorized`, `forbidden`, `not_found`, `conflict`
 | `GET` | `/api/v1/session` | Yes | — | Current session info. |
 | `GET` | `/api/v1/admin/users` | Yes | — | List configured users. |
 | `GET` | `/api/v1/admin/sessions` | Yes | — | List active sessions. |
-| `GET` | `/api/v1/metrics` | Yes | — | Application metrics. |
-| `PUT` | `/api/v1/settings` | Yes | Yes | Save server settings (listen_address, web_port, auth_enabled). Requires restart. |
+| `GET` | `/api/v1/metrics` | Yes | — | Instance counts plus server settings: `listen_address`, `web_port`, `auth_enabled`, `admin_user`, `admin_password_set` (boolean; the password itself is never returned). |
+| `PUT` | `/api/v1/settings` | Yes | Yes | Save server settings (`listen_address`, `web_port`, `auth_enabled`, optional `admin_user`, `admin_password`). Empty `admin_password` preserves the stored one. Enabling auth without credentials → `400`. Requires restart. |
 
 ## Instances (processes)
 

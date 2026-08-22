@@ -418,7 +418,6 @@
             <section class="view" id="view-adv-settings">
                 <div class="view-header">
                     <h1 data-i18n="settings.title">Настройки</h1>
-                    <button class="btn btn-primary" onclick="openSettingsEdit()" data-i18n="settings.edit">Изменить настройки</button>
                 </div>
                 <div class="settings-compact">
                     <div class="settings-section">
@@ -426,6 +425,9 @@
                         <div class="setting-row"><span data-i18n="settings.server.listen">Адрес</span><span id="set-listen">-</span></div>
                         <div class="setting-row"><span data-i18n="settings.server.port">Порт</span><span id="set-port">-</span></div>
                         <div class="setting-row"><span data-i18n="settings.server.auth">Авторизация</span><span id="set-auth">-</span></div>
+                        <div class="settings-section-actions">
+                            <button class="btn btn-ghost btn-sm" onclick="openSettingsEdit()" data-i18n="settings.server.edit">Изменить</button>
+                        </div>
                     </div>
                     <div class="settings-section">
                         <h3 data-i18n="settings.about.title">О программе</h3>
@@ -481,10 +483,19 @@
             <div class="form-group"><label data-i18n="settings.server.listen">Адрес</label><input type="text" id="set-edit-listen" placeholder="127.0.0.1"></div>
             <div class="form-group"><label data-i18n="settings.server.port">Порт</label><input type="number" id="set-edit-port" min="1" max="65535" placeholder="8088"></div>
             <div class="form-group"><label data-i18n="settings.server.auth">Авторизация</label>
-                <label class="filter-switch"><span class="toggle-switch"><input type="checkbox" id="set-edit-auth"><span class="toggle-slider"></span></span><span data-i18n="settings.server.auth.enable">Включить</span></label>
+                <label class="filter-switch"><span class="toggle-switch"><input type="checkbox" id="set-edit-auth" onchange="onSettingsAuthToggle()"><span class="toggle-slider"></span></span><span data-i18n="settings.server.auth.enable">Включить</span></label>
+            </div>
+            <div id="set-edit-auth-section" class="auth-creds" style="display:none;">
+                <div class="form-group"><label data-i18n="settings.auth.user">Имя администратора</label><input type="text" id="set-edit-admin-user" autocomplete="off" spellcheck="false"></div>
+                <div class="form-group">
+                    <label for="set-edit-admin-pass" data-i18n="settings.auth.password">Пароль</label>
+                    <input type="password" id="set-edit-admin-pass" autocomplete="new-password">
+                    <small class="hint" id="set-edit-admin-pass-hint"></small>
+                </div>
+                <div class="form-group"><label data-i18n="settings.auth.confirm">Повторите пароль</label><input type="password" id="set-edit-admin-pass2" autocomplete="new-password"></div>
             </div>
             <div class="modal-actions">
-                <button type="button" class="btn btn-primary" onclick="saveSettingsEdit()" data-i18n="common.saved">Сохранить</button>
+                <button type="button" class="btn btn-primary" id="settings-save-btn" onclick="saveSettingsEdit()" data-i18n="common.save">Сохранить</button>
                 <button type="button" class="btn btn-ghost" onclick="closeSettingsEdit()" data-i18n="common.cancel">Отмена</button>
             </div>
         </div>

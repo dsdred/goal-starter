@@ -138,6 +138,7 @@ function updateSidebarAuth(user) {
         if (logoutBtn) logoutBtn.style.display = '';
     } else {
         el.style.display = 'none';
+        if (logoutBtn) logoutBtn.style.display = 'none';
     }
 }
 
@@ -195,6 +196,7 @@ async function handleLogout() {
     csrfToken = '';
     updateSidebarAuth(null);
     resetLoginState();
+    closeDrawer();
     showLogin();
 }
 
@@ -679,6 +681,22 @@ function loadWizardRuntimeCards() {
 
 var rtSelectedId = null;
 
+// rtDisplayPath resolves the full logical executable path for display.
+// If the executable is already absolute (drive letter, POSIX root, or UNC),
+// it is returned as-is; otherwise it is joined with the working directory.
+// The result carries no "exe:"/"cwd:" labels.
+function rtDisplayPath(r) {
+    const exe = (r.executable || '').trim();
+    const cwd = (r.working_directory || '').trim();
+    if (!exe) return cwd;
+    if (/^[A-Za-z]:[\\/]/.test(exe) || exe.charAt(0) === '/' || exe.charAt(0) === '\\') {
+        return exe;
+    }
+    if (!cwd) return exe;
+    const sep = cwd.indexOf('\\') !== -1 ? '\\' : '/';
+    return cwd.replace(/[\\\/]+$/, '') + sep + exe;
+}
+
 function renderRtDropdown() {
     const dd = document.getElementById('wiz-rt-dropdown');
     const search = document.getElementById('wiz-rt-search');
@@ -697,9 +715,8 @@ function renderRtDropdown() {
     }
     dd.innerHTML = filtered.map(function (r) {
         const sel = r.id === rtSelectedId;
-        const path = r.executable || r.working_directory || '';
-        const title = [r.executable, r.working_directory ? 'cwd: ' + r.working_directory : ''].filter(Boolean).join(' · ');
-        return '<div class="rt-dropdown-item' + (sel ? ' selected' : '') + '" data-id="' + esc(r.id) + '" title="' + esc(title) + '" onmousedown="selectRtItem(\'' + safeId(r.id) + '\')">' +
+        const path = rtDisplayPath(r);
+        return '<div class="rt-dropdown-item' + (sel ? ' selected' : '') + '" data-id="' + esc(r.id) + '" title="' + esc(path) + '" onmousedown="selectRtItem(\'' + safeId(r.id) + '\')">' +
             (sel ? '<span class="rt-check">✓</span>' : '') +
             '<span class="rt-name">' + esc(r.name) + '</span>' +
             (path ? '<span class="rt-sep"> · </span><span class="rt-path">' + esc(path) + '</span>' : '') +
@@ -1269,6 +1286,9 @@ function friendlyError(err) {
         [/in use|referenced|depend/i, 'err.in_use'],
         [/port.*in use|address already in use/i, 'err.port_in_use'],
         [/executable.*not found|no such file/i, 'err.executable_not_found'],
+        [/cannot enable auth/i, 'err.auth_credentials'],
+        [/not a valid bind address/i, 'err.addr_invalid'],
+        [/web_port must be/i, 'err.port_invalid'],
     ];
     for (let i = 0; i < patterns.length; i++) {
         if (patterns[i][0].test(msg)) return t(patterns[i][1]);
@@ -1373,18 +1393,74 @@ navigate = function (view) {
     closeDrawer();
 };
 
+// ─── Responsive entity layout (content-width driven) ────────────────────────
+// Desktop tables need a minimum *content* width, but the sidebar consumes part
+// of the viewport, so a fixed window breakpoint cannot know when a table stops
+// fitting. We measure the real width of #main-content and pick the
+// representation. One shared rule covers Runtimes / Instances / History; each
+// entity has a per-table threshold = the min content width its desktop table
+// needs so the right-hand actions are never clipped.
+const TABLE_MIN_CONTENT = {
+    runtimes: 640,
+    history: 980,
+    instances: 980
+};
+
+function updateTableLayout() {
+    const main = document.getElementById('main-content');
+    if (!main) return;
+    const w = main.clientWidth;
+    const modeFor = function (threshold) { return w >= threshold ? 'table' : 'compact'; };
+    const set = function (prefix, mode) {
+        const table = document.getElementById(prefix + '-table-wrap');
+        const compact = document.getElementById(prefix + '-compact');
+        if (table) table.classList.toggle('show', mode === 'table');
+        if (compact) compact.classList.toggle('show', mode === 'compact');
+    };
+    set('runtimes', modeFor(TABLE_MIN_CONTENT.runtimes));
+    set('history', modeFor(TABLE_MIN_CONTENT.history));
+    set('instances', modeFor(TABLE_MIN_CONTENT.instances));
+}
+
+function setupTableLayoutObserver() {
+    const main = document.getElementById('main-content');
+    if (!main) return;
+    if (typeof ResizeObserver !== 'undefined') {
+        new ResizeObserver(function () { updateTableLayout(); }).observe(main);
+    } else {
+        window.addEventListener('resize', updateTableLayout);
+    }
+    updateTableLayout();
+}
+
 // ─── Settings Edit ──────────────────────────────────────────────────────────
 
 function openSettingsEdit() {
-    const m = lastMetrics;
+    const m = lastMetrics || {};
     document.getElementById('set-edit-listen').value = m.listen_address || '127.0.0.1';
     document.getElementById('set-edit-port').value = m.web_port || 8088;
     document.getElementById('set-edit-auth').checked = !!m.auth_enabled;
+    document.getElementById('set-edit-admin-user').value = m.admin_user || '';
+    document.getElementById('set-edit-admin-pass').value = '';
+    document.getElementById('set-edit-admin-pass2').value = '';
+    onSettingsAuthToggle();
     document.getElementById('settings-edit-modal').style.display = 'flex';
 }
 
 function closeSettingsEdit() {
     document.getElementById('settings-edit-modal').style.display = 'none';
+}
+
+function onSettingsAuthToggle() {
+    const auth = document.getElementById('set-edit-auth').checked;
+    document.getElementById('set-edit-auth-section').style.display = auth ? '' : 'none';
+    updateAdminPassHint();
+}
+
+function updateAdminPassHint() {
+    const hint = document.getElementById('set-edit-admin-pass-hint');
+    const pwSet = !!(lastMetrics && lastMetrics.admin_password_set);
+    hint.textContent = pwSet ? t('settings.auth.keep_hint') : '';
 }
 
 async function saveSettingsEdit() {
@@ -1393,11 +1469,44 @@ async function saveSettingsEdit() {
     const auth = document.getElementById('set-edit-auth').checked;
     if (!addr) { showToast(t('settings.edit.err.addr'), 'error'); return; }
     if (port < 1 || port > 65535) { showToast(t('settings.edit.err.port'), 'error'); return; }
+
+    let adminUser = '';
+    let adminPassword = '';
+    if (auth) {
+        adminUser = document.getElementById('set-edit-admin-user').value.trim();
+        adminPassword = document.getElementById('set-edit-admin-pass').value;
+        const adminPassword2 = document.getElementById('set-edit-admin-pass2').value;
+        if (!adminUser) { showToast(t('settings.edit.err.user'), 'error'); return; }
+        // An empty password is only acceptable when one is already configured
+        // (it then means "keep the current password"); otherwise it is required.
+        const pwSet = !!(lastMetrics && lastMetrics.admin_password_set);
+        if (!adminPassword && !pwSet) { showToast(t('settings.edit.err.password'), 'error'); return; }
+        if (adminPassword && adminPassword !== adminPassword2) { showToast(t('settings.edit.err.password_match'), 'error'); return; }
+    }
+
+    const body = { listen_address: addr, web_port: port, auth_enabled: auth };
+    if (auth) {
+        body.admin_user = adminUser;
+        if (adminPassword) body.admin_password = adminPassword;
+    }
+
+    const btn = document.getElementById('settings-save-btn');
+    btn.disabled = true;
+    const oldLabel = btn.textContent;
+    btn.textContent = t('common.loading');
     try {
-        await api('/settings', { method: 'PUT', body: JSON.stringify({ listen_address: addr, web_port: port, auth_enabled: auth }) });
+        await api('/settings', { method: 'PUT', body: JSON.stringify(body) });
+        // api() throws on any non-2xx, so reaching here guarantees success.
         closeSettingsEdit();
         showToast(t('settings.edit.saved'), 'success');
-    } catch (e) { showToast(friendlyError(e), 'error'); }
+    } catch (e) {
+        // 4xx/5xx or network failure: keep the modal open with the entered
+        // values intact, reset the button label, and surface a localized error.
+        showToast(friendlyError(e), 'error');
+    } finally {
+        btn.disabled = false;
+        btn.textContent = oldLabel;
+    }
 }
 
 let lastMetrics = {};
@@ -1456,8 +1565,10 @@ window.closeDrawer = closeDrawer;
 window.openSettingsEdit = openSettingsEdit;
 window.closeSettingsEdit = closeSettingsEdit;
 window.saveSettingsEdit = saveSettingsEdit;
+window.onSettingsAuthToggle = onSettingsAuthToggle;
 
 // ─── Boot ───────────────────────────────────────────────────────────────────
 
+setupTableLayoutObserver();
 init();
 })();
