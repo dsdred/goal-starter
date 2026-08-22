@@ -1,10 +1,11 @@
 # GoAl Roadmap
 
-## Current: v1.0.0 (Released)
+## Current state
 
-Production-ready single-binary manager for local AI runtimes and models.
+- **v2.0.0 — released** (latest published release). v2.0 simplified the domain model and completed manual-acceptance stabilization.
+- **v2.0.1 — in stabilization**: manual-acceptance corrections on `main`, not yet tagged. Release blockers take priority; see the release/stabilization boundary in [AGENTS.md](AGENTS.md).
 
-### Release highlights (v1.0.0)
+### v1.0.0 (historical release)
 
 - Multi-instance `Supervisor` with InstanceController
 - LogBroker — multi-instance log streaming (SSE)
@@ -18,35 +19,48 @@ Production-ready single-binary manager for local AI runtimes and models.
 - Cross-platform: Windows amd64 + Linux amd64
 - CI: gofmt, vet, test -race, build (Windows+Linux), govulncheck
 
-## Next: v1.1
+## Next: v2.0.1 hardening + production
 
-### P0 — Production improvements
-- [ ] SQLite storage (single-binary)
-- [ ] Full PID reattachment on restart
+### P0 — Production hardening
+- [ ] Recovery: full PID reattachment + orphan handling on restart
+- [ ] Login rate limiting (complete) + full audit logging
+- [ ] JSON durability: fsync after rename on all platforms; transactional backup before every write
 - [ ] Hot-reload wired into main startup
-- [ ] Login rate limit fully implemented
-- [ ] fsync after rename on all platforms
-- [ ] Transactional backup before every write
+- [ ] Maintained real-Chrome acceptance as a release gate (build-out under Product/UX → Browser Acceptance Suite)
 
-### P1 — Reliability
+### P1 — Product & reliability
+- [ ] Pipeline MVP (see Pipeline contract below)
+- [ ] Persistent logs
+- [ ] Configurable log storage location
+- [ ] Prometheus-compatible monitoring
+- [ ] Bruno API collections
+- [ ] Supervisor decomposition
+- [ ] Migration framework (schema migration + tests)
+- [ ] Chaos / concurrency / recovery tests
 - [ ] Comprehensive integration tests
-- [ ] Chaos testing for Supervisor recovery
-- [ ] Schema migration tests
-- [ ] Concurrent write protection tests
 - [ ] Windows/Linux-specific lifecycle tests
 
-### P2 — Packaging
-- [ ] .deb/.rpm packages via CI
-- [ ] GPG signatures for all artifacts
+### Pipeline contract (design note — requires an architecture/ADR before implementation)
+- A Pipeline references existing Models; multiple Models per Pipeline; group lifecycle; per-model optional Args.
+- Args resolution: if `PipelineModel.Args` is non-empty, use `PipelineModel.Args` **entirely**; if empty, use `Model.Args` **entirely**. **No** merge / patch / append semantics.
+
+### P2 — Distribution
 - [ ] ARM64 builds and tests
-- [ ] Windows MSI installer (via WiX)
-- [ ] Release automation via GitHub Actions
 - [ ] Reproducible Windows/Linux artifacts (deterministic build inputs)
 - [ ] PE version metadata (Windows) + ELF version fields (Linux) in release binaries
-- [ ] SHA-256 checksums for all artifacts + verification workflow
-- [ ] Distinguish verification binaries (pre-release) from signed release artifacts
+- [ ] Authenticode (Windows) + GPG (Linux) signatures for all artifacts
+- [ ] SHA-256 checksums for all artifacts + verification workflow; distinguish verification (pre-release) binaries from signed release artifacts
+- [ ] Release automation via GitHub Actions
+- [ ] CONTRIBUTING / docs hygiene
+- [ ] Reverse-proxy / TLS deployment guidance
 
-## Product & UX Evolution (multi-release)
+### Later
+- [ ] MSI / .deb / .rpm installers as demand matures
+- [ ] SQLite storage — only through an explicit architecture decision (ADR)
+- [ ] Auto-update
+- [ ] Advanced Pipeline: DAG / dependencies / readiness / resource scheduling
+
+## Product/UX evolution (multi-release)
 
 ### Authentication & User Management
 - [ ] Multi-user support (beyond the single admin)
