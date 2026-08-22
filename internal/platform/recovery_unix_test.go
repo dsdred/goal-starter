@@ -53,7 +53,7 @@ func TestParseProcStatStartTime_InvalidData(t *testing.T) {
 		{"no closing paren", []byte("1234 (comm S 1 1234")},
 		{"too few fields", []byte("1234 (comm) S 1 1234")},
 		{"empty", []byte("")},
-		{"non-numeric starttime", []byte("1234 (comm) S 1 1 1 0 -1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 abc")},
+		{"non-numeric starttime", []byte("1234 (comm) S 1 1 1 0 -1 0 0 0 0 0 0 0 0 0 0 0 0 0 abc")},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
