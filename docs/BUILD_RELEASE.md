@@ -14,12 +14,12 @@ This document describes the release process for GoAl.
 
 The GitHub Release asset set is exactly these five files. Empty-version names such as `goal--windows-amd64.zip` are invalid and must never be published.
 
-**Latest published tag:** `v2.0.0`
-**Release:** [GitHub Releases](https://github.com/dsdred/goal-starter/releases/tag/v2.0.0)
+**Latest published tag:** `v2.0.1`
+**Release:** [GitHub Releases](https://github.com/dsdred/goal-starter/releases/tag/v2.0.1)
 
 ## Windows Authenticode signing (capability, not currently active)
 
-Windows release binaries are currently **unsigned**. No signing certificate is configured in the release pipeline. All published releases (v1.0.0–v2.0.0) shipped with `Status: NotSigned`.
+Windows release binaries are currently **unsigned**. No signing certificate is configured in the release pipeline. All published releases (v1.0.0–v2.0.1) shipped with `Status: NotSigned`.
 
 The build script (`scripts/build-all.ps1`) includes a signing code path that activates when `SIGN_CERT` and `SIGN_PASSWORD` environment variables are set. This capability exists for when a certificate becomes available, but is not currently in use.
 

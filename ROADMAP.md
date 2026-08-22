@@ -2,8 +2,8 @@
 
 ## Current state
 
-- **v2.0.0 — released** (latest published release). v2.0 simplified the domain model and completed manual-acceptance stabilization.
-- **v2.0.1 — in stabilization**: manual-acceptance corrections on `main`, not yet tagged. Release blockers take priority; see the release/stabilization boundary in [AGENTS.md](AGENTS.md).
+- **v2.0.1 — released** (latest published release, tag `v2.0.1`). Shipped the v2.0.1 manual-acceptance corrections (editable auth settings, responsive tables, mobile layout fixes).
+- **v2.0.0 — released** (superseded). v2.0 simplified the domain model and completed manual-acceptance stabilization.
 
 ### v1.0.0 (historical release)
 
@@ -19,7 +19,7 @@
 - Cross-platform: Windows amd64 + Linux amd64
 - CI: gofmt, vet, test -race, build (Windows+Linux), govulncheck
 
-## Next: v2.0.1 hardening + production
+## Next: production hardening + product
 
 ### P0 — Production hardening
 - [ ] Recovery: full PID reattachment + orphan handling on restart
