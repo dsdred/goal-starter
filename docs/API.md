@@ -65,6 +65,7 @@ Instances are running processes created from models.
 | `POST` | `/api/v1/instances/start` | Yes | Yes | Start a new instance from a model. |
 | `POST` | `/api/v1/instances/{id}/stop` | Yes | Yes | Stop an instance. |
 | `POST` | `/api/v1/instances/{id}/restart` | Yes | Yes | Restart an instance. |
+| `POST` | `/api/v1/instances/{id}/dismiss` | Yes | Yes | Dismiss an orphan instance (transitions `orphan` → `stale`). No process is touched. |
 
 ### Instance logs
 

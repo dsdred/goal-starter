@@ -149,6 +149,30 @@ func (h *InstancesHandler) History(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, all)
 }
 
+// Dismiss handles POST /api/v1/instances/{id}/dismiss
+// Transitions an orphan instance to stale (reconciled-by-user). No process is touched.
+func (h *InstancesHandler) Dismiss(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimPrefix(r.URL.Path, "/api/v1/instances/")
+	id = strings.TrimSuffix(id, "/dismiss")
+	if id == "" {
+		writeError(w, 400, "instance ID is required")
+		return
+	}
+	if err := h.instanceSvc.DismissOrphan(r.Context(), domain.InstanceID(id)); err != nil {
+		if strings.Contains(err.Error(), "not in orphan state") {
+			writeError(w, 409, err.Error())
+			return
+		}
+		if strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "get instance") {
+			writeError(w, 404, "instance not found")
+			return
+		}
+		writeError(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "dismissed"})
+}
+
 // Status handles GET /api/v1/instances/status
 func (h *InstancesHandler) Status(w http.ResponseWriter, r *http.Request) {
 	instances, err := h.instanceSvc.ListInstances(r.Context())

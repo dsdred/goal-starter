@@ -23,7 +23,7 @@
 
 ### P0 — Production hardening
 - [ ] Recovery: identity-verified orphan detection and restart reconciliation
-  - Design gate: [ADR 005](docs/adr/005-recovery-pid-reattach-orphan.md) (**Proposed** — decision agreed 2026-08-22, implementation pending) defines the `orphan`/`stale` state model, the identity contract (PID + executable path + start time; bare PID forbidden; conservative fallback), safe Dismiss/reconciliation, and the user-facing explanation. First implementation scope **excludes kill**. Implementation is the next step and sets ADR 005 to **Accepted** as it is implemented; the agreed `orphan`/`stale` semantics are implemented together (no partial "stale-only" step).
+  - Design gate: [ADR 005](docs/adr/005-recovery-pid-reattach-orphan.md) (**Accepted** — implemented 2026-08-23) defines the `orphan`/`stale` state model, the identity contract (PID + executable path + start time; bare PID forbidden; conservative fallback), safe Dismiss/reconciliation, and the user-facing explanation. First implementation scope **excludes kill**.
 - [ ] Recovery: kill of an orphan (destructive) — separate item; requires its own contract/security review (ADR) of identity-verification sufficiency before implementation
 - [ ] Login rate limiting (complete) + full audit logging
 - [ ] Secure credential storage: migrate `adminPassword` from plaintext in config JSON to stored hash (bcrypt/Argon2id) with backward-compatible migration (detect plaintext → hash on first load); no hash in API responses; UI password-set semantics preserved

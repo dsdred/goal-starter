@@ -1,8 +1,9 @@
 # ADR 005: Recovery — Identity-Verified Orphan Detection and Restart Reconciliation
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-08-22
 **Agreed:** 2026-08-22 (owner contract agreement)
+**Implemented:** 2026-08-23
 **Related:** ADR 001 (Process Ownership, Windows Job Object / Linux process group), ADR 002 (Supervisor & Instance Model — current conservative recovery), ROADMAP P0 "Recovery: identity-verified orphan detection and restart reconciliation"
 
 ## Context
@@ -142,4 +143,10 @@ Out of scope (future):
 
 ## Implementation status
 
-**Not started.** Per the ADR process the status is **Proposed** (decision made, implementation pending); the owner contract agreement is recorded (2026-08-22). Implementation is the next step and, when it begins, transitions this ADR to **Accepted** (being implemented). The full agreed `orphan`/`stale` semantics are implemented together (no partial "stale-only" step). No production code is changed by this ADR.
+**Accepted — implemented 2026-08-23.** The full agreed `orphan`/`stale` semantics are implemented:
+- `domain.InstanceStateOrphan` added; `IsTerminal()` excludes orphan; `IsActive()` excludes orphan.
+- `platform.RecoveryProber` interface with Windows (OpenProcess + QueryFullProcessImageNameW + GetProcessTimes) and Unix (kill(0) + /proc/PID/exe + /proc/PID/stat) implementations.
+- `Supervisor.Recover()` uses identity-verified liveness detection per the ADR sequence.
+- `Supervisor.DismissOrphan()` + `POST /api/v1/instances/{id}/dismiss` (auth + CSRF protected).
+- `RecoveryReason` diagnostic field on `LaunchInstance` / `LaunchInstanceEntry`.
+- Tests: domain state transitions, supervisor recovery (mock prober), dismiss endpoint.

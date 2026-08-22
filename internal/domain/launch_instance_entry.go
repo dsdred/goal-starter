@@ -23,4 +23,5 @@ type LaunchInstanceEntry struct {
 	StoppedAt        time.Time         `json:"stopped_at,omitempty"`
 	CreatedAt        time.Time         `json:"created_at"`
 	UpdatedAt        time.Time         `json:"updated_at"`
+	RecoveryReason   string            `json:"recovery_reason,omitempty"`
 }

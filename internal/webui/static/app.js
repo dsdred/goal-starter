@@ -1112,8 +1112,8 @@ async function confirmRTCascade() {
 function renderAdvInstances() {
     const empty = document.getElementById('instances-empty');
     const tableWrap = document.getElementById('instances-table-wrap');
-    const active = instancesData.filter(function (i) { return isActive(i.state); });
-    if (active.length === 0) {
+    const visible = instancesData.filter(function (i) { return isActive(i.state) || i.state === 'orphan'; });
+    if (visible.length === 0) {
         document.getElementById('adv-instances-body').innerHTML = '';
         if (empty) empty.style.display = 'block';
         if (tableWrap) tableWrap.classList.remove('visible');
@@ -1123,34 +1123,50 @@ function renderAdvInstances() {
     }
     if (empty) empty.style.display = 'none';
     if (tableWrap) tableWrap.classList.add('visible');
-    document.getElementById('adv-instances-body').innerHTML = active.map(function (i) {
+    document.getElementById('adv-instances-body').innerHTML = visible.map(function (i) {
+        var isOrphan = i.state === 'orphan';
+        var badge = '<span class="status-badge ' + esc(i.state) + '" title="' + esc(t(isOrphan ? 'instances.orphan.hint' : 'models.status.' + i.state) || i.state) + '">' + esc(t('models.status.' + i.state) || i.state) + '</span>';
+        var actions;
+        if (isOrphan) {
+            actions = '<button class="btn btn-ghost btn-sm" onclick="viewInstanceLogs(\'' + safeId(i.id) + '\')">' + t('instances.actions.logs') + '</button>' +
+                ' <button class="btn btn-warning btn-sm" onclick="dismissInstance(\'' + safeId(i.id) + '\')">' + t('instances.actions.dismiss') + '</button>';
+        } else {
+            actions = '<button class="btn btn-ghost btn-sm" onclick="viewInstanceLogs(\'' + safeId(i.id) + '\')">' + t('instances.actions.logs') + '</button>' +
+                ' <button class="btn btn-danger btn-sm" onclick="stopInstance(\'' + safeId(i.id) + '\')">' + t('instances.actions.stop') + '</button> ' +
+                '<button class="btn btn-warning btn-sm" onclick="restartInstance(\'' + safeId(i.id) + '\')">' + t('instances.actions.restart') + '</button>';
+        }
         return '<tr><td style="font-family:var(--font-mono);font-size:0.78rem;">' + esc(i.id.slice(0, 16)) + '</td>' +
             '<td title="' + esc(getModelName(i.model_id)) + '">' + esc(getModelName(i.model_id)) + '</td>' +
-            '<td><span class="status-badge ' + esc(i.state) + '">' + esc(t('models.status.' + i.state) || i.state) + '</span></td>' +
+            '<td>' + badge + '</td>' +
             '<td>' + (i.pid || '—') + '</td><td title="' + esc(fmtTime(i.started_at)) + '">' + fmtTime(i.started_at) + '</td><td>' + fmtTime(i.stopped_at) + '</td>' +
             '<td>' + (i.exit_code != null ? i.exit_code : '—') + '</td>' +
-            '<td class="actions-cell"><button class="btn btn-ghost btn-sm" onclick="viewInstanceLogs(\'' + safeId(i.id) + '\')">' + t('instances.actions.logs') + '</button>' +
-            ' <button class="btn btn-danger btn-sm" onclick="stopInstance(\'' + safeId(i.id) + '\')">' + t('instances.actions.stop') + '</button> ' +
-            '<button class="btn btn-warning btn-sm" onclick="restartInstance(\'' + safeId(i.id) + '\')">' + t('instances.actions.restart') + '</button>' + '</td></tr>';
+            '<td class="actions-cell">' + actions + '</td></tr>';
     }).join('');
     const compact = document.getElementById('instances-compact');
     if (compact) {
         compact.classList.add('visible');
-        compact.innerHTML = active.map(function (i) {
+        compact.innerHTML = visible.map(function (i) {
+            var isOrphan = i.state === 'orphan';
             const range = fmtRange(i.started_at, i.stopped_at) || fmtUptime(i.started_at);
+            var badge = '<span class="status-badge ' + esc(i.state) + '" title="' + esc(t(isOrphan ? 'instances.orphan.hint' : 'models.status.' + i.state) || i.state) + '">' + esc(t('models.status.' + i.state) || i.state) + '</span>';
+            var actions;
+            if (isOrphan) {
+                actions = iconBtn(ICONS.logs, t('instances.actions.logs'), 'ghost', 'viewInstanceLogs', i.id) +
+                    iconBtn(ICONS.stop, t('instances.actions.dismiss'), 'warning', 'dismissInstance', i.id);
+            } else {
+                actions = iconBtn(ICONS.logs, t('instances.actions.logs'), 'ghost', 'viewInstanceLogs', i.id) +
+                    iconBtn(ICONS.stop, t('instances.actions.stop'), 'danger', 'stopInstance', i.id) +
+                    iconBtn(ICONS.restart, t('instances.actions.restart'), 'warning', 'restartInstance', i.id);
+            }
             return '<div class="compact-row cinst-row">' +
                 '<div class="compact-main">' +
                     '<div class="compact-l1">' +
-                        '<span class="status-badge ' + esc(i.state) + '">' + esc(t('models.status.' + i.state) || i.state) + '</span>' +
+                        badge +
                         '<span class="compact-title" title="' + esc(getModelName(i.model_id)) + '">' + esc(getModelName(i.model_id)) + '</span>' +
                     '</div>' +
                     '<div class="compact-l2">' + esc(i.id.slice(0, 12)) + ' · PID ' + (i.pid || '—') + (range ? ' · ' + range : '') + '</div>' +
                 '</div>' +
-                '<div class="compact-actions">' +
-                    iconBtn(ICONS.logs, t('instances.actions.logs'), 'ghost', 'viewInstanceLogs', i.id) +
-                    iconBtn(ICONS.stop, t('instances.actions.stop'), 'danger', 'stopInstance', i.id) +
-                    iconBtn(ICONS.restart, t('instances.actions.restart'), 'warning', 'restartInstance', i.id) +
-                '</div>' +
+                '<div class="compact-actions">' + actions + '</div>' +
             '</div>';
         }).join('');
     }
@@ -1163,6 +1179,11 @@ async function stopInstance(id) {
 
 async function restartInstance(id) {
     try { await api('/instances/' + id + '/restart', { method: 'POST' }); await reloadAllData(); renderAll(); }
+    catch (err) { showToast(friendlyError(err), 'error'); }
+}
+
+async function dismissInstance(id) {
+    try { await api('/instances/' + id + '/dismiss', { method: 'POST' }); await reloadAllData(); renderAll(); }
     catch (err) { showToast(friendlyError(err), 'error'); }
 }
 
@@ -1527,6 +1548,7 @@ window.restartModel = restartModel;
 window.deleteModel = deleteModel;
 window.stopInstance = stopInstance;
 window.restartInstance = restartInstance;
+window.dismissInstance = dismissInstance;
 window.showCreateRuntimeModal = showCreateRuntimeModal;
 window.handleCreateRuntime = handleCreateRuntime;
 window.editRuntime = editRuntime;

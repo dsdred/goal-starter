@@ -126,6 +126,7 @@ func (r *RouteRegistry) Build() http.Handler {
 	mux.HandleFunc("POST /api/v1/instances/start", r.requireAuthCSRF(r.instanceHandler.StartModel))
 	mux.HandleFunc("POST /api/v1/instances/{id}/stop", r.requireAuthCSRF(r.instanceHandler.StopInstance))
 	mux.HandleFunc("POST /api/v1/instances/{id}/restart", r.requireAuthCSRF(r.instanceHandler.RestartInstance))
+	mux.HandleFunc("POST /api/v1/instances/{id}/dismiss", r.requireAuthCSRF(r.instanceHandler.Dismiss))
 	mux.HandleFunc("POST /api/v1/instances/cleanup", r.requireAuthCSRF(r.instanceHandler.Cleanup))
 	mux.HandleFunc("GET /api/v1/instances/{id}/logs", r.requireAuth(r.systemHandler.InstanceLogs))
 	mux.HandleFunc("GET /api/v1/instances/{id}/logs/stream", r.requireAuth(r.systemHandler.InstanceLogStream))

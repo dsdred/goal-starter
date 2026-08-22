@@ -5,11 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/dsdred/goal/internal/domain"
+	"github.com/dsdred/goal/internal/platform"
 )
 
 // SupervisorStatus describes the overall supervisor state.
@@ -40,9 +43,10 @@ type Supervisor struct {
 	resolver      *domain.LaunchResolver
 	store         InstanceStore
 	maxConcurrent int
-	semaphore     chan struct{} // buffered channel for concurrency limiting, single source of truth
+	semaphore     chan struct{}
 	lifecycleCtx  context.Context
 	broker        *LogBroker
+	prober        platform.RecoveryProber
 }
 
 // InstanceStore persists and retrieves launch instances.
@@ -70,6 +74,7 @@ func NewSupervisor(store InstanceStore) *Supervisor {
 		store:     store,
 		semaphore: make(chan struct{}, 0),
 		broker:    NewLogBroker(4096),
+		prober:    platform.NewRecoveryProber(),
 	}
 }
 
@@ -508,10 +513,11 @@ func (s *Supervisor) QueryLogs(q LogQuery, instanceIDFilter string) *LogResult {
 	return QueryAggregatedLogs(allEntries, q)
 }
 
-// Recover restores instances from the store and marks stale records.
-// This is called during Supervisor startup to handle instances that were
-// running when the application previously stopped.
-// Returns an aggregated error if any stale instance failed to persist.
+// Recover restores instances from the store and performs identity-verified
+// liveness detection on previously-transitional instances.
+// Per ADR 005: PID gone → stale(pid-not-found); alive + identity confirmed →
+// orphan; alive + identity unconfirmed → stale(identity-unconfirmed).
+// No process is started, stopped, or signaled during recovery.
 func (s *Supervisor) Recover(ctx context.Context) error {
 	if s.store == nil {
 		return nil
@@ -528,22 +534,136 @@ func (s *Supervisor) Recover(ctx context.Context) error {
 
 		switch inst.State {
 		case domain.InstanceStateRunning, domain.InstanceStateStarting, domain.InstanceStateStopping, domain.InstanceStatePending:
-			// The instance was not properly stopped. Mark as stale.
-			inst.UpdateState(domain.InstanceStateStale)
+			newState, reason := s.classifyForRecovery(inst)
+			inst.UpdateState(newState)
+			inst.RecoveryReason = reason
 			if s.store != nil {
 				if err := s.store.Update(domain.ToStorageEntry(inst)); err != nil {
-					persistErrs = append(persistErrs, fmt.Errorf("persist stale instance %s: %w", string(inst.ID), err))
-					slog.Error("failed to persist stale instance", "instance_id", string(inst.ID), "error", err)
+					persistErrs = append(persistErrs, fmt.Errorf("persist recovered instance %s: %w", string(inst.ID), err))
+					slog.Error("failed to persist recovered instance", "instance_id", string(inst.ID), "error", err)
 					continue
 				}
 			}
-			slog.Warn("marking stale instance", "instance_id", string(inst.ID), "state", string(inst.State))
+			slog.Info("recovery classified instance",
+				"instance_id", string(inst.ID),
+				"state", string(newState),
+				"reason", reason,
+			)
 		}
 	}
 
 	if len(persistErrs) > 0 {
 		return fmt.Errorf("recover: %w", errors.Join(persistErrs...))
 	}
+	return nil
+}
+
+// classifyForRecovery applies the ADR 005 identity contract to determine
+// whether a transitional instance is orphan or stale.
+func (s *Supervisor) classifyForRecovery(inst *domain.LaunchInstance) (domain.InstanceState, string) {
+	if inst.PID <= 0 {
+		return domain.InstanceStateStale, "pid-not-found"
+	}
+
+	prober := s.prober
+	if prober == nil {
+		return domain.InstanceStateStale, "identity-unconfirmed"
+	}
+
+	alive, err := prober.IsProcessAlive(inst.PID)
+	if err != nil || !alive {
+		return domain.InstanceStateStale, "pid-not-found"
+	}
+
+	identity, err := prober.GetProcessIdentity(inst.PID)
+	if err != nil {
+		return domain.InstanceStateStale, "identity-unconfirmed"
+	}
+
+	if !verifyIdentity(inst, identity) {
+		return domain.InstanceStateStale, "identity-unconfirmed"
+	}
+
+	return domain.InstanceStateOrphan, ""
+}
+
+// verifyIdentity checks the recorded instance against the probed process
+// identity using the strongest available anchors per ADR 005.
+func verifyIdentity(inst *domain.LaunchInstance, id platform.ProcessIdentity) bool {
+	if id.ExecutablePath == "" {
+		return false
+	}
+	if inst.Executable == "" {
+		return false
+	}
+	if !pathsEqual(inst.Executable, id.ExecutablePath) {
+		return false
+	}
+	if id.HasStartTime && !inst.StartedAt.IsZero() {
+		if !timesApproximatelyEqual(inst.StartedAt, id.StartTime) {
+			return false
+		}
+	}
+	return true
+}
+
+// pathsEqual compares two filesystem paths using platform-aware equality.
+// On Windows, the .exe extension is optional and paths are case-insensitive.
+func pathsEqual(a, b string) bool {
+	if a == b {
+		return true
+	}
+	if runtime.GOOS == "windows" {
+		fa, fb := strings.ToLower(a), strings.ToLower(b)
+		if fa == fb {
+			return true
+		}
+		// Windows: "foo.exe" == "foo"
+		const exe = ".exe"
+		if strings.HasSuffix(fb, exe) && fa == fb[:len(fb)-len(exe)] {
+			return true
+		}
+		if strings.HasSuffix(fa, exe) && fb == fa[:len(fa)-len(exe)] {
+			return true
+		}
+	}
+	return false
+}
+
+// timesApproximatelyEqual reports whether two times are within a 5-second window.
+func timesApproximatelyEqual(a, b time.Time) bool {
+	diff := a.Sub(b)
+	if diff < 0 {
+		diff = -diff
+	}
+	return diff <= 5*time.Second
+}
+
+// DismissOrphan transitions an orphan instance to stale (reconciled-by-user).
+// No process is touched. Returns an error if the instance is not in orphan state.
+func (s *Supervisor) DismissOrphan(ctx context.Context, instanceID domain.InstanceID) error {
+	if s.store == nil {
+		return fmt.Errorf("no store configured")
+	}
+
+	entry, err := s.store.Get(string(instanceID))
+	if err != nil {
+		return fmt.Errorf("get instance %s: %w", string(instanceID), err)
+	}
+
+	inst := domain.ToDomain(entry)
+	if inst.State != domain.InstanceStateOrphan {
+		return fmt.Errorf("instance %s is not in orphan state (current: %s)", string(instanceID), string(inst.State))
+	}
+
+	inst.UpdateState(domain.InstanceStateStale)
+	inst.RecoveryReason = "reconciled-by-user"
+
+	if err := s.store.Update(domain.ToStorageEntry(inst)); err != nil {
+		return fmt.Errorf("persist dismissed orphan %s: %w", string(instanceID), err)
+	}
+
+	slog.Info("orphan dismissed by user", "instance_id", string(instanceID))
 	return nil
 }
 

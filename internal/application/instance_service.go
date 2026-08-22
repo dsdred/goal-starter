@@ -53,11 +53,49 @@ func (s *InstanceService) RestartInstance(ctx context.Context, id domain.Instanc
 }
 
 func (s *InstanceService) ListInstances(ctx context.Context) ([]*domain.LaunchInstance, error) {
-	return s.supervisor.List()
+	instances, err := s.supervisor.List()
+	if err != nil {
+		return nil, err
+	}
+
+	// Merge orphan instances from the persistent store (not in the in-memory map).
+	entries, err := s.repo.ListInstances()
+	if err == nil {
+		seen := make(map[string]bool, len(instances))
+		for _, inst := range instances {
+			seen[string(inst.ID)] = true
+		}
+		for _, e := range entries {
+			if seen[e.ID] {
+				continue
+			}
+			dom := domain.ToDomain(e)
+			if dom.State == domain.InstanceStateOrphan {
+				instances = append(instances, dom)
+			}
+		}
+	}
+
+	return instances, nil
 }
 
 func (s *InstanceService) GetInstanceStatus(ctx context.Context, id domain.InstanceID) (*domain.LaunchInstance, error) {
-	return s.supervisor.Status(id)
+	inst, err := s.supervisor.Status(id)
+	if err == nil {
+		return inst, nil
+	}
+	if s.repo != nil {
+		entry, err := s.repo.GetLaunchInstance(string(id))
+		if err == nil {
+			return domain.ToDomain(entry), nil
+		}
+	}
+	return nil, fmt.Errorf("instance %s not found", string(id))
+}
+
+// DismissOrphan transitions an orphan instance to stale (reconciled-by-user).
+func (s *InstanceService) DismissOrphan(ctx context.Context, id domain.InstanceID) error {
+	return s.supervisor.DismissOrphan(ctx, id)
 }
 
 // CleanupInstances deletes terminal instances matching the filter.

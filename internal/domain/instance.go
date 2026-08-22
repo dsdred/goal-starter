@@ -17,6 +17,7 @@ const (
 	InstanceStateFailed   InstanceState = "failed"
 	InstanceStateUnknown  InstanceState = "unknown"
 	InstanceStateStale    InstanceState = "stale"
+	InstanceStateOrphan   InstanceState = "orphan"
 )
 
 // InstanceExitClass describes why an instance ended.
@@ -58,8 +59,9 @@ type LaunchInstance struct {
 	Environment      map[string]string `json:"environment,omitempty"`
 
 	// Metadata.
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
+	RecoveryReason string    `json:"recovery_reason,omitempty"`
 }
 
 // IsActive returns true if the instance is in a live state.
@@ -73,6 +75,7 @@ func (i *LaunchInstance) IsActive() bool {
 }
 
 // IsTerminal returns true if the instance has reached a terminal state.
+// Note: InstanceStateOrphan is NOT terminal — it is actionable via Dismiss.
 func (i *LaunchInstance) IsTerminal() bool {
 	switch i.State {
 	case InstanceStateExited, InstanceStateFailed, InstanceStateStale:
@@ -92,7 +95,12 @@ func (i *LaunchInstance) UpdateState(state InstanceState) {
 		i.ExitCode = nil
 		i.ExitClass = ""
 		i.LastError = ""
-	case InstanceStateExited, InstanceStateFailed:
+	case InstanceStateOrphan:
+		i.StoppedAt = time.Time{}
+		i.ExitCode = nil
+		i.ExitClass = ""
+		i.LastError = ""
+	case InstanceStateExited, InstanceStateFailed, InstanceStateStale:
 		i.StoppedAt = time.Now()
 	}
 }
@@ -151,6 +159,7 @@ func ToStorageEntry(i *LaunchInstance) *LaunchInstanceEntry {
 		StoppedAt:        i.StoppedAt,
 		CreatedAt:        i.CreatedAt,
 		UpdatedAt:        i.UpdatedAt,
+		RecoveryReason:   i.RecoveryReason,
 	}
 }
 
@@ -179,5 +188,6 @@ func ToDomain(e *LaunchInstanceEntry) *LaunchInstance {
 		Environment:      e.Environment,
 		CreatedAt:        e.CreatedAt,
 		UpdatedAt:        e.UpdatedAt,
+		RecoveryReason:   e.RecoveryReason,
 	}
 }

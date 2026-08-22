@@ -259,6 +259,8 @@ code { font-family: var(--font-mono); font-size: 0.9em; background: var(--bg-inp
 .status-badge.stopping { background: rgba(243, 156, 18, 0.15); color: var(--warning); }
 .status-badge.stopped, .status-badge.exited { background: rgba(154, 154, 180, 0.12); color: var(--text-muted); }
 .status-badge.failed { background: rgba(231, 76, 60, 0.15); color: var(--danger); }
+.status-badge.orphan { background: rgba(155, 89, 182, 0.15); color: #9b59b6; }
+.status-badge.stale { background: rgba(154, 154, 180, 0.12); color: var(--text-muted); }
 .status-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
 .status-dot.online { background: var(--success); }
 .status-dot.running { animation: pulse 2s infinite; }
