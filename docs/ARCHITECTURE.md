@@ -77,12 +77,19 @@ Application services (internal/application/)
 
 `goal_repo.json` is the single source of truth for all entities after the first startup.
 
-**Atomic write sequence:**
+**Durable write sequence** — `fsutil.WriteFileDurable` (`internal/fsutil/`), used for `goal_repo.json` (`JSONRepository.saveLocked` and `SaveUnified`) and `goal.json` (`config.Save`):
 1. Serialize to `.tmp` file in the same directory
-2. `fsync` via `File.Sync()`
-3. Save previous correct file as `.bak`
-4. `os.Rename()` (atomic on Windows and Linux)
-5. Sync parent directory
+2. `fsync` the temp file (`File.Sync()`: `fsync(2)` on POSIX, `FlushFileBuffers` on Windows)
+3. Verify the written bytes by reading the temp file back
+4. Save the previous file as `.bak` (same durable sequence; before every write)
+5. `os.Rename()` (atomic on both platforms: `rename(2)` on POSIX, `MoveFileExW` with `MOVEFILE_REPLACE_EXISTING` on Windows)
+6. POSIX: `fsync` the parent directory (mandatory; a failed sync is a failed write)
+
+**Platform guarantees:**
+- **POSIX (Linux):** after step 6, file data and the rename (directory metadata) are on stable storage. Power loss at any point leaves either the complete previous state or the complete new state.
+- **Windows:** file data is durable after step 2; the rename is durable when `MoveFileExW` returns, provided the volume is journaling NTFS (the rename transaction is committed to the NTFS log before the API returns). The supported Windows API model has no directory flush; on non-journaled volumes (FAT/exFAT, or NTFS with journaling disabled) the rename-durability guarantee does not hold.
+
+Every step propagates errors: a write is reported as successful only if it is durable, and a failed write never leaves a partially written file at the target path.
 
 The unified JSON repository in `internal/storage/` (`JSONRepository`) is the sole persistence layer for all entities.
 

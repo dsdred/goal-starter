@@ -730,7 +730,7 @@ The resolved launch command is identical before and after migration. No user act
 
 ### Where is data stored?
 
-Data is stored in `dataDir` from configuration (default `./data`). Repository file: `goal_repo.json`.
+Data is stored in `dataDir` from configuration (default `./data`). Repository file: `goal_repo.json`. The previous version of each JSON state file (`goal_repo.json`, `goal.json`) is kept as `<file>.bak` (one generation) so a corrupted or failed write can be rolled back.
 
 ### How to change the port?
 

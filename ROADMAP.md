@@ -26,11 +26,14 @@
   - Design gate: [ADR 005](docs/adr/005-recovery-pid-reattach-orphan.md) (**Accepted** — implemented 2026-08-23) defines the `orphan`/`stale` state model, the identity contract (PID + executable path + start time; bare PID forbidden; conservative fallback), safe Dismiss/reconciliation, and the user-facing explanation. First implementation scope **excludes kill**.
   - Shipped: `d2df293` + CI fixes `aae6e95`, `979e952` (CI run 32599996165, 6/6 PASS including Linux race + e2e). Real Chrome acceptance: 21/21 PASS.
 - [ ] Recovery: kill of an orphan (destructive) — separate item; requires its own contract/security review (ADR) of identity-verification sufficiency before implementation
-- [ ] Login rate limiting (complete) + full audit logging
+- [ ] Login rate limiting (NOT implemented: `applyRateLimit` in `internal/webui/handlers/routes.go` is a no-op stub) + full audit logging
 - [x] Secure credential storage: migrate `adminPassword` from plaintext in config JSON to stored hash (bcrypt/Argon2id) with backward-compatible migration (detect plaintext → hash on first load); no hash in API responses; UI password-set semantics preserved
   - Design gate: [ADR 006](docs/adr/006-secure-credential-storage.md) (**Accepted** — agreed 2026-08-23, implemented 2026-08-23) defines bcrypt cost 12, `adminPasswordHash` field, explicit startup migration, 72-byte validation, failure semantics, and 18-scenario acceptance contract
   - Shipped: `9d2d0fb` + CI run 32657837425 (PASS). All 18 acceptance scenarios covered by `internal/config/migrate_credentials_test.go` and `internal/webui/handlers/credential_integration_test.go`.
-- [ ] JSON durability: fsync after rename on all platforms; transactional backup before every write
+- [ ] JSON durability: durable writes on all platforms (file-data fsync before rename; rename durability: POSIX — directory fsync after rename, Windows — NTFS log commit, no directory-flush API in the supported model); transactional `.bak` backup before every write
+  - Status: implementation complete in the working tree (uncommitted): `internal/fsutil.WriteFileDurable` — fsynced temp file, read-back verification, atomic `.bak` before every write, atomic rename, mandatory directory fsync (POSIX). Applied to `goal_repo.json` (`saveLocked` + `SaveUnified`, permissions fixed 0644→0600) and `goal.json` (`config.Save`: gains fsync + backup). Fail-closed: write errors are propagated, never swallowed.
+  - Tests: `internal/fsutil/fsutil_test.go`, `internal/storage/durability_test.go`, `internal/config/durable_save_test.go`. To be marked `[x]` with commit SHA + exact-SHA CI evidence by the post-publication reconciliation.
+- [ ] P0 consistency (technical debt): in-memory state may diverge from disk after a failed save on simple CRUD paths (12 non-rolling call sites in `JSONRepository`; only the atomic multi-entity operations roll back). Pre-existing class; not covered by the durability contract. Follow-up: rollback or validate-before-mutate on save failure.
 - [ ] Hot-reload wired into main startup
 - [ ] Maintained real-Chrome acceptance as a release gate (build-out under Product/UX → Browser Acceptance Suite)
 

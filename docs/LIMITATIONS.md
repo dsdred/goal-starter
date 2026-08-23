@@ -82,7 +82,11 @@ Release binaries are not GPG-signed, and Windows binaries are not Authenticode-s
 
 ### JSON only
 
-No SQLite, PostgreSQL, or other database backend. Single JSON file with atomic write semantics.
+No SQLite, PostgreSQL, or other database backend. Single JSON file with atomic, durable write semantics (fsync, read-back verification, `.bak` backup before every write). Only one generation of backup is kept.
+
+### Windows: no directory fsync
+
+The supported Windows API model has no directory flush; rename durability relies on the NTFS log commit (see [ARCHITECTURE.md](ARCHITECTURE.md#authoritative-persistence)). On non-journaled volumes (FAT/exFAT, or NTFS with journaling disabled), a crash immediately after a rename may lose the most recent write.
 
 ### No concurrent write protection beyond mutex
 

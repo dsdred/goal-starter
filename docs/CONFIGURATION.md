@@ -42,6 +42,10 @@ GoAl launches a runtime. This storage is not an encrypted secret vault.
 
 After the first startup, `goal_repo.json` is the source of truth. To modify existing entities after the first run, use the API or Web UI.
 
+### Write durability
+
+Both `goal.json` and `goal_repo.json` are written with the same durable-write contract (`fsutil.WriteFileDurable`): an fsynced temp file in the same directory, read-back verification, an atomic backup of the previous file as `<file>.bak` before every write, an atomic `rename`, and a parent-directory `fsync` on POSIX (Windows: rename durability is provided by the NTFS log commit — see [ARCHITECTURE.md](ARCHITECTURE.md#authoritative-persistence) for the exact per-platform sequence and guarantees). A failed write is returned as an error and never leaves a partially written file at the target path. One generation of backup is kept (`goal.json.bak` / `goal_repo.json.bak`) and must be protected with the same permissions as the main files.
+
 ## Runtime configuration
 
 Each runtime entry defines an external inference server or service.

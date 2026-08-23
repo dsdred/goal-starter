@@ -77,7 +77,7 @@ GoAl has a single admin user. There are no roles or permissions — if the user 
 
 | Secret | Location | Cleared on save |
 |--------|----------|-----------------|
-| `adminPasswordHash` | `goal.json` → `AdminPasswordHash` field (bcrypt hash; plaintext never persisted) | No; protect it with POSIX permissions or a Windows ACL |
+| `adminPasswordHash` | `goal.json` → `AdminPasswordHash` field (bcrypt hash; plaintext never persisted); previous generation also present in `goal.json.bak` | No; protect both files with POSIX permissions or a Windows ACL |
 | Session tokens | In-memory store | Yes (expiry-based) |
 | CSRF tokens | Cookie + header | Rotated on login |
 

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/dsdred/goal/internal/domain"
+	"github.com/dsdred/goal/internal/fsutil"
 )
 
 type LaunchInstanceEntry = domain.LaunchInstanceEntry
@@ -456,54 +457,7 @@ func (r *JSONRepository) saveLocked() error {
 		return fmt.Errorf("marshal JSON: %w", err)
 	}
 
-	tmp := r.filePath + ".tmp"
-	if err := os.WriteFile(tmp, data, 0600); err != nil {
-		return fmt.Errorf("write temp file: %w", err)
-	}
-
-	f, syncErr := os.OpenFile(tmp, os.O_WRONLY, 0)
-	if syncErr != nil {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("open temp file for sync: %w", syncErr)
-	}
-	if err := f.Sync(); err != nil {
-		f.Close()
-		_ = os.Remove(tmp)
-		return fmt.Errorf("sync temp file: %w", err)
-	}
-	if err := f.Close(); err != nil {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("close temp file: %w", err)
-	}
-
-	validateData, err := os.ReadFile(tmp)
-	if err != nil {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("validate temp file: %w", err)
-	}
-	var validated map[string]interface{}
-	if err := json.Unmarshal(validateData, &validated); err != nil {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("validate temp file JSON: %w", err)
-	}
-
-	if _, err := os.Stat(r.filePath); err == nil {
-		bakPath := r.filePath + ".bak"
-		if err = copyFile(r.filePath, bakPath); err != nil {
-			_ = os.Remove(tmp)
-			return fmt.Errorf("create backup %s: %w", bakPath, err)
-		}
-	}
-
-	if err := os.Rename(tmp, r.filePath); err != nil {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("rename temp file: %w", err)
-	}
-
-	dir := filepath.Dir(r.filePath)
-	_ = syncDir(dir)
-
-	return nil
+	return fsutil.WriteFileDurable(r.filePath, data, 0o600)
 }
 
 func (r *JSONRepository) save() error {
@@ -526,15 +480,7 @@ func (r *JSONRepository) SaveUnified(path string) error {
 	if err != nil {
 		return fmt.Errorf("marshal JSON: %w", err)
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0644); err != nil {
-		return fmt.Errorf("write temp file: %w", err)
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("rename: %w", err)
-	}
-	return nil
+	return fsutil.WriteFileDurable(path, data, 0o600)
 }
 
 // ─── Runtime CRUD ───

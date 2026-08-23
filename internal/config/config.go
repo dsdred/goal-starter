@@ -9,6 +9,8 @@ import (
 	"strings"
 
 	"golang.org/x/crypto/bcrypt"
+
+	"github.com/dsdred/goal/internal/fsutil"
 )
 
 type Config struct {
@@ -245,6 +247,9 @@ func migrateV1ToV2(cfg *Config) error {
 	return nil
 }
 
+// Save atomically and durably writes the config: fsynced temp file, read-back
+// verification, atomic backup of the previous file as path.bak, rename, and
+// directory sync. A failed save is returned, never swallowed.
 func Save(path string, cfg Config) error {
 	if err := cfg.Validate(); err != nil {
 		return err
@@ -256,11 +261,7 @@ func Save(path string, cfg Config) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil && filepath.Dir(path) != "." {
 		return err
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
+	return fsutil.WriteFileDurable(path, data, 0o600)
 }
 
 func (c Config) Validate() error {
