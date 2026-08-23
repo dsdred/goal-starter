@@ -13,7 +13,7 @@ Configuration is loaded from a JSON file (default: `goal.json`) at application s
 | `webPort` | int | No | `8088` | HTTP server port (1–65535). |
 | `dataDir` | string | No | `./data` | Directory for `goal_repo.json` and runtime data. |
 | `adminUser` | string | No | `admin` | Administrator username. Required when `authEnabled` is true. |
-| `adminPassword` | string | Conditional | `""` | Administrator password; required when `authEnabled=true`. Configuration files use mode `0600` on POSIX; restrict the containing directory with an ACL on Windows. |
+| `adminPasswordHash` | string | Conditional | `""` | Bcrypt hash of the admin password (cost 12, 60 chars). Required when `authEnabled=true`. Never plaintext. |
 | `authEnabled` | bool | No | `false` | Enable session-based authentication and CSRF. |
 | `runtimes` | array | No | `[]` | Initial runtime definitions (seeded once). |
 | `models` | array | No | `[]` | Initial model definitions (seeded once). |
@@ -24,8 +24,9 @@ Configuration is loaded from a JSON file (default: `goal.json`) at application s
 GoAl automatically migrates configuration at startup:
 
 - `1 -> 2`: Adds default `HealthCheck` configuration to all profiles and runtimes.
+- **Credential migration** (content-based): If a legacy `adminPassword` plaintext is detected in the config, it is hashed with bcrypt (cost 12) and stored in `adminPasswordHash`. The `adminPassword` field is then cleared. This runs as an explicit step after `config.Load()` via `config.MigrateCredentials()`. If the hash already exists, no re-hashing occurs.
 
-Migration runs via `config.MigrateConfig()` during `config.Load()`. No separate status endpoint.
+Migration runs at startup. No separate status endpoint.
 
 ### Config vs Repository
 

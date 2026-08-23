@@ -6,19 +6,99 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
+
+	"golang.org/x/crypto/bcrypt"
 )
 
 type Config struct {
-	Version       int       `json:"version"`
-	ListenAddress string    `json:"listenAddress"`
-	WebPort       int       `json:"webPort"`
-	DataDir       string    `json:"dataDir"`
-	Runtimes      []Runtime `json:"runtimes"`
-	Models        []Model   `json:"models"`
-	Profiles      []Profile `json:"profiles"`
-	AdminUser     string    `json:"adminUser"`
-	AdminPassword string    `json:"adminPassword"`
-	AuthEnabled   bool      `json:"authEnabled"`
+	Version           int       `json:"version"`
+	ListenAddress     string    `json:"listenAddress"`
+	WebPort           int       `json:"webPort"`
+	DataDir           string    `json:"dataDir"`
+	Runtimes          []Runtime `json:"runtimes"`
+	Models            []Model   `json:"models"`
+	Profiles          []Profile `json:"profiles"`
+	AdminUser         string    `json:"adminUser"`
+	AdminPasswordHash string    `json:"adminPasswordHash,omitempty"`
+	AdminPassword     string    `json:"adminPassword,omitempty"`
+	AuthEnabled       bool      `json:"authEnabled"`
+}
+
+// BcryptCost is the bcrypt work factor used for password hashing.
+const BcryptCost = 12
+
+// MaxPasswordLength is the maximum password length in bytes (bcrypt limit).
+const MaxPasswordLength = 72
+
+// IsBcryptHash reports whether s is a structurally valid bcrypt hash.
+func IsBcryptHash(s string) bool {
+	if len(s) != 60 {
+		return false
+	}
+	if !strings.HasPrefix(s, "$2a$") && !strings.HasPrefix(s, "$2b$") && !strings.HasPrefix(s, "$2y$") {
+		return false
+	}
+	cost := s[4:6]
+	if cost[0] < '0' || cost[0] > '9' || cost[1] < '0' || cost[1] > '9' {
+		return false
+	}
+	return s[6] == '$'
+}
+
+// HashPassword generates a bcrypt hash for the given plaintext password.
+func HashPassword(password string) (string, error) {
+	b, err := bcrypt.GenerateFromPassword([]byte(password), BcryptCost)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+// MigrateCredentials performs the explicit startup credential migration.
+// It detects legacy plaintext in AdminPassword and migrates it to AdminPasswordHash.
+// Returns the migrated config and whether a migration (file write) occurred.
+// On save failure, returns an error and the caller must abort startup.
+func MigrateCredentials(cfg Config, path string) (Config, bool, error) {
+	hasHash := IsBcryptHash(cfg.AdminPasswordHash)
+	plaintextValue := cfg.AdminPassword
+	hasPlaintext := plaintextValue != "" && !IsBcryptHash(plaintextValue)
+	hashInWrongField := plaintextValue != "" && IsBcryptHash(plaintextValue)
+
+	if hasHash {
+		if hasPlaintext || hashInWrongField {
+			cfg.AdminPassword = ""
+			if err := Save(path, cfg); err != nil {
+				return cfg, false, fmt.Errorf("credential migration save: %w", err)
+			}
+			return cfg, true, nil
+		}
+		return cfg, false, nil
+	}
+
+	if hasPlaintext {
+		hash, err := HashPassword(plaintextValue)
+		if err != nil {
+			return cfg, false, fmt.Errorf("credential migration hash: %w", err)
+		}
+		cfg.AdminPasswordHash = hash
+		cfg.AdminPassword = ""
+		if err := Save(path, cfg); err != nil {
+			return cfg, false, fmt.Errorf("credential migration save: %w", err)
+		}
+		return cfg, true, nil
+	}
+
+	if hashInWrongField {
+		cfg.AdminPasswordHash = plaintextValue
+		cfg.AdminPassword = ""
+		if err := Save(path, cfg); err != nil {
+			return cfg, false, fmt.Errorf("credential migration save: %w", err)
+		}
+		return cfg, true, nil
+	}
+
+	return cfg, false, nil
 }
 
 type Runtime struct {
@@ -196,8 +276,11 @@ func (c Config) Validate() error {
 	if c.AuthEnabled && c.AdminUser == "" {
 		return errors.New("adminUser is required when auth is enabled")
 	}
-	if c.AuthEnabled && c.AdminPassword == "" {
-		return errors.New("adminPassword is required when auth is enabled")
+	if c.AuthEnabled && c.AdminPasswordHash == "" && c.AdminPassword == "" {
+		return errors.New("adminPasswordHash is required when auth is enabled")
+	}
+	if c.AuthEnabled && c.AdminPasswordHash != "" && !IsBcryptHash(c.AdminPasswordHash) {
+		return errors.New("adminPasswordHash must be a valid bcrypt hash")
 	}
 	return nil
 }

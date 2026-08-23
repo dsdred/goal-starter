@@ -90,6 +90,7 @@ func NewRouteRegistry(
 		passwordStore:   passwordStore,
 		authEnabled:     true,
 	}
+	r.systemHandler.passStore = passwordStore
 	for _, opt := range opts {
 		opt(r)
 	}

@@ -201,6 +201,7 @@
   "settings.edit.err.user": "Admin username is required",
   "settings.edit.err.password": "Password is required",
   "settings.edit.err.password_match": "Passwords do not match",
+  "settings.edit.err.password_length": "Password must not exceed 72 bytes",
   "settings.about.title": "About",
   "settings.about.version": "Version",
   "settings.about.commit": "Commit",

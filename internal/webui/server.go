@@ -68,10 +68,10 @@ func NewApp(cfg *config.Config, repo storage.Repository, supervisor *process.Sup
 		authEnabled:   cfg.AuthEnabled,
 	}
 
-	// Set admin password from config.
-	if cfg.AdminPassword != "" {
-		if err := a.passwordStore.SetPassword(cfg.AdminUser, cfg.AdminPassword); err != nil {
-			return nil, fmt.Errorf("set admin password: %w", err)
+	// Set admin password hash from config.
+	if cfg.AdminPasswordHash != "" {
+		if err := a.passwordStore.SetHash(cfg.AdminUser, cfg.AdminPasswordHash); err != nil {
+			return nil, fmt.Errorf("set admin password hash: %w", err)
 		}
 	}
 

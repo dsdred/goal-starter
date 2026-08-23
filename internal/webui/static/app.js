@@ -1503,6 +1503,7 @@ async function saveSettingsEdit() {
         const pwSet = !!(lastMetrics && lastMetrics.admin_password_set);
         if (!adminPassword && !pwSet) { showToast(t('settings.edit.err.password'), 'error'); return; }
         if (adminPassword && adminPassword !== adminPassword2) { showToast(t('settings.edit.err.password_match'), 'error'); return; }
+        if (adminPassword && new TextEncoder().encode(adminPassword).length > 72) { showToast(t('settings.edit.err.password_length'), 'error'); return; }
     }
 
     const body = { listen_address: addr, web_port: port, auth_enabled: auth };

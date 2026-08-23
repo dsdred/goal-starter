@@ -39,6 +39,16 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Migrate legacy plaintext credentials to bcrypt hash.
+	cfg, migrated, err := config.MigrateCredentials(cfg, *configPath)
+	if err != nil {
+		slog.Error("credential migration failed", "error", err)
+		os.Exit(1)
+	}
+	if migrated {
+		slog.Info("credential migrated to bcrypt hash")
+	}
+
 	// Validate configuration at startup.
 	if err := cfg.ValidateFull(); err != nil {
 		slog.Error("config validation failed", "error", err)

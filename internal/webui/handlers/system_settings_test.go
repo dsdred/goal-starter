@@ -23,14 +23,18 @@ func newTestConfigFile(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "goal.json")
+	hash, err := config.HashPassword("secret123")
+	if err != nil {
+		t.Fatalf("hash password: %v", err)
+	}
 	cfg := config.Config{
-		Version:       2,
-		ListenAddress: "127.0.0.1",
-		WebPort:       8088,
-		DataDir:       dir,
-		AdminUser:     "admin",
-		AdminPassword: "secret123",
-		AuthEnabled:   false,
+		Version:           2,
+		ListenAddress:     "127.0.0.1",
+		WebPort:           8088,
+		DataDir:           dir,
+		AdminUser:         "admin",
+		AdminPasswordHash: hash,
+		AuthEnabled:       false,
 	}
 	if err := config.Save(path, cfg); err != nil {
 		t.Fatalf("save config: %v", err)
@@ -153,8 +157,8 @@ func TestSettings_Save_PreservesAdminCredentials(t *testing.T) {
 	if saved.AdminUser != "admin" {
 		t.Errorf("AdminUser lost: expected admin, got %q", saved.AdminUser)
 	}
-	if saved.AdminPassword != "secret123" {
-		t.Errorf("AdminPassword lost: expected secret123, got %q", saved.AdminPassword)
+	if !config.IsBcryptHash(saved.AdminPasswordHash) {
+		t.Errorf("AdminPasswordHash lost or invalid: got %q", saved.AdminPasswordHash)
 	}
 }
 
@@ -458,8 +462,14 @@ func TestSettings_Save_EnableAuthWithCredentials(t *testing.T) {
 	if !saved.AuthEnabled {
 		t.Error("auth not enabled")
 	}
-	if saved.AdminUser != "admin" || saved.AdminPassword != "secret123" {
-		t.Errorf("credentials not saved: user=%q pass=%q", saved.AdminUser, saved.AdminPassword)
+	if saved.AdminUser != "admin" {
+		t.Errorf("admin user not saved: got %q", saved.AdminUser)
+	}
+	if !config.IsBcryptHash(saved.AdminPasswordHash) {
+		t.Errorf("password hash not saved: got %q", saved.AdminPasswordHash)
+	}
+	if saved.AdminPassword != "" {
+		t.Errorf("plaintext password should be empty, got %q", saved.AdminPassword)
 	}
 }
 
@@ -500,7 +510,7 @@ func TestSettings_Save_EnableAuthWithoutPassword(t *testing.T) {
 }
 
 func TestSettings_Save_PreservePasswordWhenOmitted(t *testing.T) {
-	path := newTestConfigFile(t) // admin / secret123, auth disabled
+	path := newTestConfigFile(t) // admin / hash of secret123, auth disabled
 	h := newTestSettingsHandler(t, path)
 
 	// Enable auth, provide the username, but omit the password entirely.
@@ -512,14 +522,20 @@ func TestSettings_Save_PreservePasswordWhenOmitted(t *testing.T) {
 		t.Fatalf("expected 200, got %d, body: %s", w.Code, w.Body.String())
 	}
 	saved, _ := config.Load(path)
-	if saved.AdminPassword != "secret123" {
-		t.Errorf("existing password was lost: got %q", saved.AdminPassword)
+	if !config.IsBcryptHash(saved.AdminPasswordHash) {
+		t.Errorf("existing password hash was lost: got %q", saved.AdminPasswordHash)
 	}
 }
 
 func TestSettings_Save_ChangePasswordWhenSupplied(t *testing.T) {
-	path := newTestConfigFile(t) // admin / secret123, auth disabled
+	path := newTestConfigFile(t) // admin / hash of secret123, auth disabled
 	h := newTestSettingsHandler(t, path)
+
+	oldHash := ""
+	{
+		cfg, _ := config.Load(path)
+		oldHash = cfg.AdminPasswordHash
+	}
 
 	body := `{"listen_address":"127.0.0.1","web_port":8088,"auth_enabled":true,"admin_user":"admin","admin_password":"newpass456"}`
 	req := httptest.NewRequest(http.MethodPut, "/api/v1/settings", bytes.NewBufferString(body))
@@ -529,8 +545,14 @@ func TestSettings_Save_ChangePasswordWhenSupplied(t *testing.T) {
 		t.Fatalf("expected 200, got %d, body: %s", w.Code, w.Body.String())
 	}
 	saved, _ := config.Load(path)
-	if saved.AdminPassword != "newpass456" {
-		t.Errorf("password not changed: got %q", saved.AdminPassword)
+	if !config.IsBcryptHash(saved.AdminPasswordHash) {
+		t.Errorf("password hash not valid: got %q", saved.AdminPasswordHash)
+	}
+	if saved.AdminPasswordHash == oldHash {
+		t.Error("password hash was not changed")
+	}
+	if saved.AdminPassword != "" {
+		t.Errorf("plaintext should be empty: got %q", saved.AdminPassword)
 	}
 }
 

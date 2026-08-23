@@ -202,6 +202,28 @@ func (p *PasswordStore) SetPassword(username, password string) error {
 	return nil
 }
 
+// SetHash stores a pre-computed bcrypt hash for the given username.
+// The hash must be a valid bcrypt hash (correct prefix and length).
+// This method does not re-hash; it stores the hash directly.
+func (p *PasswordStore) SetHash(username, hash string) error {
+	if username == "" {
+		return errors.New("username is required")
+	}
+	if hash == "" {
+		return errors.New("hash is required")
+	}
+	if len(hash) != 60 {
+		return errors.New("invalid bcrypt hash length")
+	}
+	if hash[0] != '$' || hash[3] != '$' || hash[6] != '$' {
+		return errors.New("invalid bcrypt hash format")
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.users[username] = hash
+	return nil
+}
+
 // ValidateCredentials checks username/password against stored bcrypt hash.
 // Returns false for unknown users, empty passwords, or mismatched credentials.
 func (p *PasswordStore) ValidateCredentials(username, password string) bool {

@@ -201,6 +201,7 @@
   "settings.edit.err.user": "Укажите имя администратора",
   "settings.edit.err.password": "Укажите пароль",
   "settings.edit.err.password_match": "Пароли не совпадают",
+  "settings.edit.err.password_length": "Пароль не должен превышать 72 байта",
   "settings.about.title": "О программе",
   "settings.about.version": "Версия",
   "settings.about.commit": "Коммит",

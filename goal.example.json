@@ -4,7 +4,7 @@
   "webPort": 8088,
   "dataDir": "./data",
   "adminUser": "admin",
-  "adminPassword": "",
+  "adminPasswordHash": "",
   "authEnabled": false,
   "runtimes": [
     {

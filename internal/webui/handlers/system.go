@@ -62,6 +62,7 @@ type SystemHandler struct {
 	webPort     int
 	authEnabled bool
 	configPath  string
+	passStore   *security.PasswordStore
 }
 
 // NewSystemHandler creates a new SystemHandler.
@@ -137,13 +138,13 @@ func (h *SystemHandler) adminConfigFields() (user string, passwordSet bool) {
 		return "", false
 	}
 	var c struct {
-		AdminUser     string `json:"adminUser"`
-		AdminPassword string `json:"adminPassword"`
+		AdminUser         string `json:"adminUser"`
+		AdminPasswordHash string `json:"adminPasswordHash"`
 	}
 	if err := json.Unmarshal(data, &c); err != nil {
 		return "", false
 	}
-	return c.AdminUser, c.AdminPassword != ""
+	return c.AdminUser, c.AdminPasswordHash != ""
 }
 
 // isValidListenAddress checks if the address is a valid bind address without
@@ -206,28 +207,48 @@ func (h *SystemHandler) SaveSettings(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "failed to load config: "+err.Error())
 		return
 	}
+	prevListen := cfg.ListenAddress
+	prevPort := cfg.WebPort
 	cfg.ListenAddress = body.ListenAddress
 	cfg.WebPort = body.WebPort
 	cfg.AuthEnabled = body.AuthEnabled
-	// Credentials: a non-empty value updates the field; an empty value
-	// preserves whatever is already stored on disk (an empty password never
-	// erases the existing one).
 	if body.AdminUser != "" {
 		cfg.AdminUser = body.AdminUser
 	}
 	if body.AdminPassword != "" {
-		cfg.AdminPassword = body.AdminPassword
+		if len([]byte(body.AdminPassword)) > config.MaxPasswordLength {
+			writeError(w, 400, "password must not exceed 72 bytes")
+			return
+		}
+		hash, err := config.HashPassword(body.AdminPassword)
+		if err != nil {
+			writeError(w, 500, "failed to hash password")
+			return
+		}
+		cfg.AdminPasswordHash = hash
+		cfg.AdminPassword = ""
 	}
-	if cfg.AuthEnabled && (cfg.AdminUser == "" || cfg.AdminPassword == "") {
-		writeError(w, 400, "cannot enable auth: adminUser and adminPassword must be configured")
+	if cfg.AuthEnabled && cfg.AdminUser == "" {
+		writeError(w, 400, "cannot enable auth: adminUser must be configured")
+		return
+	}
+	if cfg.AuthEnabled && cfg.AdminPasswordHash == "" {
+		writeError(w, 400, "cannot enable auth: adminPassword must be configured")
 		return
 	}
 	if err := config.Save(h.configPath, cfg); err != nil {
 		writeError(w, 500, "failed to save config: "+err.Error())
 		return
 	}
+	if body.AdminPassword != "" && h.passStore != nil {
+		_ = h.passStore.SetHash(cfg.AdminUser, cfg.AdminPasswordHash)
+	}
 	slog.Info("settings saved", "listen", body.ListenAddress, "port", body.WebPort, "auth", body.AuthEnabled)
-	writeJSON(w, http.StatusOK, map[string]string{"status": "saved", "hint": "restart_required"})
+	hint := "restart_required"
+	if body.AdminPassword != "" && body.ListenAddress == prevListen && body.WebPort == prevPort {
+		hint = "ok"
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "saved", "hint": hint})
 }
 
 // LogsStream handles GET /api/v1/logs/stream
