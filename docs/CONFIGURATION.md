@@ -175,11 +175,11 @@ The sidebar footer contains compact Theme and Language selectors, a server statu
 
 ## Server settings in Web UI
 
-Server parameters (`listenAddress`, `webPort`, `authEnabled`, `adminUser`, `adminPassword`) can be edited from **Settings → Server → Edit**. The edit modal is where the "Enable authentication" toggle and the admin username / password fields live.
+Server parameters (`listenAddress`, `webPort`, `authEnabled`, `adminUser`, and the admin password) can be edited from **Settings → Server → Edit**. The edit modal is where the "Enable authentication" toggle and the admin username / password fields live.
 
 Behavior:
-- **Restart required.** Server settings are written to `goal.json` but only take effect after GoAl is restarted (hot-reconfiguration of the HTTP listener and auth state is not supported). The UI shows a restart hint after a save.
-- **Credentials.** Enabling authentication requires a non-empty `adminUser` and `adminPassword`. When a password is already configured, the password field may be left empty to **keep the current password** (an empty value never erases the stored one); entering a value replaces it. The stored password is never returned by the API — `GET /api/v1/metrics` only reports `admin_user` and a boolean `admin_password_set`.
+- **Restart hint.** Server settings are written to `goal.json`. Password changes take effect immediately (the live credential store is updated); other changes (port, address, auth toggle) take effect after a GoAl restart (hot-reconfiguration of the HTTP listener is not supported). The response `hint` (`ok` / `restart_required`) and the UI message reflect this.
+- **Credentials.** Enabling authentication requires a non-empty `adminUser` and a password (up to 72 bytes). The entered value is hashed with bcrypt (cost 12) and stored as `adminPasswordHash`; it is never persisted in plaintext. When a password is already configured, the password field may be left empty to **keep the current password** (an empty value never erases the stored one); entering a value replaces it. The stored hash is never returned by the API — `GET /api/v1/metrics` only reports `admin_user` and a boolean `admin_password_set`.
 - **Validation.** The server rejects enabling auth without both credentials (`400 cannot enable auth: ...`), invalid bind addresses, and out-of-range ports.
 
 To change server configuration without the UI:
@@ -191,6 +191,6 @@ To change server configuration without the UI:
 
 | Field | Security note |
 |-------|--------------|
-| `adminPassword` | Persisted in `goal.json` so authentication survives restart; stored as a bcrypt hash (cost 12) in memory. Protect the file with POSIX permissions or a Windows ACL. |
+| `adminPasswordHash` | Persisted in `goal.json` as a bcrypt hash (cost 12) so authentication survives restart; plaintext is never persisted (legacy `adminPassword` auto-migrates on first startup). Protect the file with POSIX permissions or a Windows ACL. |
 | `authEnabled` | Recommended `true` when `listenAddress` is non-loopback. If `false` on non-loopback, a prominent security warning is emitted but startup is not blocked. |
 | `dataDir` | Contains `goal_repo.json` (secrets, paths). Default `./data` is gitignored. |

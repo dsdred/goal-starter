@@ -100,7 +100,7 @@ The `goal.json` file is located in the same directory as the binary. It is **exc
   "webPort": 8088,
   "dataDir": "./data",
   "adminUser": "admin",
-  "adminPassword": "",
+  "adminPasswordHash": "",
   "authEnabled": false,
   "runtimes": [],
   "models": [],
@@ -117,7 +117,7 @@ The `goal.json` file is located in the same directory as the binary. It is **exc
 | `webPort` | HTTP server port | `8088` | No |
 | `dataDir` | Directory for storing data | `./data` | No |
 | `adminUser` | Administrator username | `admin` | No |
-| `adminPassword` | Administrator password (required when `authEnabled=true`) | `""` | Conditional |
+| `adminPasswordHash` | Bcrypt hash of the administrator password (required when `authEnabled=true`; normally set via Web UI Settings — plaintext is never persisted) | `""` | Conditional |
 | `authEnabled` | Enable authentication | `false` | No |
 | `runtimes` | List of AI runtimes | `[]` | No |
 | `models` | List of models | `[]` | No |
@@ -294,7 +294,7 @@ If `authEnabled` is set:
 
 1. Go to `http://127.0.0.1:8088`
 2. Click **Login**
-3. Enter `adminUser` and `adminPassword` from your configuration
+3. Enter `adminUser` and your password
 4. After login, the session is stored in an HTTP-only cookie
 
 ---
@@ -613,8 +613,8 @@ curl "http://127.0.0.1:8088/api/v1/logs?page=2&page_size=50"
 ### Authentication
 
 When `authEnabled=true`:
-- Set `adminUser` and `adminPassword` in `goal.json` (both required, non-empty).
-- Login validates credentials against the bcrypt hash. Wrong password or unknown user → 401.
+- `adminUser` and a valid `adminPasswordHash` (bcrypt, cost 12) must be present in `goal.json`. Set the password via **Settings → Server** in the Web UI; a legacy plaintext `adminPassword` is auto-migrated to a hash on first startup.
+- Login validates credentials against the stored bcrypt hash. Wrong password or unknown user → 401.
 - A session cookie is created on successful login. Logout destroys the session.
 - The authenticated username shown in the sidebar comes from the server-verified identity.
 
@@ -630,15 +630,16 @@ To make GoAl accessible from the network:
 1. Open `goal.json`
 2. Change `listenAddress` to `"0.0.0.0"`
 3. Enable authentication: `"authEnabled": true`
-4. Set a password: `"adminPassword": "your_password"`
-5. Restart GoAl
+4. Restart GoAl
+5. Set a password via **Settings → Server** in the Web UI (stored as `adminPasswordHash`)
 
 ```json
 {
   "listenAddress": "0.0.0.0",
   "webPort": 8088,
   "authEnabled": true,
-  "adminPassword": "secure_password_here"
+  "adminUser": "admin",
+  "adminPasswordHash": "$2a$12$..."
 }
 ```
 
@@ -745,9 +746,7 @@ The process was restarted by the OS, but GoAl cannot restore its state. You need
 
 ### How to reset the administrator password?
 
-1. Open `goal.json`
-2. Change `"adminPassword": "new_password"`
-3. Restart GoAl
+Set a new password via **Settings → Server** in the Web UI (it takes effect immediately and is stored as `adminPasswordHash`). Alternatively, write a valid bcrypt hash to `adminPasswordHash` in `goal.json` and restart GoAl.
 
 ### Where are GoAl's own logs?
 

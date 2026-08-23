@@ -1,8 +1,9 @@
 # ADR 006: Secure Credential Storage — Password Hash Persistence
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-08-23
 **Agreed:** 2026-08-23 (owner contract agreement)
+**Implemented:** 2026-08-23 (`9d2d0fb`; CI run 32657837425 PASS; all 18 acceptance scenarios covered by `internal/config/migrate_credentials_test.go` and `internal/webui/handlers/credential_integration_test.go`)
 **Related:** ROADMAP P0 "Secure credential storage"
 
 ## Context

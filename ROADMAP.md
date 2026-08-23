@@ -27,8 +27,9 @@
   - Shipped: `d2df293` + CI fixes `aae6e95`, `979e952` (CI run 32599996165, 6/6 PASS including Linux race + e2e). Real Chrome acceptance: 21/21 PASS.
 - [ ] Recovery: kill of an orphan (destructive) — separate item; requires its own contract/security review (ADR) of identity-verification sufficiency before implementation
 - [ ] Login rate limiting (complete) + full audit logging
-- [ ] Secure credential storage: migrate `adminPassword` from plaintext in config JSON to stored hash (bcrypt/Argon2id) with backward-compatible migration (detect plaintext → hash on first load); no hash in API responses; UI password-set semantics preserved
-  - Design gate: [ADR 006](docs/adr/006-secure-credential-storage.md) (**Proposed** — agreed 2026-08-23) defines bcrypt cost 12, `adminPasswordHash` field, explicit startup migration, 72-byte validation, failure semantics, and 18-scenario acceptance contract
+- [x] Secure credential storage: migrate `adminPassword` from plaintext in config JSON to stored hash (bcrypt/Argon2id) with backward-compatible migration (detect plaintext → hash on first load); no hash in API responses; UI password-set semantics preserved
+  - Design gate: [ADR 006](docs/adr/006-secure-credential-storage.md) (**Accepted** — agreed 2026-08-23, implemented 2026-08-23) defines bcrypt cost 12, `adminPasswordHash` field, explicit startup migration, 72-byte validation, failure semantics, and 18-scenario acceptance contract
+  - Shipped: `9d2d0fb` + CI run 32657837425 (PASS). All 18 acceptance scenarios covered by `internal/config/migrate_credentials_test.go` and `internal/webui/handlers/credential_integration_test.go`.
 - [ ] JSON durability: fsync after rename on all platforms; transactional backup before every write
 - [ ] Hot-reload wired into main startup
 - [ ] Maintained real-Chrome acceptance as a release gate (build-out under Product/UX → Browser Acceptance Suite)

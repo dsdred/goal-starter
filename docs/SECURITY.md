@@ -12,8 +12,8 @@ This document describes the security model of GoAl 2.0 as implemented in product
 | HttpOnly | `true` |
 | SameSite | `Lax` |
 | Secure | `false` (set to `true` when HTTPS middleware is added) |
-| Password store | bcrypt hash (cost 12), in-memory, seeded from config at startup |
-| Default credentials | None (store starts empty; `adminUser` + `adminPassword` required in config) |
+| Password store | bcrypt hash (cost 12); persisted in `goal.json` as `adminPasswordHash`, loaded into an in-memory store at startup |
+| Default credentials | None (store starts empty; `adminUser` + `adminPasswordHash` required in config when `authEnabled=true`) |
 
 Login endpoint: `POST /api/v1/auth/login`
 Logout endpoint: `POST /api/v1/auth/logout`
@@ -23,8 +23,8 @@ Session check: `GET /api/v1/auth/session`
 
 When `authEnabled=true`:
 
-- `adminUser` and `adminPassword` are **required** in `goal.json` (startup rejects empty values).
-- At startup, the password is hashed with bcrypt (cost 12) and stored in memory.
+- `adminUser` and a valid `adminPasswordHash` are **required** in `goal.json` (startup rejects missing or malformed values).
+- At startup, the stored hash is loaded into memory (no re-hashing). A legacy `adminPassword` plaintext is migrated to a hash on first startup (see Password storage).
 - Login validates the submitted username against the stored username and the password against the bcrypt hash.
 - Unknown username, wrong password, or empty credentials → `401`, no session created.
 - Successful login creates a session and returns the **server-verified username** in the response.
@@ -39,7 +39,7 @@ When `authEnabled=false`:
 
 ### Password storage
 
-The `adminPassword` is stored in plaintext in `goal.json` (the canonical config mechanism). At startup it is hashed with bcrypt and the plaintext is used only for initial seeding. `Config.Save()` retains the password so authentication continues to work after restart. The file uses mode `0600` on POSIX; on Windows, restrict its directory with an ACL.
+The `adminPasswordHash` in `goal.json` holds the **bcrypt hash** (cost 12, 60 chars) — the authoritative credential. Plaintext is never persisted: the settings endpoint hashes before saving, and `Config.Save()` retains the hash so authentication continues to work after restart. A legacy `adminPassword` plaintext field is migrated on first startup (`config.MigrateCredentials`): hashed, cleared, and the file re-saved atomically; if the save fails, startup aborts (fail-closed). New configs never carry the `adminPassword` key. The file uses mode `0600` on POSIX; on Windows, restrict its directory with an ACL.
 
 ### Session store
 
@@ -77,7 +77,7 @@ GoAl has a single admin user. There are no roles or permissions — if the user 
 
 | Secret | Location | Cleared on save |
 |--------|----------|-----------------|
-| `adminPassword` | `goal.json` → `AdminPassword` field | No; protect it with POSIX permissions or a Windows ACL |
+| `adminPasswordHash` | `goal.json` → `AdminPasswordHash` field (bcrypt hash; plaintext never persisted) | No; protect it with POSIX permissions or a Windows ACL |
 | Session tokens | In-memory store | Yes (expiry-based) |
 | CSRF tokens | Cookie + header | Rotated on login |
 
@@ -89,7 +89,7 @@ GoAl is not a secret vault.
 
 For runtime and model updates, omitting `environment` preserves stored values,
 an explicit empty object clears them, and an explicit map replaces them. The
-`AdminPassword` remains configured separately through `goal.json` or the Web UI.
+Admin credentials remain configured separately through `goal.json` (`adminPasswordHash`) or the Web UI.
 
 Model environment values are treated as write-only API data. They remain in
 the authoritative local repository so the runtime can receive them, but model
@@ -119,14 +119,17 @@ For network access:
   "listenAddress": "0.0.0.0",
   "webPort": 8088,
   "authEnabled": true,
-  "adminPassword": "secure_hash_or_plaintext"
+  "adminUser": "admin",
+  "adminPasswordHash": "$2a$12$..."
 }
 ```
+
+The password is normally set once via **Web UI → Settings → Server** (it is stored as `adminPasswordHash`); a pre-generated bcrypt hash may also be written directly.
 
 For maximum security:
 
 1. Set `authEnabled: true`
-2. Set a strong `adminPassword`
+2. Set a strong admin password (stored as `adminPasswordHash`)
 3. Bind to a non-loopback address
 4. Run behind a reverse proxy with TLS
 5. Use `deploy/systemd/goal.service` (Linux) or `deploy/windows/install-service.ps1` (Windows) for managed process lifecycle
@@ -160,4 +163,4 @@ Authenticode code signing is a possible future improvement. It is not currently 
 - **No token-based auth:** Only session cookies are supported. No API keys or bearer tokens.
 - **No multi-user:** Single admin user only. No roles or permissions.
 - **No login rate limiting:** Known limitation. Mitigate by binding to loopback or using a reverse proxy with rate limiting.
-- **Plaintext password in config:** `adminPassword` is stored in `goal.json` in plaintext. Protect the file with filesystem permissions.
+- **Password stored as hash:** `goal.json` holds the bcrypt hash (`adminPasswordHash`); plaintext is never persisted (a legacy plaintext `adminPassword` auto-migrates on first startup). Protect the file with filesystem permissions.

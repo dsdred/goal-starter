@@ -100,7 +100,7 @@ sudo ./goal          # Linux
   "webPort": 8088,
   "dataDir": "./data",
   "adminUser": "admin",
-  "adminPassword": "",
+  "adminPasswordHash": "",
   "authEnabled": false,
   "runtimes": [],
   "models": [],
@@ -117,7 +117,7 @@ sudo ./goal          # Linux
 | `webPort` | Порт HTTP-сервера | `8088` | Нет |
 | `dataDir` | Каталог для хранения данных | `./data` | Нет |
 | `adminUser` | Имя администратора | `admin` | Нет |
-| `adminPassword` | Пароль администратора (обязателен при `authEnabled=true`) | `""` | Условное |
+| `adminPasswordHash` | Bcrypt-хеш пароля администратора (обязателен при `authEnabled=true`; обычно задаётся через настройки Web UI — plaintext не сохраняется) | `""` | Условное |
 | `authEnabled` | Включить авторизацию | `false` | Нет |
 | `runtimes` | Список AI-рантайнов | `[]` | Нет |
 | `models` | Список моделей | `[]` | Нет |
@@ -295,7 +295,7 @@ sudo ./goal          # Linux
 
 1. Перейдите на `http://127.0.0.1:8088`
 2. Нажмите **Login**
-3. Введите `adminUser` и `adminPassword` из конфигурации
+3. Введите `adminUser` и ваш пароль
 4. После входа сессия хранится в HTTP-only cookie
 
 ---
@@ -588,15 +588,16 @@ curl "http://127.0.0.1:8088/api/v1/logs?page=2&page_size=50"
 1. Откройте `goal.json`
 2. Измените `listenAddress` на `"0.0.0.0"`
 3. Включите авторизацию: `"authEnabled": true`
-4. Задайте пароль: `"adminPassword": "your_password"`
-5. Перезапустите GoAl
+4. Перезапустите GoAl
+5. Задайте пароль через **Settings → Server** в Web UI (сохраняется как `adminPasswordHash`)
 
 ```json
 {
   "listenAddress": "0.0.0.0",
   "webPort": 8088,
   "authEnabled": true,
-  "adminPassword": "secure_password_here"
+  "adminUser": "admin",
+  "adminPasswordHash": "$2a$12$..."
 }
 ```
 
@@ -703,9 +704,7 @@ Get-Service goal
 
 ### Как сбросить пароль администратора?
 
-1. Откройте `goal.json`
-2. Измените `"adminPassword": "new_password"`
-3. Перезапустите GoAl
+Задайте новый пароль через **Settings → Server** в Web UI (вступает в силу немедленно, сохраняется как `adminPasswordHash`). Либо запишите валидный bcrypt-хеш в `adminPasswordHash` в `goal.json` и перезапустите GoAl.
 
 ### Где логи самого GoAl?
 
