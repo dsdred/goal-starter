@@ -124,7 +124,7 @@ Out of scope (future):
 3. PID alive + identity not confirmable → `stale` (`identity-unconfirmed`); no ownership claimed; no action.
 4. A bare PID (no executable path / start time) never yields `orphan`.
 5. Auto-start and concurrency accounting never treat `orphan` or `stale` as a running slot.
-6. **Dismiss** is an explicit, auth + CSRF-protected action that transitions `orphan` → `stale` (reconciled) without touching the process; audited once P0 audit logging lands.
+6. **Dismiss** is an explicit, auth + CSRF-protected action that transitions `orphan` → `stale` (reconciled) without touching the process; audited once P0 audit logging lands. *(Fulfilled: ADR 007 shipped `d46514a`, 2026-08-25 — `instance.dismiss` is a first-scope audit event.)*
 7. No kill of any orphan exists in the first implementation (verified by API surface + tests).
 8. Windows and Linux builds pass; detection is isolated in `internal/platform`.
 9. Race-detector clean (recovery runs at startup, concurrent with handlers).

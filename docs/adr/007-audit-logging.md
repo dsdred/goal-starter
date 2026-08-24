@@ -1,6 +1,6 @@
 # ADR 007: Full Audit Logging — Structured Security Event Records
 
-**Status:** Accepted — agreed 2026-08-24, implemented 2026-08-25 (implementation per §8; CI reconciliation pending)
+**Status:** Accepted — agreed 2026-08-24, implemented 2026-08-25, shipped `d46514a9e343222e31565fbc11999670eb87d82a` (CI run 32776891778, 6/6 PASS including Linux race)
 **Date:** 2026-08-24
 **Related:** ROADMAP P0 "Full audit logging"; ADR 005 (Dismiss audit commitment); ADR 006 (credential storage)
 
