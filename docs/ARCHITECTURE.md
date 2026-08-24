@@ -91,6 +91,8 @@ Application services (internal/application/)
 
 Every step propagates errors: a write is reported as successful only if it is durable, and a failed write never leaves a partially written file at the target path.
 
+**In-memory consistency:** mutating `JSONRepository` operations change in-memory state, then persist. If the persist fails, the operation restores the pre-save state (rollback) before returning the error, so memory and disk never diverge because of a failed save.
+
 The unified JSON repository in `internal/storage/` (`JSONRepository`) is the sole persistence layer for all entities.
 
 ## Process lifecycle

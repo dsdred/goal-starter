@@ -500,8 +500,13 @@ func (r *JSONRepository) CreateRuntime(e *RuntimeEntry) error {
 		}
 	}
 	cp := *e
+	previous := r.runtimes
 	r.runtimes = append(r.runtimes, &cp)
-	return r.saveLocked()
+	if err := r.saveLocked(); err != nil {
+		r.runtimes = previous
+		return err
+	}
+	return nil
 }
 
 func (r *JSONRepository) GetRuntime(id string) (*RuntimeEntry, error) {
@@ -523,8 +528,13 @@ func (r *JSONRepository) UpdateRuntime(e *RuntimeEntry) error {
 		if x.ID == e.ID {
 			e.UpdatedAt = time.Now()
 			cp := *e
+			previous := r.runtimes[i]
 			r.runtimes[i] = &cp
-			return r.saveLocked()
+			if err := r.saveLocked(); err != nil {
+				r.runtimes[i] = previous
+				return err
+			}
+			return nil
 		}
 	}
 	return fmt.Errorf("runtime not found: %s", e.ID)
@@ -535,8 +545,14 @@ func (r *JSONRepository) DeleteRuntime(id string) error {
 	defer r.mu.Unlock()
 	for i, e := range r.runtimes {
 		if e.ID == id {
+			previous := make([]*RuntimeEntry, len(r.runtimes))
+			copy(previous, r.runtimes)
 			r.runtimes = append(r.runtimes[:i], r.runtimes[i+1:]...)
-			return r.saveLocked()
+			if err := r.saveLocked(); err != nil {
+				r.runtimes = previous
+				return err
+			}
+			return nil
 		}
 	}
 	return fmt.Errorf("runtime not found: %s", id)
@@ -732,8 +748,13 @@ func (r *JSONRepository) CreateModel(e *ModelEntry) error {
 		}
 	}
 	cp := *e
+	previous := r.models
 	r.models = append(r.models, &cp)
-	return r.saveLocked()
+	if err := r.saveLocked(); err != nil {
+		r.models = previous
+		return err
+	}
+	return nil
 }
 
 func (r *JSONRepository) GetModel(id string) (*ModelEntry, error) {
@@ -755,8 +776,13 @@ func (r *JSONRepository) UpdateModel(e *ModelEntry) error {
 		if x.ID == e.ID {
 			e.UpdatedAt = time.Now()
 			cp := *e
+			previous := r.models[i]
 			r.models[i] = &cp
-			return r.saveLocked()
+			if err := r.saveLocked(); err != nil {
+				r.models[i] = previous
+				return err
+			}
+			return nil
 		}
 	}
 	return fmt.Errorf("model not found: %s", e.ID)
@@ -767,8 +793,14 @@ func (r *JSONRepository) DeleteModel(id string) error {
 	defer r.mu.Unlock()
 	for i, e := range r.models {
 		if e.ID == id {
+			previous := make([]*ModelEntry, len(r.models))
+			copy(previous, r.models)
 			r.models = append(r.models[:i], r.models[i+1:]...)
-			return r.saveLocked()
+			if err := r.saveLocked(); err != nil {
+				r.models = previous
+				return err
+			}
+			return nil
 		}
 	}
 	return fmt.Errorf("model not found: %s", id)
@@ -809,8 +841,13 @@ func (r *JSONRepository) UpdateInstance(e *LaunchInstanceEntry) error {
 	for i, x := range r.instances {
 		if x.ID == e.ID {
 			cp := *e
+			previous := r.instances[i]
 			r.instances[i] = &cp
-			return r.saveLocked()
+			if err := r.saveLocked(); err != nil {
+				r.instances[i] = previous
+				return err
+			}
+			return nil
 		}
 	}
 	return fmt.Errorf("instance not found: %s", e.ID)
@@ -821,8 +858,14 @@ func (r *JSONRepository) DeleteInstance(id string) error {
 	defer r.mu.Unlock()
 	for i, e := range r.instances {
 		if e.ID == id {
+			previous := make([]*LaunchInstanceEntry, len(r.instances))
+			copy(previous, r.instances)
 			r.instances = append(r.instances[:i], r.instances[i+1:]...)
-			return r.saveLocked()
+			if err := r.saveLocked(); err != nil {
+				r.instances = previous
+				return err
+			}
+			return nil
 		}
 	}
 	return fmt.Errorf("instance not found: %s", id)
@@ -851,12 +894,21 @@ func (r *JSONRepository) Create(e *LaunchInstanceEntry) error {
 		if x.ID == e.ID {
 			cp := *e
 			r.instances[i] = &cp
-			return r.saveLocked()
+			if err := r.saveLocked(); err != nil {
+				r.instances[i] = x
+				return err
+			}
+			return nil
 		}
 	}
+	previous := r.instances
 	cp := *e
 	r.instances = append(r.instances, &cp)
-	return r.saveLocked()
+	if err := r.saveLocked(); err != nil {
+		r.instances = previous
+		return err
+	}
+	return nil
 }
 
 func (r *JSONRepository) Get(id string) (*LaunchInstanceEntry, error) {
@@ -905,8 +957,13 @@ func (r *JSONRepository) CreateLaunchInstance(e *LaunchInstanceEntry) error {
 		}
 	}
 	cp := *e
+	previous := r.instances
 	r.instances = append(r.instances, &cp)
-	return r.saveLocked()
+	if err := r.saveLocked(); err != nil {
+		r.instances = previous
+		return err
+	}
+	return nil
 }
 
 func (r *JSONRepository) GetLaunchInstance(id string) (*LaunchInstanceEntry, error) {

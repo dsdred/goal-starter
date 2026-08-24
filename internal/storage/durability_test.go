@@ -70,6 +70,10 @@ func TestJSONRepository_SaveFailurePropagates(t *testing.T) {
 	if err := repo.CreateRuntime(&domain.RuntimeEntry{Name: "rt-x", Executable: "rt-x"}); err == nil {
 		t.Fatal("expected save error on read-only directory, got nil")
 	}
+	// In-memory state must roll back to the pre-save state.
+	if list, lerr := repo.ListRuntimes(); lerr == nil && len(list) != 0 {
+		t.Fatalf("in-memory runtimes after failed save = %d, want 0", len(list))
+	}
 	// The on-disk file must not contain the unsaved entity.
 	if data, rerr := os.ReadFile(path); rerr == nil && bytes.Contains(data, []byte("rt-x")) {
 		t.Fatal("failed save must not persist the entity")
