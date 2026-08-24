@@ -66,9 +66,12 @@ Config schema: `1 -> 2` (add default health check config). Storage schema: `5 ->
 
 ## Security
 
-### Login rate limit is placeholder
+### Login rate limit: request-rate based, not failure-based
 
-`rateLimiter` is a placeholder in `RouteRegistry`. The actual rate limiting on login (5 attempts / 5 minutes) is not yet enforced.
+Login rate limiting is enforced: per client address (TCP peer), at most 100 `POST /api/v1/auth/login` requests per fixed minute window, then HTTP 429 (`rate_limited`). Remaining gaps:
+
+- The limit bounds **request rate**, not **failed attempts** (the originally sketched 5-attempts/5-minutes lockout is not implemented), so up to 100 password guesses per minute per address remain possible.
+- `X-Forwarded-For`/`X-Real-IP` are not trusted (spoofable); behind a reverse proxy all clients share the proxy's 100/min bucket.
 
 ### No external security audit
 

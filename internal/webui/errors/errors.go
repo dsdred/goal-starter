@@ -14,6 +14,7 @@ const (
 	CodeForbidden      Code = "forbidden"
 	CodeNotFound       Code = "not_found"
 	CodeConflict       Code = "conflict"
+	CodeRateLimited    Code = "rate_limited"
 	CodeInvalidPort    Code = "invalid_port"
 	CodeInvalidHost    Code = "invalid_host"
 	CodeInvalidAddress Code = "invalid_address"

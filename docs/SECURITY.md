@@ -107,7 +107,7 @@ remain available internally for process launch.
 | Default bind loopback | `127.0.0.1` |
 | External bind warning | `authEnabled=false` + non-loopback → prominent WARN (not blocked) |
 | Request body size limit | `http.MaxBytesReader` |
-| Rate limiting | **Not implemented** (known limitation; no brute-force protection on login) |
+| Login rate limiting | **Implemented**: per-client-address fixed window on `POST /api/v1/auth/login` (100 req/min → HTTP 429 `rate_limited`) |
 | Runtime path validation | Executable and working directory validated against allowed roots |
 
 ## Recommended deployment
@@ -162,5 +162,5 @@ Authenticode code signing is a possible future improvement. It is not currently 
 - **No HTTPS in binary:** TLS is not terminated inside GoAl. Use a reverse proxy for HTTPS.
 - **No token-based auth:** Only session cookies are supported. No API keys or bearer tokens.
 - **No multi-user:** Single admin user only. No roles or permissions.
-- **No login rate limiting:** Known limitation. Mitigate by binding to loopback or using a reverse proxy with rate limiting.
+- **Login rate limiting:** Enforced on `POST /api/v1/auth/login` — at most 100 requests per minute per client address (TCP peer), then HTTP 429 with code `rate_limited`. `X-Forwarded-For`/`X-Real-IP` are intentionally not trusted (client-supplied headers would allow bypass). Behind a reverse proxy all clients share the proxy's bucket; for exposed deployments add proxy-level limiting as well. The limit bounds request rate; a failure-count lockout (e.g. 5 failures / 5 min) is not implemented.
 - **Password stored as hash:** `goal.json` holds the bcrypt hash (`adminPasswordHash`); plaintext is never persisted (a legacy plaintext `adminPassword` auto-migrates on first startup). Protect the file with filesystem permissions.

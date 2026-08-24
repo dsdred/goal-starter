@@ -26,7 +26,7 @@ All errors return JSON:
 }
 ```
 
-Error codes: `bad_request`, `unauthorized`, `forbidden`, `not_found`, `conflict`, `invalid_port`, `invalid_host`, `invalid_address`, `invalid_runtime`, `invalid_model`, `internal_server_error`.
+Error codes: `bad_request`, `unauthorized`, `forbidden`, `not_found`, `conflict`, `rate_limited`, `invalid_port`, `invalid_host`, `invalid_address`, `invalid_runtime`, `invalid_model`, `internal_server_error`.
 
 ## Health & version
 
@@ -42,6 +42,16 @@ Error codes: `bad_request`, `unauthorized`, `forbidden`, `not_found`, `conflict`
 | `POST` | `/api/v1/auth/login` | No | No | Login with credentials. Sets session cookie. |
 | `POST` | `/api/v1/auth/logout` | Yes | Yes | Clears session cookie. |
 | `GET` | `/api/v1/auth/session` | No | — | Reports whether the current browser session is authenticated. |
+
+### Login rate limiting
+
+`POST /api/v1/auth/login` is rate-limited per client address (TCP peer): at most **100 requests per minute**. Exceeding the limit returns `429 Too Many Requests`:
+
+```json
+{ "error": "too many login attempts, please try again later", "code": "rate_limited" }
+```
+
+`X-Forwarded-For` / `X-Real-IP` headers are **not** used for rate limiting (client-supplied, spoofable). Behind a reverse proxy, all clients share the proxy's 100/min bucket.
 
 ## Sessions & admin
 

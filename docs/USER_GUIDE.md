@@ -606,7 +606,7 @@ curl "http://127.0.0.1:8088/api/v1/logs?page=2&page_size=50"
 |-----------|-------|
 | Authentication | HTTP-only cookies, session-based (bcrypt credential validation) |
 | CSRF Protection | Yes, for all unsafe methods (double-submit cookie) |
-| Rate Limiting | **Not implemented** (known limitation) |
+| Rate Limiting | Login: 100 requests/min per client address → HTTP 429 |
 | Limit Request Body | http.MaxBytesReader |
 | Bind Address | 127.0.0.1 (localhost) by default |
 
@@ -615,6 +615,7 @@ curl "http://127.0.0.1:8088/api/v1/logs?page=2&page_size=50"
 When `authEnabled=true`:
 - `adminUser` and a valid `adminPasswordHash` (bcrypt, cost 12) must be present in `goal.json`. Set the password via **Settings → Server** in the Web UI; a legacy plaintext `adminPassword` is auto-migrated to a hash on first startup.
 - Login validates credentials against the stored bcrypt hash. Wrong password or unknown user → 401.
+- Login is rate-limited: more than 100 login requests per minute from one client address → 429 (code `rate_limited`); wait until the next minute.
 - A session cookie is created on successful login. Logout destroys the session.
 - The authenticated username shown in the sidebar comes from the server-verified identity.
 

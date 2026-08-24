@@ -6,11 +6,19 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/dsdred/goal/internal/application"
 	"github.com/dsdred/goal/internal/process"
 	"github.com/dsdred/goal/internal/storage"
+	apierrors "github.com/dsdred/goal/internal/webui/errors"
 	"github.com/dsdred/goal/internal/webui/security"
+)
+
+// Login rate limiting: at most loginRateLimit requests per loginRateWindow per client address.
+const (
+	loginRateLimit  = 100
+	loginRateWindow = time.Minute
 )
 
 // RouteRegistry registers all HTTP routes.
@@ -23,7 +31,7 @@ type RouteRegistry struct {
 	csrf              *security.CSRF
 	sessionStore      *security.SessionStore
 	passwordStore     *security.PasswordStore
-	rateLimiter       any
+	loginLimiter      *security.RateLimiter
 	loggingMiddleware func(http.Handler) http.Handler
 	authEnabled       bool
 	staticFS          fs.FS
@@ -88,6 +96,7 @@ func NewRouteRegistry(
 		csrf:            csrf,
 		sessionStore:    sessionStore,
 		passwordStore:   passwordStore,
+		loginLimiter:    security.NewRateLimiter(loginRateLimit, loginRateWindow),
 		authEnabled:     true,
 	}
 	r.systemHandler.passStore = passwordStore
@@ -109,7 +118,7 @@ func (r *RouteRegistry) Build() http.Handler {
 	mux.HandleFunc("GET /api/v1/health", r.systemHandler.Health)
 	mux.HandleFunc("GET /api/v1/version", r.systemHandler.Version)
 
-	mux.HandleFunc("POST /api/v1/auth/login", r.authHandler.Login)
+	mux.HandleFunc("POST /api/v1/auth/login", r.rateLimited(r.authHandler.Login))
 	mux.HandleFunc("POST /api/v1/auth/logout", r.requireAuthCSRF(r.authHandler.Logout))
 	mux.HandleFunc("GET /api/v1/auth/session", r.authHandler.CheckSession)
 
@@ -171,7 +180,6 @@ func (r *RouteRegistry) Build() http.Handler {
 
 	var handler http.Handler = mux
 	handler = r.applyCachePolicy(handler)
-	handler = r.applyRateLimit(handler)
 	handler = r.applyLogging(handler)
 	return handler
 }
@@ -238,8 +246,26 @@ func (r *RouteRegistry) requireAuthCSRF(next http.HandlerFunc) http.HandlerFunc 
 	}
 }
 
-func (r *RouteRegistry) applyRateLimit(next http.Handler) http.Handler {
-	return next
+// rateLimited bounds brute-force attempts on the login endpoint.
+// The key is the client's TCP peer address; X-Forwarded-For / X-Real-IP are
+// intentionally not trusted, because client-supplied headers would allow an
+// attacker to bypass the limiter by rotating fake addresses.
+func (r *RouteRegistry) rateLimited(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
+		if !r.loginLimiter.Allow(loginClientKey(req)) {
+			writeAPIError(w, http.StatusTooManyRequests, apierrors.NewAPIError(apierrors.CodeRateLimited, "too many login attempts, please try again later"))
+			return
+		}
+		next(w, req)
+	}
+}
+
+// loginClientKey returns the client address used for login rate limiting.
+func loginClientKey(req *http.Request) string {
+	if host, _, err := net.SplitHostPort(req.RemoteAddr); err == nil {
+		return host
+	}
+	return req.RemoteAddr
 }
 
 func (r *RouteRegistry) applyLogging(next http.Handler) http.Handler {

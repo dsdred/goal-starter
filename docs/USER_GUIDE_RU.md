@@ -577,7 +577,7 @@ curl "http://127.0.0.1:8088/api/v1/logs?page=2&page_size=50"
 |----------|---------|
 | Аутентификация | HTTP-only cookies, session-based |
 | CSRF защита | Да, для всех unsafe методов |
-| Rate limiting | **Не реализован** (известное ограничение) |
+| Rate limiting | Login: 100 запросов/мин с одного адреса клиента → HTTP 429 |
 | Limit request body | http.MaxBytesReader |
 | Bind по умолчанию | 127.0.0.1 (localhost) |
 
