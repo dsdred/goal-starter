@@ -95,6 +95,16 @@ Every step propagates errors: a write is reported as successful only if it is du
 
 The unified JSON repository in `internal/storage/` (`JSONRepository`) is the sole persistence layer for all entities.
 
+## Security audit trail
+
+`internal/webui/audit/` implements the durable security audit log (ADR 007): an append-only JSON Lines file at `<dataDir>/goal_audit.jsonl` (mode `0600`). Each event is a single `O_APPEND` write of a complete line followed by `fsync`; the event is considered recorded only after `fsync` returns. Rotation to `goal_audit.jsonl.1` happens before the append that would cross 10 MiB; at most 3 generations are kept. A single mutex-protected `AuditLogger` keeps file order equal to occurrence order.
+
+Secret safety is enforced by construction: the logger accepts only the typed `AuditEvent` built by named handler call sites (login outcomes, logout, settings saves, instance lifecycle actions); there is no generic request-logging path. Failure semantics are fail-open: a write failure never fails or rolls back the business operation, it emits a structured `slog.Error` (event name + raw I/O error only, no event payload), and the logger never latches — each subsequent event independently attempts a new write. The file is the source of truth and is read on every `GET /api/v1/admin/audit` request (no in-memory cache); a missing file (fresh install) yields an empty list, and a torn trailing line is skipped.
+
+The `webui.App` owns the logger (created from `dataDir` in `NewApp`, closed on shutdown in `main`); the `RouteRegistry` injects it into the auth, system, and instance handlers via `WithAuditLogger`.
+
+See [ADR 007](adr/007-audit-logging.md) and [SECURITY.md — Audit trail](SECURITY.md#audit-trail).
+
 ## Process lifecycle
 
 See [ARCHITECTURE.md - Process Lifecycle](#process-lifecycle) section below and [LIMITATIONS.md](LIMITATIONS.md).
@@ -143,3 +153,6 @@ config ← main (loaded once at startup)
 | 0002 | Multi-instance Supervisor and Profile → Instance model | Accepted |
 | 0003 | Web UI serving via embedded FS | Proposed |
 | 0004 | Config file vs Repository ownership (seed-once) | Proposed |
+| 0005 | Recovery: identity-verified orphan detection and restart reconciliation | Accepted |
+| 0006 | Secure credential storage (bcrypt `adminPasswordHash`) | Accepted |
+| 0007 | Full audit logging (structured security events, `goal_audit.jsonl`) | Accepted |

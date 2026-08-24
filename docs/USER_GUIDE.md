@@ -644,6 +644,17 @@ To make GoAl accessible from the network:
 }
 ```
 
+### Security audit log
+
+GoAl records security-relevant actions in a durable audit log: `<dataDir>/goal_audit.jsonl` (one JSON line per event). Recorded events: logins (success/failure/rate-limited), logout, settings saves (changed field names only; a password change is recorded as a `password_changed` flag — never the password), and instance start/stop/restart/dismiss/cleanup.
+
+Each line carries the timestamp, event name, user (or attempted user for logins), the TCP client address, and a small detail map (identifiers only). The file **never** contains passwords, session/CSRF tokens, or environment values.
+
+- **Read it directly:** `tail goal_audit.jsonl`, `grep login.failure goal_audit.jsonl`, etc.
+- **Query it:** `GET /api/v1/admin/audit` (authenticated session) with optional `limit` (default 100, max 1000), `offset`, and exact `event` filter; events are returned newest first.
+- **Retention:** the file rotates at 10 MiB and at most 3 generations are kept (max ~30 MiB). No configuration in the first release.
+- **Backups:** include `goal_audit.jsonl*` in your `dataDir` backups.
+
 ---
 
 ## Install as Service (Linux systemd)

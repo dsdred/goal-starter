@@ -3,10 +3,12 @@ package handlers
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/dsdred/goal/internal/application"
 	"github.com/dsdred/goal/internal/domain"
+	"github.com/dsdred/goal/internal/webui/audit"
 	"github.com/dsdred/goal/internal/webui/security"
 )
 
@@ -14,6 +16,8 @@ import (
 type InstancesHandler struct {
 	instanceSvc *application.InstanceService
 	csrf        *security.CSRF
+	sess        *security.SessionStore
+	audit       *audit.AuditLogger
 }
 
 // NewInstancesHandler creates a new InstancesHandler.
@@ -22,6 +26,20 @@ func NewInstancesHandler(instanceSvc *application.InstanceService, csrf *securit
 		instanceSvc: instanceSvc,
 		csrf:        csrf,
 	}
+}
+
+// WithAudit injects the durable audit logger (ADR 007). A nil logger
+// disables audit emission for this handler.
+func (h *InstancesHandler) WithAudit(logger *audit.AuditLogger) *InstancesHandler {
+	h.audit = logger
+	return h
+}
+
+// WithSessionStore injects the session store used to resolve the
+// authenticated user for audit records.
+func (h *InstancesHandler) WithSessionStore(sess *security.SessionStore) *InstancesHandler {
+	h.sess = sess
+	return h
 }
 
 // List handles GET /api/v1/instances
@@ -68,11 +86,31 @@ func (h *InstancesHandler) StartModel(w http.ResponseWriter, r *http.Request) {
 	}
 	inst, err := h.instanceSvc.StartModel(r.Context(), body.ModelID)
 	if err != nil {
+		// Audited on failure too with a sanitized (bounded) error fragment.
+		logAudit(h.audit, h.sess, r, audit.EventInstanceStart, map[string]string{
+			"model_id": body.ModelID,
+			"error":    sanitizeAuditError(err),
+		})
 		writeError(w, 500, err.Error())
 		return
 	}
+	logAudit(h.audit, h.sess, r, audit.EventInstanceStart, map[string]string{
+		"model_id":    body.ModelID,
+		"instance_id": string(inst.ID),
+	})
 	inst.Environment = nil
 	writeJSON(w, http.StatusCreated, inst)
+}
+
+// sanitizeAuditError bounds the error text recorded in audit Detail:
+// identifiers and short diagnostic fragments only, never full request data.
+func sanitizeAuditError(err error) string {
+	const maxLen = 200
+	msg := strings.ReplaceAll(err.Error(), "\n", " ")
+	if len(msg) > maxLen {
+		msg = msg[:maxLen]
+	}
+	return msg
 }
 
 // StopInstance handles POST /api/v1/instances/{id}/stop
@@ -87,6 +125,7 @@ func (h *InstancesHandler) StopInstance(w http.ResponseWriter, r *http.Request) 
 		writeError(w, 500, err.Error())
 		return
 	}
+	logAudit(h.audit, h.sess, r, audit.EventInstanceStop, map[string]string{"instance_id": id})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "stopped"})
 }
 
@@ -103,6 +142,7 @@ func (h *InstancesHandler) RestartInstance(w http.ResponseWriter, r *http.Reques
 		writeError(w, 500, err.Error())
 		return
 	}
+	logAudit(h.audit, h.sess, r, audit.EventInstanceRestart, map[string]string{"instance_id": id})
 	inst.Environment = nil
 	writeJSON(w, http.StatusOK, inst)
 }
@@ -132,6 +172,10 @@ func (h *InstancesHandler) Cleanup(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, err.Error())
 		return
 	}
+	logAudit(h.audit, h.sess, r, audit.EventInstanceCleanup, map[string]string{
+		"mode":    request.Mode,
+		"deleted": strconv.Itoa(deleted),
+	})
 	writeJSON(w, http.StatusOK, map[string]any{"status": "cleaned", "deleted": deleted})
 }
 
@@ -170,6 +214,7 @@ func (h *InstancesHandler) Dismiss(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, err.Error())
 		return
 	}
+	logAudit(h.audit, h.sess, r, audit.EventInstanceDismiss, map[string]string{"instance_id": id})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "dismissed"})
 }
 

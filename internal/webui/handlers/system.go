@@ -20,6 +20,7 @@ import (
 	"github.com/dsdred/goal/internal/config"
 	"github.com/dsdred/goal/internal/process"
 	"github.com/dsdred/goal/internal/version"
+	"github.com/dsdred/goal/internal/webui/audit"
 	"github.com/dsdred/goal/internal/webui/security"
 )
 
@@ -63,6 +64,7 @@ type SystemHandler struct {
 	authEnabled bool
 	configPath  string
 	passStore   *security.PasswordStore
+	audit       *audit.AuditLogger
 }
 
 // NewSystemHandler creates a new SystemHandler.
@@ -83,6 +85,13 @@ func NewSystemHandler(supervisor *process.Supervisor, sess *security.SessionStor
 // WithTemplateFS injects the embedded filesystem for templates.
 func (h *SystemHandler) WithTemplateFS(fsys fs.FS) *SystemHandler {
 	h.tmplFS = fsys
+	return h
+}
+
+// WithAudit injects the durable audit logger (ADR 007). A nil logger
+// disables audit emission for this handler.
+func (h *SystemHandler) WithAudit(logger *audit.AuditLogger) *SystemHandler {
+	h.audit = logger
 	return h
 }
 
@@ -209,6 +218,8 @@ func (h *SystemHandler) SaveSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	prevListen := cfg.ListenAddress
 	prevPort := cfg.WebPort
+	prevAuth := cfg.AuthEnabled
+	prevAdminUser := cfg.AdminUser
 	cfg.ListenAddress = body.ListenAddress
 	cfg.WebPort = body.WebPort
 	cfg.AuthEnabled = body.AuthEnabled
@@ -243,6 +254,24 @@ func (h *SystemHandler) SaveSettings(w http.ResponseWriter, r *http.Request) {
 	if body.AdminPassword != "" && h.passStore != nil {
 		_ = h.passStore.SetHash(cfg.AdminUser, cfg.AdminPasswordHash)
 	}
+	// Audit: changed field names only, never values (ADR 007 §2/§5).
+	auditDetail := map[string]string{}
+	if body.ListenAddress != prevListen {
+		auditDetail["listen_address"] = "changed"
+	}
+	if body.WebPort != prevPort {
+		auditDetail["web_port"] = "changed"
+	}
+	if body.AuthEnabled != prevAuth {
+		auditDetail["auth_enabled"] = "changed"
+	}
+	if body.AdminUser != "" && body.AdminUser != prevAdminUser {
+		auditDetail["admin_user"] = "changed"
+	}
+	if body.AdminPassword != "" {
+		auditDetail["password_changed"] = "true"
+	}
+	logAudit(h.audit, h.sess, r, audit.EventSettingsSaved, auditDetail)
 	slog.Info("settings saved", "listen", body.ListenAddress, "port", body.WebPort, "auth", body.AuthEnabled)
 	hint := "restart_required"
 	if body.AdminPassword != "" && body.ListenAddress == prevListen && body.WebPort == prevPort {

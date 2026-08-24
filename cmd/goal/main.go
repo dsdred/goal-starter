@@ -128,6 +128,11 @@ func main() {
 	defer cancel()
 	shutdownErr := supervisor.ShutdownWithPersistence(shutdownCtx)
 
+	// Close the audit log; every event is already fsynced on write (ADR 007).
+	if err := app.CloseAudit(); err != nil {
+		slog.Warn("close audit log", "error", err)
+	}
+
 	if runErr != nil {
 		slog.Error("server stopped", "error", runErr)
 	}

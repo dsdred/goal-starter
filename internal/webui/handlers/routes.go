@@ -11,6 +11,7 @@ import (
 	"github.com/dsdred/goal/internal/application"
 	"github.com/dsdred/goal/internal/process"
 	"github.com/dsdred/goal/internal/storage"
+	"github.com/dsdred/goal/internal/webui/audit"
 	apierrors "github.com/dsdred/goal/internal/webui/errors"
 	"github.com/dsdred/goal/internal/webui/security"
 )
@@ -28,6 +29,7 @@ type RouteRegistry struct {
 	modelHandler      *ModelsHandler
 	instanceHandler   *InstancesHandler
 	systemHandler     *SystemHandler
+	auditHandler      *AuditHandler
 	csrf              *security.CSRF
 	sessionStore      *security.SessionStore
 	passwordStore     *security.PasswordStore
@@ -35,6 +37,7 @@ type RouteRegistry struct {
 	loggingMiddleware func(http.Handler) http.Handler
 	authEnabled       bool
 	staticFS          fs.FS
+	audit             *audit.AuditLogger
 }
 
 type RouteRegistryOption func(*RouteRegistry)
@@ -73,6 +76,18 @@ func WithServerInfo(listenAddr string, webPort int, authEnabled bool) RouteRegis
 func WithConfigPath(path string) RouteRegistryOption {
 	return func(r *RouteRegistry) {
 		r.systemHandler.configPath = path
+	}
+}
+
+// WithAuditLogger wires the durable audit logger (ADR 007) into the auth,
+// system, and instance handlers and the login rate-limit wrapper.
+func WithAuditLogger(logger *audit.AuditLogger) RouteRegistryOption {
+	return func(r *RouteRegistry) {
+		r.audit = logger
+		r.authHandler.WithAudit(logger)
+		r.systemHandler.WithAudit(logger)
+		r.instanceHandler.WithAudit(logger).WithSessionStore(r.sessionStore)
+		r.auditHandler = NewAuditHandler(logger)
 	}
 }
 
@@ -131,6 +146,9 @@ func (r *RouteRegistry) Build() http.Handler {
 	mux.HandleFunc("GET /api/v1/logs/stream", r.requireAuth(r.systemHandler.LogsStream))
 	mux.HandleFunc("GET /api/v1/admin/users", r.requireAuth(r.systemHandler.AdminUsers))
 	mux.HandleFunc("GET /api/v1/admin/sessions", r.requireAuth(r.systemHandler.AdminSessions))
+	if r.auditHandler != nil {
+		mux.HandleFunc("GET /api/v1/admin/audit", r.requireAuth(r.auditHandler.Query))
+	}
 	mux.HandleFunc("GET /api/v1/session", r.requireAuth(r.systemHandler.SessionInfo))
 
 	mux.HandleFunc("POST /api/v1/instances/start", r.requireAuthCSRF(r.instanceHandler.StartModel))
@@ -252,20 +270,14 @@ func (r *RouteRegistry) requireAuthCSRF(next http.HandlerFunc) http.HandlerFunc 
 // attacker to bypass the limiter by rotating fake addresses.
 func (r *RouteRegistry) rateLimited(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, req *http.Request) {
-		if !r.loginLimiter.Allow(loginClientKey(req)) {
+		if !r.loginLimiter.Allow(clientIP(req)) {
+			// No username: the request body is not parsed before rate limiting.
+			logAudit(r.audit, r.sessionStore, req, audit.EventLoginRateLimited, nil)
 			writeAPIError(w, http.StatusTooManyRequests, apierrors.NewAPIError(apierrors.CodeRateLimited, "too many login attempts, please try again later"))
 			return
 		}
 		next(w, req)
 	}
-}
-
-// loginClientKey returns the client address used for login rate limiting.
-func loginClientKey(req *http.Request) string {
-	if host, _, err := net.SplitHostPort(req.RemoteAddr); err == nil {
-		return host
-	}
-	return req.RemoteAddr
 }
 
 func (r *RouteRegistry) applyLogging(next http.Handler) http.Handler {

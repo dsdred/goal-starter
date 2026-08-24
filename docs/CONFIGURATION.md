@@ -42,6 +42,10 @@ GoAl launches a runtime. This storage is not an encrypted secret vault.
 
 After the first startup, `goal_repo.json` is the source of truth. To modify existing entities after the first run, use the API or Web UI.
 
+### Audit log file
+
+The security audit log (ADR 007) lives in the data directory as `goal_audit.jsonl` (JSON Lines, mode `0600`). There are **no config fields** for it in the first scope: file location, the 10 MiB rotation threshold, and the 3-generation retention (3 × 10 MiB max: `goal_audit.jsonl`, `.1`, `.2`) are fixed constants in the audit package (`internal/webui/audit`). Every event line is fsynced on write; a write failure is fail-open for the business operation (structured operational log entry, no event payload). Query it through `GET /api/v1/admin/audit` or read the file directly (`tail`/`grep`); include `goal_audit.jsonl*` in `dataDir` backups. See [SECURITY.md](SECURITY.md#audit-trail) for the event taxonomy and secret-safety rules.
+
 ### Write durability
 
 Both `goal.json` and `goal_repo.json` are written with the same durable-write contract (`fsutil.WriteFileDurable`): an fsynced temp file in the same directory, read-back verification, an atomic backup of the previous file as `<file>.bak` before every write, an atomic `rename`, and a parent-directory `fsync` on POSIX (Windows: rename durability is provided by the NTFS log commit — see [ARCHITECTURE.md](ARCHITECTURE.md#authoritative-persistence) for the exact per-platform sequence and guarantees). A failed write is returned as an error and never leaves a partially written file at the target path. One generation of backup is kept (`goal.json.bak` / `goal_repo.json.bak`) and must be protected with the same permissions as the main files.

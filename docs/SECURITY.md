@@ -110,6 +110,18 @@ remain available internally for process launch.
 | Login rate limiting | **Implemented**: per-client-address fixed window on `POST /api/v1/auth/login` (100 req/min → HTTP 429 `rate_limited`) |
 | Runtime path validation | Executable and working directory validated against allowed roots |
 
+## Audit trail
+
+GoAl keeps a durable, append-only, structured security audit log (ADR 007): `<dataDir>/goal_audit.jsonl`, one JSON line per event, each line fsynced on write. It answers *who did what, when, from where, and did it succeed* — across restarts.
+
+- **Events (first scope):** `login.success`, `login.failure` (attempted user), `login.rate_limited`, `session.logout`, `settings.saved` (changed field names only; `password_changed` flag), `instance.start` (success and failure), `instance.stop`, `instance.restart`, `instance.dismiss`, `instance.cleanup`.
+- **Identity:** `user` is the authenticated user, or the attempted username for login outcomes; `src_ip` is the TCP peer address only (`X-Forwarded-For`/`X-Real-IP` are not trusted, same principle as login rate limiting).
+- **Secret safety (hard rules):** the file never contains passwords or hashes, session/CSRF tokens, model/runtime environment values, request bodies, or raw headers. The logger accepts only typed events built by named call sites (there is no generic "log this request" path).
+- **Retention:** rotation to `goal_audit.jsonl.1` at 10 MiB, at most 3 generations (3 × 10 MiB max). Constants, not config, in the first scope.
+- **Query:** `GET /api/v1/admin/audit` (auth required; see API.md).
+- **Fail-open:** an audit write failure never fails or rolls back the business operation; it produces a structured `slog.Error` (event name + raw I/O error only, no event payload) and the logger keeps accepting events. **Known limitation: audit gaps are possible on I/O failure (e.g. disk full).**
+- **Backup:** include `goal_audit.jsonl*` in `dataDir` backups, the same as `goal_repo.json`.
+
 ## Recommended deployment
 
 For network access:

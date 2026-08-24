@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	_ "net/http/pprof" // register hooks in default server
+	"path/filepath"
 	"runtime"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 	"github.com/dsdred/goal/internal/process"
 	"github.com/dsdred/goal/internal/storage"
 	"github.com/dsdred/goal/internal/version"
+	"github.com/dsdred/goal/internal/webui/audit"
 	"github.com/dsdred/goal/internal/webui/handlers"
 	"github.com/dsdred/goal/internal/webui/health"
 	"github.com/dsdred/goal/internal/webui/security"
@@ -42,6 +44,7 @@ type App struct {
 	hc            *health.HealthChecker
 	reg           *handlers.RouteRegistry
 	authEnabled   bool
+	auditLog      *audit.AuditLogger
 }
 
 // SetConfigPath sets the config file path for settings save.
@@ -55,6 +58,11 @@ func NewApp(cfg *config.Config, repo storage.Repository, supervisor *process.Sup
 	runtimeSvc := application.NewRuntimeService(repo)
 	modelSvc := application.NewModelService(repo)
 
+	dataDir := cfg.DataDir
+	if dataDir == "" {
+		dataDir = "./data"
+	}
+
 	a := &App{
 		cfg:           cfg,
 		supervisor:    supervisor,
@@ -66,6 +74,7 @@ func NewApp(cfg *config.Config, repo storage.Repository, supervisor *process.Sup
 		passwordStore: security.NewPasswordStore(),
 		sessionStore:  security.NewSessionStore(),
 		authEnabled:   cfg.AuthEnabled,
+		auditLog:      audit.New(filepath.Join(dataDir, audit.FileName)),
 	}
 
 	// Set admin password hash from config.
@@ -105,7 +114,21 @@ func (a *App) InitRegistry() {
 		handlers.WithWebAssets(templateFS, staticFS),
 		handlers.WithServerInfo(a.cfg.ListenAddress, a.cfg.WebPort, a.authEnabled),
 		handlers.WithConfigPath(a.configPath),
+		handlers.WithAuditLogger(a.auditLog),
 	)
+}
+
+// AuditLogger returns the app's durable audit logger (ADR 007).
+func (a *App) AuditLogger() *audit.AuditLogger {
+	return a.auditLog
+}
+
+// CloseAudit closes the audit log file. It is idempotent.
+func (a *App) CloseAudit() error {
+	if a.auditLog == nil {
+		return nil
+	}
+	return a.auditLog.Close()
 }
 
 // StartHealthChecker starts background health checks.
