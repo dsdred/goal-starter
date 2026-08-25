@@ -912,12 +912,12 @@ function renderAdvRuntimes() {
     if (compact) {
         compact.classList.add('visible');
         compact.innerHTML = runtimesData.map(function (r) {
-            const path = r.executable || r.working_directory || '—';
-            const title = [r.executable, r.working_directory ? 'cwd: ' + r.working_directory : ''].filter(Boolean).join(' · ');
+            const cwd = r.working_directory || '';
             return '<div class="compact-row crt-row">' +
                 '<div class="compact-main">' +
                     '<div class="compact-l1">' + esc(r.name) + '</div>' +
-                    '<div class="compact-l2" title="' + esc(title) + '">' + esc(path) + '</div>' +
+                    '<div class="compact-l2" title="' + esc(r.executable || '') + '">' + esc(r.executable || '—') + '</div>' +
+                    (cwd ? '<div class="compact-l3" title="' + esc(cwd) + '">' + esc(cwd) + '</div>' : '') +
                 '</div>' +
                 '<div class="compact-actions">' +
                     iconBtn(ICONS.edit, t('runtimes.actions.edit'), 'ghost', 'editRuntime', r.id) +
@@ -1414,46 +1414,6 @@ navigate = function (view) {
     closeDrawer();
 };
 
-// ─── Responsive entity layout (content-width driven) ────────────────────────
-// Desktop tables need a minimum *content* width, but the sidebar consumes part
-// of the viewport, so a fixed window breakpoint cannot know when a table stops
-// fitting. We measure the real width of #main-content and pick the
-// representation. One shared rule covers Runtimes / Instances / History; each
-// entity has a per-table threshold = the min content width its desktop table
-// needs so the right-hand actions are never clipped.
-const TABLE_MIN_CONTENT = {
-    runtimes: 640,
-    history: 980,
-    instances: 980
-};
-
-function updateTableLayout() {
-    const main = document.getElementById('main-content');
-    if (!main) return;
-    const w = main.clientWidth;
-    const modeFor = function (threshold) { return w >= threshold ? 'table' : 'compact'; };
-    const set = function (prefix, mode) {
-        const table = document.getElementById(prefix + '-table-wrap');
-        const compact = document.getElementById(prefix + '-compact');
-        if (table) table.classList.toggle('show', mode === 'table');
-        if (compact) compact.classList.toggle('show', mode === 'compact');
-    };
-    set('runtimes', modeFor(TABLE_MIN_CONTENT.runtimes));
-    set('history', modeFor(TABLE_MIN_CONTENT.history));
-    set('instances', modeFor(TABLE_MIN_CONTENT.instances));
-}
-
-function setupTableLayoutObserver() {
-    const main = document.getElementById('main-content');
-    if (!main) return;
-    if (typeof ResizeObserver !== 'undefined') {
-        new ResizeObserver(function () { updateTableLayout(); }).observe(main);
-    } else {
-        window.addEventListener('resize', updateTableLayout);
-    }
-    updateTableLayout();
-}
-
 // ─── Settings Edit ──────────────────────────────────────────────────────────
 
 function openSettingsEdit() {
@@ -1592,6 +1552,5 @@ window.onSettingsAuthToggle = onSettingsAuthToggle;
 
 // ─── Boot ───────────────────────────────────────────────────────────────────
 
-setupTableLayoutObserver();
 init();
 })();

@@ -93,13 +93,13 @@
 - [ ] Roles & permissions — separate architecture / design task (ADR)
 
 ### Responsive UI Contract
-- [ ] Canonical content-width (not viewport) breakpoint strategy
-- [ ] Desktop table → compact row transition per entity
-- [ ] Sidebar-aware width accounting
+- [x] Canonical **monotonic viewport** breakpoint strategy (decided 2026-08-25, Option A). A single explicit viewport breakpoint (768px, aligned with the existing mobile/drawer boundary): table above it, compact cards at/below it, no revert. The list mode depends on the **viewport width only, never on measured content width** — measured `#main-content` width is non-monotonic because the sidebar media queries change it at 1024/768 (margin-left 240→200→0), which was the root cause of the snap-back. Supersedes the earlier "content-width (not viewport)" direction, which could not be monotonic.
+- [x] Desktop table → compact row transition per entity (monotonic; Runtimes / Instances / History share the primitive)
+- [x] Sidebar state no longer affects list mode: hiding the sidebar only adds space and never triggers the table→cards switch (verified @1280 sidebar 240 offset; @768 drawer, contentLeft=0)
 - [ ] Zoom (80 / 100 / 125 / 150%) correctness
-- [ ] No horizontal body scroll guarantee
-- [ ] Reusable compact-row pattern across entities
-- [ ] Fix non-monotonic breakpoint in the Runtime view (table → cards → table snap-back on width change); once the compact view is reached it must stay compact (v2.0.1 manual-acceptance finding)
+- [x] No horizontal body scroll guarantee (`overflow-x:auto` on table wraps + `overflow-wrap:anywhere` on cells; browser acceptance verifies 0 page-level overflow at 1920/1440/1280/1024/768/600/430/375)
+- [x] Reusable compact-row pattern across entities
+- [x] Fix non-monotonic breakpoint in the Runtime view (table → cards → table snap-back on width change); once the compact view is reached it must stay compact (v2.0.1 manual-acceptance finding). Implemented 2026-08-25 (working tree; browser acceptance 86/86 PASS incl. monotonic `table×4 → cards×4` per entity; **commit/release pending gate — no SHA yet**)
 
 ### Maintained Browser Acceptance Suite
 - [ ] Replace one-off scratch acceptance scripts with a maintained suite

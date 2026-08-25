@@ -363,7 +363,7 @@ code { font-family: var(--font-mono); font-size: 0.9em; background: var(--bg-inp
 /* Data Table */
 .data-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
 .data-table th { text-align: left; padding: 10px 12px; color: var(--text-muted); font-weight: 500; font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.04em; border-bottom: 1px solid var(--border); }
-.data-table td { padding: 10px 12px; border-bottom: 1px solid var(--border); color: var(--text-secondary); }
+.data-table td { padding: 10px 12px; border-bottom: 1px solid var(--border); color: var(--text-secondary); overflow-wrap: anywhere; }
 .data-table tr:hover td { background: var(--accent-subtle); }
 .data-table .actions-cell { white-space: nowrap; }
 .data-table .actions-cell .btn { margin-right: 4px; }
@@ -383,20 +383,26 @@ code { font-family: var(--font-mono); font-size: 0.9em; background: var(--bg-inp
     font-size: 0.75rem; color: var(--text-muted); margin-top: 2px;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
+.compact-l3 {
+    font-size: 0.72rem; color: var(--text-muted); margin-top: 1px; opacity: 0.8;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
 .crt-row .compact-l1 { font-size: 0.9rem; font-weight: 600; color: var(--text-primary); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .compact-actions { display: flex; align-items: center; gap: 2px; flex-shrink: 0; }
 .compact-actions .icon-btn { width: 40px; height: 40px; }
 .compact-actions .icon-btn svg { width: 20px; height: 20px; }
 
-/* Layout switch: driven by JS on the actual content width (#main-content).
-   .visible = the renderer has data for this entity; .show = the current mode
-   (table vs compact) chosen by updateTableLayout(). Both are required to
-   display, so an empty entity shows neither representation. A fixed viewport
-   breakpoint cannot account for the sidebar, which is why the mode is computed
-   from measured content width rather than the window width. */
-#runtimes-table-wrap, #instances-table-wrap, #history-table-wrap { display: none; }
-#runtimes-table-wrap.visible.show, #instances-table-wrap.visible.show, #history-table-wrap.visible.show { display: block; }
-#runtimes-compact.visible.show, #instances-compact.visible.show, #history-compact.visible.show { display: flex; }
+/* Layout switch: single monotonic contract, pure CSS, one explicit breakpoint.
+   viewport > 768px: table; viewport <= 768px: compact cards (never reverts).
+   The mode depends on the viewport width only, never on measured content width:
+   the sidebar media queries below change the content width at 1024/768
+   (margin-left 240 -> 200 -> 0), so JS-measured content width is non-monotonic
+   and flips the mode table -> cards -> table -> cards while the window shrinks.
+   .visible = the renderer has data for this entity; an empty entity shows
+   neither representation. overflow-x keeps long table content contained. */
+#runtimes-table-wrap, #instances-table-wrap, #history-table-wrap { display: none; overflow-x: auto; }
+#runtimes-table-wrap.visible, #instances-table-wrap.visible, #history-table-wrap.visible { display: block; }
+#runtimes-compact.visible, #instances-compact.visible, #history-compact.visible { display: none; }
 
 /* Empty state */
 .empty-state { text-align: center; padding: 2rem 1rem; color: var(--text-muted); }
@@ -456,6 +462,10 @@ code { font-family: var(--font-mono); font-size: 0.9em; background: var(--bg-inp
     .mobile-topbar { display: flex; }
     .app-shell { flex-direction: column; }
     .main-content { margin-left: 0; margin-top: 52px; padding: 1rem; }
+    /* Monotonic list contract: below 768px the list is cards, always,
+       with no return to the table at smaller widths. */
+    #runtimes-table-wrap.visible, #instances-table-wrap.visible, #history-table-wrap.visible { display: none; }
+    #runtimes-compact.visible, #instances-compact.visible, #history-compact.visible { display: flex; }
     .model-row { flex-wrap: wrap; gap: 8px; }
     .model-row-actions { width: 100%; justify-content: flex-end; margin-top: 4px; }
     .form-row { grid-template-columns: 1fr; }
