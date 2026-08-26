@@ -177,11 +177,10 @@
   - Работает на Windows и Linux
 - [x] MSI/SFX fallback в build.go — автовыбор между MSI и SFX
 - [x] Поддержка -sfx флага в goal-msi
-- [x] Linux packages (.deb, .rpm) — cmd/goal/linux/packager.go
-  - Поддержка dpkg-deb и fpm для .deb
-  - Поддержка rpmbuild и fpm для .rpm
-  - Автоматическое определение доступных инструментов
-  - Systemd service integration
+- [ ] Linux packages (.deb, .rpm) — **ОТКЛОНЕНО как завершённое (forensic 2026-08-27, вердикт REJECT)**
+   - Запись ложно отмечена `[x]` в `48ccbfe` (unrelated test-fix commit); `cmd/goal/linux/packager.go` никогда не коммитился (untracked scratch, пусто в `git log --all`), не импортируется ни `cmd/goal`, ни `cmd/goal-msi`, не используется ни в одном build-скрипте или CI, тестов нет
+   - Доказанные дефекты (код никогда не выполнялся): расхождение fmt-аргументов RPM-спека с шаблоном → `Name: <version>`, `Version: <arch>`, `BuildArch: <name>`, `systemctl disable <version>.service`; deb `Architecture: x86_64` при cross-сборке (Debian ожидает `amd64`); fpm-режим ссылается на postinst/prerm-скрипты, которые никогда не пишутся на диск
+   - Направление остаётся открытым: ROADMAP «Later» (MSI/.deb/.rpm installers as demand matures); реализация — отдельная задача с тестами и CI-интеграцией
 - [x] Auto-update mechanism — internal/updater/updater.go
   - Проверка обновлений через GitHub Releases API
   - Скачивание с verification checksum SHA256
