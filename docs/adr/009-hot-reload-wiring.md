@@ -1,6 +1,6 @@
 # ADR 009: Hot-Reload Wiring — Field Classification and Explicit Reload Endpoint
 
-**Status:** Accepted — owner contract agreed 2026-08-26 (decisions D1–D6 as drafted)
+**Status:** Accepted — owner contract agreed 2026-08-26 (decisions D1–D6 as drafted), implemented 2026-08-26, shipped `633cec6750ff23fa6af1906fbff463c7b50224d9` (CI run 32953491491, 6/6 PASS including Linux race)
 **Date:** 2026-08-26
 **Related:** ADR 004 (Config vs Repository ownership), ADR 006 (Secure Credential Storage), ADR 007 (Audit Logging — event taxonomy), ROADMAP P0 "Hot-reload wired into main startup"
 
