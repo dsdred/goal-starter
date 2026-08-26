@@ -1,6 +1,6 @@
 # ADR 008: Recovery — Kill of an Orphan (Destructive Termination)
 
-**Status:** Accepted (owner contract agreed 2026-08-26 — all six decisions recorded in §Owner contract decisions; implemented 2026-08-26)
+**Status:** Accepted — owner contract agreed 2026-08-26 (all six decisions recorded in §Owner contract decisions), implemented 2026-08-26, shipped `a3a945b09721fe33d356558ffc6747444f168be3` (CI run 32934761306, 6/6 PASS including Linux race)
 **Date:** 2026-08-25
 **Related:** ADR 001 (Process Ownership — Windows Job Object / Linux process group), ADR 002 (Supervisor & Instance Model), ADR 005 (Recovery — Identity-Verified Orphan Detection and Restart Reconciliation; kill explicitly out of first scope), ADR 007 (Audit Logging — event taxonomy), ROADMAP P0 "Recovery: kill of an orphan (destructive)"
 
