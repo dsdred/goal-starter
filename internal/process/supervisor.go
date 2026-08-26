@@ -47,6 +47,7 @@ type Supervisor struct {
 	lifecycleCtx  context.Context
 	broker        *LogBroker
 	prober        platform.RecoveryProber
+	killer        platform.ProcessKiller
 }
 
 // InstanceStore persists and retrieves launch instances.
@@ -75,6 +76,7 @@ func NewSupervisor(store InstanceStore) *Supervisor {
 		semaphore: make(chan struct{}, 0),
 		broker:    NewLogBroker(4096),
 		prober:    platform.NewRecoveryProber(),
+		killer:    platform.NewProcessKiller(),
 	}
 }
 
@@ -96,6 +98,16 @@ func NewSupervisorWithContext(lifecycleCtx context.Context, store InstanceStore)
 	s := NewSupervisor(store)
 	s.lifecycleCtx = lifecycleCtx
 	return s
+}
+
+// SetRecoveryProber replaces the platform prober (test injection).
+func (s *Supervisor) SetRecoveryProber(p platform.RecoveryProber) {
+	s.prober = p
+}
+
+// SetProcessKiller replaces the platform killer (test injection).
+func (s *Supervisor) SetProcessKiller(k platform.ProcessKiller) {
+	s.killer = k
 }
 
 // lifecycleContext returns the application lifecycle context, or a background

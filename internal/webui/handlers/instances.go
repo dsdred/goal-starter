@@ -2,13 +2,16 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
 
 	"github.com/dsdred/goal/internal/application"
 	"github.com/dsdred/goal/internal/domain"
+	"github.com/dsdred/goal/internal/process"
 	"github.com/dsdred/goal/internal/webui/audit"
+	apierrors "github.com/dsdred/goal/internal/webui/errors"
 	"github.com/dsdred/goal/internal/webui/security"
 )
 
@@ -216,6 +219,72 @@ func (h *InstancesHandler) Dismiss(w http.ResponseWriter, r *http.Request) {
 	}
 	logAudit(h.audit, h.sess, r, audit.EventInstanceDismiss, map[string]string{"instance_id": id})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "dismissed"})
+}
+
+// Kill handles POST /api/v1/instances/{id}/kill (ADR 008).
+// Terminates an orphan process with strict identity re-verification and
+// reconciles the instance per the post-kill lifecycle contract (Cases A-G).
+// Case G (not orphan / not found / missing ID) writes no audit event.
+func (h *InstancesHandler) Kill(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimPrefix(r.URL.Path, "/api/v1/instances/")
+	id = strings.TrimSuffix(id, "/kill")
+	if id == "" {
+		writeError(w, 400, "instance ID is required")
+		return
+	}
+	result, err := h.instanceSvc.KillOrphan(r.Context(), domain.InstanceID(id))
+	if err != nil {
+		// Refusals (Cases C/D/F) are audited per ADR 008 D4; Case G
+		// preconditions are not (not a kill attempt).
+		refused := errors.Is(err, process.ErrKillIdentityUnconfirmed) ||
+			errors.Is(err, process.ErrKillInsufficientPrivilege) ||
+			errors.Is(err, process.ErrKillOutcomeUnconfirmed)
+		if refused {
+			logAudit(h.audit, h.sess, r, audit.EventInstanceKill, map[string]string{
+				"instance_id": id,
+				"outcome":     string(result.Outcome),
+				"reason":      result.Reason,
+			})
+		}
+		msg := err.Error()
+		switch {
+		case errors.Is(err, process.ErrKillIdentityUnconfirmed):
+			writeKillError(w, http.StatusConflict, apierrors.CodeConflict, msg, result.Reason)
+		case errors.Is(err, process.ErrKillInsufficientPrivilege):
+			writeKillError(w, http.StatusForbidden, apierrors.CodeForbidden, msg, result.Reason)
+		case errors.Is(err, process.ErrKillOutcomeUnconfirmed):
+			writeKillError(w, http.StatusInternalServerError, apierrors.CodeInternalServer, msg, result.Reason)
+		case strings.Contains(msg, "not in orphan state"):
+			writeError(w, http.StatusConflict, msg)
+		case strings.Contains(msg, "not found") || strings.Contains(msg, "get instance"):
+			writeError(w, http.StatusNotFound, "instance not found")
+		default:
+			writeError(w, http.StatusInternalServerError, msg)
+		}
+		return
+	}
+	logAudit(h.audit, h.sess, r, audit.EventInstanceKill, map[string]string{
+		"instance_id": id,
+		"outcome":     string(result.Outcome),
+		"reason":      result.Reason,
+	})
+	if result.Outcome == process.KillOutcomeTerminated {
+		writeJSON(w, http.StatusOK, map[string]string{"status": "killed", "method": result.Reason})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "reconciled", "reason": result.Reason})
+}
+
+// writeKillError writes the ADR 008 refusal response shape:
+// {"error": msg, "code": code, "reason": reason}.
+func writeKillError(w http.ResponseWriter, status int, code apierrors.Code, msg, reason string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]string{
+		"error":  msg,
+		"code":   string(code),
+		"reason": reason,
+	})
 }
 
 // Status handles GET /api/v1/instances/status

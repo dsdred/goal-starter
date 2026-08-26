@@ -1,6 +1,6 @@
 # ADR 008: Recovery — Kill of an Orphan (Destructive Termination)
 
-**Status:** Proposed (owner contract agreed 2026-08-26 — all six decisions recorded in §Owner contract decisions)
+**Status:** Accepted (owner contract agreed 2026-08-26 — all six decisions recorded in §Owner contract decisions; implemented 2026-08-26)
 **Date:** 2026-08-25
 **Related:** ADR 001 (Process Ownership — Windows Job Object / Linux process group), ADR 002 (Supervisor & Instance Model), ADR 005 (Recovery — Identity-Verified Orphan Detection and Restart Reconciliation; kill explicitly out of first scope), ADR 007 (Audit Logging — event taxonomy), ROADMAP P0 "Recovery: kill of an orphan (destructive)"
 
@@ -181,4 +181,13 @@ One event, `instance.kill` (D4), emitted for every kill request that passes the 
 
 ## Implementation status
 
-**Not started.** The design gate is complete (owner contract agreed 2026-08-26). Implementation follows the standard flow: contract agreement (done) → implementation (kill-specific strict verification + platform terminate primitives in `internal/platform`, supervisor kill path with the Case A–G transitions, `POST /api/v1/instances/{id}/kill` handler, `instance.kill` audit event constant) → tests (unit + Windows/Linux integration, fake prober fixtures per case) → acceptance (this contract) → documentation reconciliation (API.md new endpoint; SECURITY.md kill + TOCTOU residual; USER_GUIDE EN/RU destructive action; ADR 007 taxonomy note; ADR 005 "Future work" pointer; ROADMAP L28 → `[x]`).
+**Implemented 2026-08-26** (design gate complete, owner contract agreed 2026-08-26).
+
+- `internal/platform/kill.go` (+ `kill_unix.go` / `kill_windows.go`): `ProcessKiller` interface (`SignalGraceful` = Unix SIGTERM / Windows immediate terminate; `SignalForce` = Unix SIGKILL / Windows `OpenProcess(PROCESS_TERMINATE)`+`TerminateProcess`) with `ErrKillAccessDenied` and `ErrKillAlreadyGone` sentinels. No shell is involved.
+- `internal/process/supervisor_kill.go`: `Supervisor.KillOrphan` with the kill-specific strict verifier `verifyIdentityForKill` (path **and** start time both mandatory — stricter than the lenient detection-time `verifyIdentity`), the Case A–G transitions, `pollGone` confirmation windows, and persisted refusal diagnostics (`last_error`). `SetRecoveryProber`/`SetProcessKiller`/`SetKillWindows` are test hooks.
+- `internal/application/instance_service.go`: `KillOrphan` wrapper.
+- `internal/webui`: `POST /api/v1/instances/{id}/kill` (auth + CSRF, same middleware as `dismiss`); `instance.kill` audit event (`EventInstanceKill`) emitted for every attempt that passes the state precondition, including refusals; Case G emits no event.
+- UI: destructive-confirmed **Kill** button on orphan rows (table + compact views) with the identity-re-verification and platform-consequence explanation (EN/RU).
+- Tests: `internal/process/supervisor_kill_test.go` (Cases A–G, strict-matrix, idempotency, Dismiss-after-refusal, cross-platform via `runtime.GOOS`) and `internal/webui/handlers/instances_kill_test.go` (API outcome mapping, refusal persistence, audit events, auth+CSRF route wiring).
+- Acceptance: all 17 points of §Acceptance contract covered by the above tests; `gofmt`/`go vet`/`go test ./...` pass, Windows + Linux builds pass. Race-detector coverage runs in CI (Test Linux, race).
+- Documentation reconciled: API.md (endpoint + taxonomy), SECURITY.md (kill section + TOCTOU residual + audit line), USER_GUIDE EN/RU (orphan Kill workflow + audit line), ADR 007 (taxonomy row), ADR 005 ("Future work" pointer), ROADMAP L28 → `[x]`.

@@ -98,6 +98,13 @@ func (s *InstanceService) DismissOrphan(ctx context.Context, id domain.InstanceI
 	return s.supervisor.DismissOrphan(ctx, id)
 }
 
+// KillOrphan terminates an orphan process with strict identity
+// re-verification per ADR 008 and reconciles the instance per the
+// post-kill lifecycle contract.
+func (s *InstanceService) KillOrphan(ctx context.Context, id domain.InstanceID) (process.KillResult, error) {
+	return s.supervisor.KillOrphan(ctx, id)
+}
+
 // CleanupInstances deletes terminal instances matching the filter.
 // Active instances are never deleted. Returns the number of instances deleted.
 func (s *InstanceService) CleanupInstances(ctx context.Context, mode string, ids []string) (int, error) {

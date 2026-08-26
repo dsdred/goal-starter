@@ -95,7 +95,7 @@ Response 200 (events **newest first**):
 
 `total` is the count of **all** matching events, not just this page. `src_ip` is the TCP peer address only (`X-Forwarded-For`/`X-Real-IP` are not trusted). `detail` carries identifiers and booleans only — never secrets.
 
-First-scope event taxonomy: `login.success`, `login.failure` (attempted user), `login.rate_limited`, `session.logout`, `settings.saved` (changed field *names*; `password_changed`), `instance.start` (success and failure), `instance.stop`, `instance.restart`, `instance.dismiss`, `instance.cleanup` (`mode` + `deleted` count).
+First-scope event taxonomy: `login.success`, `login.failure` (attempted user), `login.rate_limited`, `session.logout`, `settings.saved` (changed field *names*; `password_changed`), `instance.start` (success and failure), `instance.stop`, `instance.restart`, `instance.dismiss`, `instance.kill` (every kill attempt that passes the state precondition; detail `instance_id` + bounded `outcome` `terminated|reconciled|refused` + `reason`), `instance.cleanup` (`mode` + `deleted` count).
 
 The audit log never contains passwords or hashes, session/CSRF tokens, environment values, request bodies, or raw headers.
 
@@ -112,6 +112,35 @@ Instances are running processes created from models.
 | `POST` | `/api/v1/instances/{id}/stop` | Yes | Yes | Stop an instance. |
 | `POST` | `/api/v1/instances/{id}/restart` | Yes | Yes | Restart an instance. |
 | `POST` | `/api/v1/instances/{id}/dismiss` | Yes | Yes | Dismiss an orphan instance (transitions `orphan` → `stale`). No process is touched. |
+| `POST` | `/api/v1/instances/{id}/kill` | Yes | Yes | Terminate an orphan process (destructive, ADR 008). Strict identity re-verification before every signal; `orphan`-only. |
+
+### POST /api/v1/instances/{id}/kill
+
+Terminate an orphaned process. Requires auth + CSRF. Per [ADR 008](adr/008-recovery-kill-orphan.md), the process identity (executable path + start time) is **strictly re-verified immediately before every destructive syscall** — a missing or mismatched start-time anchor refuses the kill (no PID-only kill exists). Unix: `SIGTERM` → 5 s grace → re-verify → `SIGKILL` only if still alive and still identity-matching. Windows: immediate `TerminateProcess` (no graceful phase).
+
+A successful transition to `stale` requires a **confirmed** process state; an unconfirmable termination never reports success (the `orphan` state is preserved and the attempt is retriable).
+
+Response 200 (process terminated, exit confirmed):
+```json
+{ "status": "killed", "method": "sigterm" }
+```
+`method` is `sigterm`, `sigkill` (Unix) or `terminateprocess` (Windows). The instance transitions to `stale` with `recovery_reason=killed-by-user`, `exit_class=killed`.
+
+Response 200 (PID already gone before any signal; nothing was killed):
+```json
+{ "status": "reconciled", "reason": "pid-gone" }
+```
+The instance transitions to `stale` with `recovery_reason=pid-gone` and unset `exit_class`.
+
+Refusals (the `orphan` state is preserved with a persisted `last_error` diagnostic; audited `instance.kill` with `outcome=refused`):
+
+| Status | `code` | `reason` | Meaning |
+|--------|--------|----------|---------|
+| `409` | `conflict` | `identity-unconfirmed` | Identity re-verification failed (path/start-time mismatch or start time unavailable). |
+| `403` | `forbidden` | `insufficient-privilege` | The OS denied the terminate right (EPERM / access denied). |
+| `500` | `internal_server_error` | `unconfirmed` | The termination outcome could not be confirmed (process still visible). |
+
+Case G (no audit event): `409` if the instance is not in `orphan` state, `404` if not found, `400` if the ID is missing.
 
 ### Instance logs
 

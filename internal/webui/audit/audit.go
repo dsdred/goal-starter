@@ -56,6 +56,7 @@ const (
 	EventInstanceStop     = "instance.stop"
 	EventInstanceRestart  = "instance.restart"
 	EventInstanceDismiss  = "instance.dismiss"
+	EventInstanceKill     = "instance.kill"
 	EventInstanceCleanup  = "instance.cleanup"
 )
 

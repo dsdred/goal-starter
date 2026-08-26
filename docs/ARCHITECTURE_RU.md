@@ -152,3 +152,4 @@ config ← main (загружается один раз при старте)
 | 0005 | Recovery: identity-verified orphan detection и reconciliation | Accepted |
 | 0006 | Безопасное хранение креденшелов (bcrypt `adminPasswordHash`) | Accepted |
 | 0007 | Полное аудит-логирование (структурированные security-события, `goal_audit.jsonl`) | Accepted |
+| 0008 | Recovery: завершение процесса-сироты (деструктивное завершение с повторной проверкой идентичности) | Accepted |

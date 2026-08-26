@@ -356,7 +356,8 @@ var ICONS = {
     restart: '<svg viewBox="0 0 24 24"><path d="M17.65 6.35A7.96 7.96 0 0012 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0112 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg>',
     logs: '<svg viewBox="0 0 24 24"><path d="M3 18h12v-2H3v2zM3 6v2h18V6H3zm0 7h18v-2H3v2z"/></svg>',
     edit: '<svg viewBox="0 0 24 24"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1 1 0 000-1.41l-2.34-2.34a1 1 0 00-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>',
-    del: '<svg viewBox="0 0 24 24"><path d="M6 19c0 1.1.9 2 2 2h8a2 2 0 002-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>'
+    del: '<svg viewBox="0 0 24 24"><path d="M6 19c0 1.1.9 2 2 2h8a2 2 0 002-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>',
+    kill: '<svg viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>'
 };
 
 function parseArgs(raw) {
@@ -1129,6 +1130,7 @@ function renderAdvInstances() {
         var actions;
         if (isOrphan) {
             actions = '<button class="btn btn-ghost btn-sm" onclick="viewInstanceLogs(\'' + safeId(i.id) + '\')">' + t('instances.actions.logs') + '</button>' +
+                ' <button class="btn btn-danger btn-sm" onclick="killInstance(\'' + safeId(i.id) + '\')">' + t('instances.actions.kill') + '</button>' +
                 ' <button class="btn btn-warning btn-sm" onclick="dismissInstance(\'' + safeId(i.id) + '\')">' + t('instances.actions.dismiss') + '</button>';
         } else {
             actions = '<button class="btn btn-ghost btn-sm" onclick="viewInstanceLogs(\'' + safeId(i.id) + '\')">' + t('instances.actions.logs') + '</button>' +
@@ -1152,6 +1154,7 @@ function renderAdvInstances() {
             var actions;
             if (isOrphan) {
                 actions = iconBtn(ICONS.logs, t('instances.actions.logs'), 'ghost', 'viewInstanceLogs', i.id) +
+                    iconBtn(ICONS.kill, t('instances.actions.kill'), 'danger', 'killInstance', i.id) +
                     iconBtn(ICONS.stop, t('instances.actions.dismiss'), 'warning', 'dismissInstance', i.id);
             } else {
                 actions = iconBtn(ICONS.logs, t('instances.actions.logs'), 'ghost', 'viewInstanceLogs', i.id) +
@@ -1185,6 +1188,26 @@ async function restartInstance(id) {
 async function dismissInstance(id) {
     try { await api('/instances/' + id + '/dismiss', { method: 'POST' }); await reloadAllData(); renderAll(); }
     catch (err) { showToast(friendlyError(err), 'error'); }
+}
+
+function killInstance(id) {
+    const inst = instancesData.find(function (x) { return x.id === id; });
+    const pid = inst && inst.pid ? inst.pid : '—';
+    showConfirm(t('instances.kill.confirm', { pid: pid }), async function () {
+        try {
+            const res = await api('/instances/' + id + '/kill', { method: 'POST' });
+            closeConfirm();
+            if (res && res.status === 'reconciled') {
+                showToast(t('instances.reconciled'), 'success');
+            } else {
+                showToast(t('instances.killed', { method: res ? res.method : '—' }), 'success');
+            }
+            await reloadAllData(); renderAll();
+        } catch (err) {
+            closeConfirm();
+            showToast(friendlyError(err), 'error');
+        }
+    });
 }
 
 // ─── Instance History (with filters) ────────────────────────────────────────
@@ -1510,6 +1533,7 @@ window.deleteModel = deleteModel;
 window.stopInstance = stopInstance;
 window.restartInstance = restartInstance;
 window.dismissInstance = dismissInstance;
+window.killInstance = killInstance;
 window.showCreateRuntimeModal = showCreateRuntimeModal;
 window.handleCreateRuntime = handleCreateRuntime;
 window.editRuntime = editRuntime;

@@ -139,7 +139,7 @@ Out of scope (future):
 
 ## Future work (tracked separately)
 
-- **Kill of an orphan (destructive lifecycle operation).** Requires a separate contract/security review establishing that identity verification is sufficient to make termination safe (PID-reuse risk, start-time availability, privilege). Not part of ADR 005's first implementation scope.
+- **Kill of an orphan (destructive lifecycle operation).** Resolved by [ADR 008](008-recovery-kill-orphan.md) (contract agreed 2026-08-26, implemented): strict identity re-verification at kill time (PID-only forbidden, start-time unavailable → refuse), platform termination (Unix SIGTERM→SIGKILL graceful-then-force; Windows immediate `TerminateProcess`), the post-kill lifecycle contract (no false success; unconfirmed termination preserves `orphan`), and the `instance.kill` audit event. Not part of ADR 005's first implementation scope.
 
 ## Implementation status
 

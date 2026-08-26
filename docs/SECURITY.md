@@ -114,13 +114,23 @@ remain available internally for process launch.
 
 GoAl keeps a durable, append-only, structured security audit log (ADR 007): `<dataDir>/goal_audit.jsonl`, one JSON line per event, each line fsynced on write. It answers *who did what, when, from where, and did it succeed* — across restarts.
 
-- **Events (first scope):** `login.success`, `login.failure` (attempted user), `login.rate_limited`, `session.logout`, `settings.saved` (changed field names only; `password_changed` flag), `instance.start` (success and failure), `instance.stop`, `instance.restart`, `instance.dismiss`, `instance.cleanup`.
+- **Events (first scope):** `login.success`, `login.failure` (attempted user), `login.rate_limited`, `session.logout`, `settings.saved` (changed field names only; `password_changed` flag), `instance.start` (success and failure), `instance.stop`, `instance.restart`, `instance.dismiss`, `instance.kill` (every kill attempt that passes the state precondition; detail: `instance_id`, bounded `outcome` `terminated|reconciled|refused`, bounded `reason`), `instance.cleanup`.
 - **Identity:** `user` is the authenticated user, or the attempted username for login outcomes; `src_ip` is the TCP peer address only (`X-Forwarded-For`/`X-Real-IP` are not trusted, same principle as login rate limiting).
 - **Secret safety (hard rules):** the file never contains passwords or hashes, session/CSRF tokens, model/runtime environment values, request bodies, or raw headers. The logger accepts only typed events built by named call sites (there is no generic "log this request" path).
 - **Retention:** rotation to `goal_audit.jsonl.1` at 10 MiB, at most 3 generations (3 × 10 MiB max). Constants, not config, in the first scope.
 - **Query:** `GET /api/v1/admin/audit` (auth required; see API.md).
 - **Fail-open:** an audit write failure never fails or rolls back the business operation; it produces a structured `slog.Error` (event name + raw I/O error only, no event payload) and the logger keeps accepting events. **Known limitation: audit gaps are possible on I/O failure (e.g. disk full).**
 - **Backup:** include `goal_audit.jsonl*` in `dataDir` backups, the same as `goal_repo.json`.
+
+## Orphan kill (destructive termination)
+
+`POST /api/v1/instances/{id}/kill` (auth + CSRF, destructive-confirmed in the UI) terminates an `orphan` process — a process that may still be running outside GoAl. It is an explicit user action only; no code path kills automatically (ADR 008).
+
+- **Identity re-verification at kill time.** Termination is PID-addressed and PIDs are reused, so the kill strictly re-verifies the recorded identity (executable path **and** start time) immediately before **every** destructive syscall (the first signal and any escalation). PID-only kill does not exist; a missing or mismatched start-time anchor **refuses** the kill (conservative). Dismiss remains the always-available safe path.
+- **No false success.** A transition to terminal `stale` requires a confirmable process state (liveness probe). If the termination outcome cannot be confirmed, the `orphan` state is preserved (retriable) and a 500 `unconfirmed` is returned — the process is never declared killed without confirmation.
+- **Privilege denial is explicit.** EPERM / access-denied → 403 `insufficient-privilege`; the orphan is preserved and the attempt is audited.
+- **Accepted residual risk (TOCTOU).** The kernel can still recycle a PID in the irreducible gap between the final re-verification and the signal syscall. Re-verification minimizes the window; a mis-kill would require PID **and** executable path **and** start time to all collide on an unrelated process in that gap. This residual is documented and accepted (ADR 008); the contract makes no sub-millisecond guarantee.
+- **Audit.** Every kill attempt that passes the state precondition emits one `instance.kill` event with bounded, secret-safe detail (outcome + reason vocabulary). Precondition failures (not orphan / not found) emit no event.
 
 ## Recommended deployment
 

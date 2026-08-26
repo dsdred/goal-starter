@@ -156,3 +156,4 @@ config ← main (loaded once at startup)
 | 0005 | Recovery: identity-verified orphan detection and restart reconciliation | Accepted |
 | 0006 | Secure credential storage (bcrypt `adminPasswordHash`) | Accepted |
 | 0007 | Full audit logging (structured security events, `goal_audit.jsonl`) | Accepted |
+| 0008 | Recovery: kill of an orphan (identity re-verified destructive termination) | Accepted |

@@ -49,6 +49,7 @@ type AuditEvent struct {
 | `instance.stop` | `POST /api/v1/instances/{id}/stop` | `instance_id` |
 | `instance.restart` | `POST /api/v1/instances/{id}/restart` | `instance_id` |
 | `instance.dismiss` | `POST /api/v1/instances/{id}/dismiss` (ADR 005 commitment) | `instance_id` |
+| `instance.kill` | `POST /api/v1/instances/{id}/kill` — every attempt that passes the state precondition, including refusals (ADR 008, additive extension) | `instance_id`, bounded `outcome` `terminated\|reconciled\|refused`, bounded `reason` (`sigterm\|sigkill\|terminateprocess\|pid-gone\|identity-unconfirmed\|insufficient-privilege\|unconfirmed`) |
 | `instance.cleanup` | `POST /api/v1/instances/cleanup` | `mode`, `deleted` count |
 
 Out of first scope (future expansion, same logger): model CRUD, runtime CRUD/replace/cascade, session expiry cleanup, health-check failures. Rationale: the ROADMAP item names login, session, settings, instance actions; model/runtime events are a bounded extension once the contract is proven.

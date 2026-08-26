@@ -408,6 +408,15 @@ older than 30 days). Active instances are never deleted by cleanup.
 - **Unexpected process crash** → instance reaches `failed` state (shown as FAILED in UI).
 - **Restart** → the same instance transitions from terminal back to `running` (new PID, same instance ID).
 
+### Orphaned processes (ORPHAN)
+
+After a GoAl restart, a previously active instance whose process may still be running outside GoAl is shown as **ORPHAN** ("May still be running outside GoAl"). Two actions are available:
+
+- **Dismiss** — safe reconciliation: the record moves to `stale`, but the process is **not touched**. Use it when you are sure the process is gone or you will stop it yourself.
+- **Kill** — destructive: actually terminates the orphan process. The UI asks for explicit confirmation. Before every signal GoAl re-verifies the process identity (executable + start time); if it cannot confirm the identity, the kill is refused and the orphan stays listed (retry, or Dismiss). On Windows the process is terminated immediately; on Linux a graceful stop (5 s) is attempted first, then a forced kill. If the process is already gone, the record is reconciled without sending any signal.
+
+Kill is a user action only — GoAl never kills automatically.
+
 ### CLI Management
 
 ```bash
@@ -646,7 +655,7 @@ To make GoAl accessible from the network:
 
 ### Security audit log
 
-GoAl records security-relevant actions in a durable audit log: `<dataDir>/goal_audit.jsonl` (one JSON line per event). Recorded events: logins (success/failure/rate-limited), logout, settings saves (changed field names only; a password change is recorded as a `password_changed` flag — never the password), and instance start/stop/restart/dismiss/cleanup.
+GoAl records security-relevant actions in a durable audit log: `<dataDir>/goal_audit.jsonl` (one JSON line per event). Recorded events: logins (success/failure/rate-limited), logout, settings saves (changed field names only; a password change is recorded as a `password_changed` flag — never the password), and instance start/stop/restart/dismiss/kill/cleanup.
 
 Each line carries the timestamp, event name, user (or attempted user for logins), the TCP client address, and a small detail map (identifiers only). The file **never** contains passwords, session/CSRF tokens, or environment values.
 
