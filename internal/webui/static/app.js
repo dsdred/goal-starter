@@ -7,6 +7,12 @@ let logEs = null;
 let logPaused = false;
 let refreshTimer = null;
 
+// Client-side display window for the live log view: at most this many
+// rendered .log-line elements are kept in #log-view. Older lines are trimmed;
+// the full history stays queryable through the API (server-side retention is
+// unchanged).
+const LOG_VIEW_MAX_LINES = 2000;
+
 let runtimesData = [];
 let modelsData = [];
 let instancesData = [];
@@ -581,8 +587,14 @@ function appendLogLine(d) {
     div.innerHTML = '<span class="log-time">' + ts + '</span>' + instLabel + '<span class="log-source">[' + esc(stream) + ']</span>' + esc(d.message);
     view.appendChild(div);
 
+    // querySelectorAll returns a STATIC NodeList: its .length is frozen at
+    // capture time and a detached lines[0] makes .remove() a no-op, so the
+    // previous `while (lines.length > 2000) lines[0].remove();` spun forever
+    // and wedged the tab's main thread once 2001 lines accumulated. Compute
+    // the overflow once and remove exactly that many oldest lines.
     const lines = view.querySelectorAll('.log-line');
-    while (lines.length > 2000) lines[0].remove();
+    const overflow = lines.length - LOG_VIEW_MAX_LINES;
+    for (let i = 0; i < overflow; i++) lines[i].remove();
     if (document.getElementById('log-autoscroll').checked) {
         view.scrollTop = view.scrollHeight;
     }

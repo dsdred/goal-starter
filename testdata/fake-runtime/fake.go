@@ -24,6 +24,8 @@ import (
 //   - delayed         Wait N seconds then exit with code
 //   - exit-code       Exit with specified code immediately
 //   - infinite        Run until killed (SIGKILL)
+//   - flood [ms] [n]  Print numbered lines every ms (default 10) until n lines
+//                     are printed (0 or omitted = run until killed)
 //   - echo            Print all remaining arguments and wait briefly
 //   - env-file        Write selected environment values to a file and exit
 
@@ -66,6 +68,8 @@ func main() {
 		doExitCode()
 	case "infinite":
 		doInfinite()
+	case "flood":
+		doFlood()
 	case "echo":
 		fmt.Println(strings.Join(os.Args[2:], " "))
 		time.Sleep(2 * time.Second)
@@ -190,6 +194,33 @@ func doInfinite() {
 			// May be killed before signal arrives
 		case <-time.After(200 * time.Millisecond):
 			fmt.Println("running")
+		}
+	}
+}
+
+// doFlood prints numbered lines at a fixed interval to build a large log
+// history quickly for stress tests. Args: [intervalMs] [totalLines].
+// intervalMs default 10; totalLines 0 or omitted = run until killed.
+func doFlood() {
+	intervalMs := 10
+	total := 0
+	if len(os.Args) > 2 {
+		if n, err := strconv.Atoi(os.Args[2]); err == nil && n >= 0 {
+			intervalMs = n
+		}
+	}
+	if len(os.Args) > 3 {
+		if n, err := strconv.Atoi(os.Args[3]); err == nil && n > 0 {
+			total = n
+		}
+	}
+	for i := 0; ; i++ {
+		fmt.Println("flood-line-" + strconv.Itoa(i))
+		if total > 0 && i+1 >= total {
+			break
+		}
+		if intervalMs > 0 {
+			time.Sleep(time.Duration(intervalMs) * time.Millisecond)
 		}
 	}
 }

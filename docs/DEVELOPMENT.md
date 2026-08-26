@@ -88,6 +88,7 @@ Each suite builds the `goal` binary and a platform-native `fake-runtime` into a 
 | `responsive.cjs` | Monotonic 768px table→cards contract, no page-level horizontal overflow at 8 viewports, action visibility, sidebar behavior |
 | `orphan.cjs` | Orphan recovery, RU/EN badges/tooltips, Kill/Dismiss buttons, Dismiss → stale, helper survives Dismiss |
 | `migration.cjs` | v5 → v7 repository migration on startup, migrated model resolves |
+| `stress.cjs` | Long live-log stream (fake-runtime `flood` mode, ~100 lines/s) past the 2000-line client window: tab stays responsive, rendered log DOM bounded (≤ 2000), logs advance, autoscroll tracks the tail, navigation/pause/search/clear work, single SSE consumer, server responsive |
 
 Run locally:
 
@@ -98,7 +99,7 @@ npx playwright install chromium
 npm test
 ```
 
-`npm test` runs all four suites sequentially and exits non-zero on any failure.
+`npm test` runs all five suites sequentially and exits non-zero on any failure.
 
 **CI:** the `browser-acceptance` job in `.github/workflows/ci.yml` runs the same `npm test` on ubuntu-latest with headless Chromium.
 

@@ -119,6 +119,10 @@ ARM64 is not tested. Cross-compilation works (`GOOS=linux GOARCH=arm64`) but run
 
 The Web UI is served from embedded filesystems. The binary must be self-contained — no external `web/` directory is required at runtime. See [ADR 003](adr/003-webui-embedded-fs.md).
 
+### Live log view: bounded client display window
+
+The Web UI live log view renders at most the last 2000 log lines; older rendered lines are removed as new lines arrive. This is a client-side display window, **not** retention: the full in-memory history (10000 entries per instance) remains available through `GET /api/v1/logs` / `GET /api/v1/instances/{id}/logs`, and the SSE stream is unaffected.
+
 ## Auto-update
 
 Auto-update via GitHub Releases API exists (`internal/updater/updater.go`) but is not wired into the Web UI.

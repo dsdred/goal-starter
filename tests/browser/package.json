@@ -4,7 +4,7 @@
   "private": true,
   "description": "Maintained real-browser (Chromium) acceptance suite for GoAl",
   "scripts": {
-    "test": "node core.cjs && node responsive.cjs && node orphan.cjs && node migration.cjs"
+    "test": "node core.cjs && node responsive.cjs && node orphan.cjs && node migration.cjs && node stress.cjs"
   },
   "devDependencies": {
     "playwright": "^1.62.1"
