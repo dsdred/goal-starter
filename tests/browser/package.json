@@ -1,0 +1,12 @@
+{
+  "name": "goal-browser-acceptance",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Maintained real-browser (Chromium) acceptance suite for GoAl",
+  "scripts": {
+    "test": "node core.cjs && node responsive.cjs && node orphan.cjs && node migration.cjs"
+  },
+  "devDependencies": {
+    "playwright": "^1.62.1"
+  }
+}

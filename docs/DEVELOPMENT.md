@@ -76,6 +76,32 @@ go test ./internal/process/...
 go test ./internal/storage/...
 ```
 
+### Browser acceptance suite (real Chromium, headless)
+
+The maintained real-browser acceptance suite lives in `tests/browser/` (Playwright + Chromium). It replaces the former one-off `*_acceptance*.cjs` scratch scripts at the repository root.
+
+Each suite builds the `goal` binary and a platform-native `fake-runtime` into a fresh temp workspace, seeds a deterministic config/repository, and drives the real UI:
+
+| Suite | Coverage |
+|-------|----------|
+| `core.cjs` | Wizard (existing/new runtime), resolve, start/stop/restart lifecycle, logs, history, instances, edit/delete, runtime-delete 409, autostart, polling, auth OFF/ON, env-secret safety |
+| `responsive.cjs` | Monotonic 768px table→cards contract, no page-level horizontal overflow at 8 viewports, action visibility, sidebar behavior |
+| `orphan.cjs` | Orphan recovery, RU/EN badges/tooltips, Kill/Dismiss buttons, Dismiss → stale, helper survives Dismiss |
+| `migration.cjs` | v5 → v7 repository migration on startup, migrated model resolves |
+
+Run locally:
+
+```bash
+cd tests/browser
+npm install
+npx playwright install chromium
+npm test
+```
+
+`npm test` runs all four suites sequentially and exits non-zero on any failure.
+
+**CI:** the `browser-acceptance` job in `.github/workflows/ci.yml` runs the same `npm test` on ubuntu-latest with headless Chromium.
+
 ## Build
 
 ### Local build

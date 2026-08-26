@@ -43,9 +43,12 @@
 - [x] Hot-reload wired into main startup
   - Design gate: [ADR 009](docs/adr/009-hot-reload-wiring.md) (**Accepted** — owner contract agreed 2026-08-26, implemented 2026-08-26, CI reconciled 2026-08-26) defines the authoritative field classification (hot: `logLevel` — new field, `debug|info|warn|error`, default `info`; `adminPasswordHash` — hot via the settings endpoint only, a hand-edited hash applies only at restart; restart: `listenAddress`/`webPort`/`dataDir`/`authEnabled`/`adminUser`; seed-only, never re-applied: config `runtimes`/`models`/`profiles`), the explicit trigger `POST /api/v1/admin/reload` (auth + CSRF; fsnotify / SIGHUP / polling rejected), all-or-nothing semantics (a reload never writes the file, never applies credential material, never re-seeds; rejected reload → `400 status=rejected` with live values and the file untouched), the response contract `{"status":"reloaded","applied":[...],"restart_required":[...]}` (field names only, deterministic order), the additive single `config.reload` ADR 007 audit event (field names only, fail-open, secret-safe), the unchanged `ok | restart_required` settings hint contract, and the removal of the dead `ReloadConfig` type (unused in production; its `Save()` violated the durable-write contract — no fsync / read-back / `.bak`)
   - Shipped: `633cec6` + CI run 32953491491 (6/6 PASS including Linux race): `config.LogLevel` field + `config.LogLevel()` parse/validation (added to `Config.Validate()`), `config.LoadReadOnly` (side-effect-free read — never creates the default file), `config.DiffHot`, `POST /api/v1/admin/reload` (auth + CSRF, `WithLiveConfig` wiring), hot `logLevel` application via `slog` level swap, `config.reload` audit event (`EventConfigReload`), removed `internal/config/reload.go` + `reload_test.go` (replaced by `reload_hot_test.go` and `system_reload_test.go`: 11 config tests + 9 endpoint tests incl. 401/403, rejected-reload immutability, seed-not-reseeded, credential-not-applied, audit field-names-only). Docs reconciled: CONFIGURATION.md, API.md, SECURITY.md, USER_GUIDE EN/RU, ARCHITECTURE EN/RU, BACKLOG
-- [ ] Maintained real-Chrome acceptance as a release gate (build-out under Product/UX → Browser Acceptance Suite)
+- [x] Maintained real-Chrome acceptance as a release gate (build-out under Product/UX → Browser Acceptance Suite)
+  - Shipped: `tests/browser/` maintained Playwright + Chromium suite — `core.cjs` (wizard, resolve, lifecycle, logs/history/instances, edit/delete, 409, autostart, polling, auth OFF/ON, env-secret safety), `responsive.cjs` (monotonic 768px contract), `orphan.cjs` (recovery, RU/EN, Kill/Dismiss), `migration.cjs` (v5 → v7); 181 checks, all PASS on Windows local Chromium. Replaced the one-off `*_acceptance*.cjs` scratch scripts (removed). Deterministic fixtures: platform-built `goal` + `fake-runtime`, seeded config/repo per suite. Headless-Chromium CI job `browser-acceptance` (ubuntu-latest) added to `.github/workflows/ci.yml`; suite manifest tracked (`tests/browser/package.json` + lock, `node_modules/` ignored). Stale scratch assertions corrected to the current contract (schema v7, host/port folded into args, current wizard markup, `#model-list` rows, sidebar logout). Local run: `cd tests/browser && npm test`.
 
 ### P1 — Product & reliability
+- [ ] Forensic: untracked `cmd/goal/linux/packager.go` — BACKLOG lists it as completed Linux packaging, but the file was never committed and is not imported by `cmd/goal`; per AGENTS.md a separate forensic decides include-vs-reject, then the BACKLOG record is corrected
+- [ ] Stale root-level `webui/` duplicate: the embedded UI is `internal/webui/` (see `server.go` go:embed); the root `webui/` copy is tracked, diverged, and referenced nowhere — remove or merge (technical debt)
 - [ ] Pipeline MVP (see Pipeline contract below)
 - [ ] Windows Service / Background Mode: true SCM integration (service registration, graceful stop, diagnostics without console, service-mode paths); compatible with Recovery (ADR 005); uninstall safety
   - Design gate: lifecycle ADR (SCM contract, interaction with Supervisor/Recovery, service vs foreground mode)
@@ -105,11 +108,11 @@
 - [x] Fix non-monotonic breakpoint in the Runtime view (table → cards → table snap-back on width change); once the compact view is reached it must stay compact (v2.0.1 manual-acceptance finding). Shipped: `d8a9e97786547ea27cecde614bb4d991eeb80bcd` + CI run 32882640063 (6/6 PASS including Linux race); browser acceptance 86/86 PASS incl. monotonic `table×4 → cards×4` per entity
 
 ### Maintained Browser Acceptance Suite
-- [ ] Replace one-off scratch acceptance scripts with a maintained suite
-- [ ] Deterministic fixtures (fake-runtime, seeded config / data)
-- [ ] Real Chrome / Chromium coverage
-- [ ] Responsive, auth, and wizard scenarios
-- [ ] CI integration (headless)
+- [x] Replace one-off scratch acceptance scripts with a maintained suite — `tests/browser/` (Playwright); scratch `*_acceptance*.cjs` removed
+- [x] Deterministic fixtures (fake-runtime, seeded config / data) — per-suite temp workspace; `goal` + `fake-runtime` built for the current platform; v5 migration fixture generated in-suite
+- [x] Real Chrome / Chromium coverage — Playwright-bundled Chromium, headless, cross-platform (no fixed browser channel)
+- [x] Responsive, auth, and wizard scenarios — `responsive.cjs` (8 viewports × 3 entity lists), `core.cjs` (auth OFF/ON phases, 3-step wizard existing/new runtime), `orphan.cjs` (RU/EN + mobile), `migration.cjs`
+- [x] CI integration (headless) — `browser-acceptance` job (ubuntu-latest) in `.github/workflows/ci.yml` runs `npm test`
 
 ### Instance History
 - [ ] Human-readable exit reason (normal stop / crash / forced termination)

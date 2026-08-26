@@ -126,3 +126,32 @@ jobs:
 
       - name: Run govulncheck
         run: govulncheck ./...
+
+  browser-acceptance:
+    name: Browser Acceptance (Chromium, headless)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: .go-version
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install browser suite dependencies
+        working-directory: tests/browser
+        run: npm ci
+
+      - name: Install headless Chromium
+        working-directory: tests/browser
+        run: npx playwright install --with-deps chromium
+
+      - name: Run browser acceptance suites
+        working-directory: tests/browser
+        run: npm test

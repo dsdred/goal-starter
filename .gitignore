@@ -46,8 +46,6 @@ goal-linux-amd64
 
 # Node.js (browser test tooling)
 node_modules/
-package.json
-package-lock.json
-
-# Browser acceptance scripts
-browser_acceptance.cjs
+# The maintained browser acceptance suite manifest is tracked:
+!tests/browser/package.json
+!tests/browser/package-lock.json

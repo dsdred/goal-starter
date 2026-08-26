@@ -112,4 +112,4 @@ The coordinator may identify the next eligible task but does not start it withou
 
 ## Scratch artifacts
 
-One-off acceptance harnesses and other scratch files (for example the untracked `*_acceptance*.cjs` and `cmd/goal/linux/`) are not committed by default. Maintained tests live in canonical test locations; a useful scratch harness needs its own promotion task, and untracked production-looking code requires a separate forensic before inclusion.
+One-off acceptance harnesses and other scratch files (for example the untracked `cmd/goal/linux/`) are not committed by default. Maintained browser acceptance tests live in `tests/browser/`; a useful scratch harness needs its own promotion task before landing there, and untracked production-looking code requires a separate forensic before inclusion.
