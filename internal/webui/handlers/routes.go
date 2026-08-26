@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/dsdred/goal/internal/application"
+	"github.com/dsdred/goal/internal/config"
 	"github.com/dsdred/goal/internal/process"
 	"github.com/dsdred/goal/internal/storage"
 	"github.com/dsdred/goal/internal/webui/audit"
@@ -76,6 +77,14 @@ func WithServerInfo(listenAddr string, webPort int, authEnabled bool) RouteRegis
 func WithConfigPath(path string) RouteRegistryOption {
 	return func(r *RouteRegistry) {
 		r.systemHandler.configPath = path
+	}
+}
+
+// WithLiveConfig sets the currently effective configuration used by the
+// hot-reload endpoint to compute the restart-pending diff (ADR 009 D3).
+func WithLiveConfig(cfg *config.Config) RouteRegistryOption {
+	return func(r *RouteRegistry) {
+		r.systemHandler.liveCfg = cfg
 	}
 }
 
@@ -149,6 +158,7 @@ func (r *RouteRegistry) Build() http.Handler {
 	if r.auditHandler != nil {
 		mux.HandleFunc("GET /api/v1/admin/audit", r.requireAuth(r.auditHandler.Query))
 	}
+	mux.HandleFunc("POST /api/v1/admin/reload", r.requireAuthCSRF(r.systemHandler.ReloadConfig))
 	mux.HandleFunc("GET /api/v1/session", r.requireAuth(r.systemHandler.SessionInfo))
 
 	mux.HandleFunc("POST /api/v1/instances/start", r.requireAuthCSRF(r.instanceHandler.StartModel))

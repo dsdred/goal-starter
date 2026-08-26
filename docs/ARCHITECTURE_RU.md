@@ -113,9 +113,9 @@ Application services (internal/application/)
 
 ## Hot-reload конфигурации
 
-Hot-reload реализован в `internal/config/reload.go` (`ReloadConfig`, `Watch`) но пока не подключён в main. Конфигурация загружается один раз при старте через `config.Load()`.
+Hot-reload явный (ADR 009): `POST /api/v1/admin/reload` (auth + CSRF) перечитывает конфигурацию через `config.LoadReadOnly()` (без побочных эффектов — перезагрузка никогда не пишет файл), валидирует её, применяет hot-поля (`logLevel` через hot-заменяемый уровень `slog`) и сообщает diff полей, требующих перезапуск (`config.DiffHot`: файл против эффективной на старте конфигурации). Наблюдения за файлом, SIGHUP и опроса нет; бывший неиспользуемый тип `ReloadConfig` (его `Save()` нарушал контракт durable-write) удалён. Классификация полей (hot / restart / seed-only) определена в ADR и [CONFIGURATION.md](CONFIGURATION.md#hot-reload-adr-009). Каждая попытка фиксирует audit-событие `config.reload` (только имена полей).
 
-См. [ADR 004](adr/004-config-vs-repository-ownership.md) и [CONFIGURATION.md](CONFIGURATION.md#hot-reload).
+См. [ADR 009](adr/009-hot-reload-wiring.md), [ADR 004](adr/004-config-vs-repository-ownership.md) и [CONFIGURATION.md](CONFIGURATION.md#hot-reload-adr-009).
 
 ## Веб-интерфейс
 

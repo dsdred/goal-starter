@@ -114,7 +114,7 @@ remain available internally for process launch.
 
 GoAl keeps a durable, append-only, structured security audit log (ADR 007): `<dataDir>/goal_audit.jsonl`, one JSON line per event, each line fsynced on write. It answers *who did what, when, from where, and did it succeed* — across restarts.
 
-- **Events (first scope):** `login.success`, `login.failure` (attempted user), `login.rate_limited`, `session.logout`, `settings.saved` (changed field names only; `password_changed` flag), `instance.start` (success and failure), `instance.stop`, `instance.restart`, `instance.dismiss`, `instance.kill` (every kill attempt that passes the state precondition; detail: `instance_id`, bounded `outcome` `terminated|reconciled|refused`, bounded `reason`), `instance.cleanup`.
+- **Events (first scope):** `login.success`, `login.failure` (attempted user), `login.rate_limited`, `session.logout`, `settings.saved` (changed field names only; `password_changed` flag), `instance.start` (success and failure), `instance.stop`, `instance.restart`, `instance.dismiss`, `instance.kill` (every kill attempt that passes the state precondition; detail: `instance_id`, bounded `outcome` `terminated|reconciled|refused`, bounded `reason`), `instance.cleanup`, `config.reload` (ADR 009; `status` `reloaded|rejected` + bounded field-name lists `applied` / `restart_required`; rejected events carry `error=invalid_config`, never file content).
 - **Identity:** `user` is the authenticated user, or the attempted username for login outcomes; `src_ip` is the TCP peer address only (`X-Forwarded-For`/`X-Real-IP` are not trusted, same principle as login rate limiting).
 - **Secret safety (hard rules):** the file never contains passwords or hashes, session/CSRF tokens, model/runtime environment values, request bodies, or raw headers. The logger accepts only typed events built by named call sites (there is no generic "log this request" path).
 - **Retention:** rotation to `goal_audit.jsonl.1` at 10 MiB, at most 3 generations (3 × 10 MiB max). Constants, not config, in the first scope.
@@ -131,6 +131,15 @@ GoAl keeps a durable, append-only, structured security audit log (ADR 007): `<da
 - **Privilege denial is explicit.** EPERM / access-denied → 403 `insufficient-privilege`; the orphan is preserved and the attempt is audited.
 - **Accepted residual risk (TOCTOU).** The kernel can still recycle a PID in the irreducible gap between the final re-verification and the signal syscall. Re-verification minimizes the window; a mis-kill would require PID **and** executable path **and** start time to all collide on an unrelated process in that gap. This residual is documented and accepted (ADR 008); the contract makes no sub-millisecond guarantee.
 - **Audit.** Every kill attempt that passes the state precondition emits one `instance.kill` event with bounded, secret-safe detail (outcome + reason vocabulary). Precondition failures (not orphan / not found) emit no event.
+
+## Hot-reload (configuration reload)
+
+`POST /api/v1/admin/reload` (auth + CSRF, ADR 009) re-reads and validates `goal.json` and applies hot fields (`logLevel`). Security properties:
+
+- **No unauthenticated surface.** The endpoint is auth + CSRF protected like the rest of the admin API.
+- **Reload never writes the file and never applies credential material.** The only live credential path remains the audited `PUT /api/v1/settings` (ADR 006 contract intact); a hand-edited `adminPasswordHash` takes effect only at the next restart.
+- **All-or-nothing.** A rejected reload (unreadable or invalid file) changes nothing: live values are untouched and the file on disk is byte-identical, so a corrupt or maliciously edited file cannot partially reconfigure a running instance.
+- **Audit.** Every attempt emits one `config.reload` event with field *names* only (never values, never credential material); audit-write failure is fail-open (ADR 007).
 
 ## Recommended deployment
 

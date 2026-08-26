@@ -117,9 +117,9 @@ See [ADR 004](adr/004-config-vs-repository-ownership.md).
 
 ## Configuration hot-reload
 
-Hot-reload is implemented in `internal/config/reload.go` (`ReloadConfig`, `Watch`) but is not yet wired into main application startup. The config is read once at startup via `config.Load()`.
+Hot-reload is explicit (ADR 009): `POST /api/v1/admin/reload` (auth + CSRF) re-reads the config file via `config.LoadReadOnly()` (no side effects — a reload never writes the file), validates it, applies hot fields (`logLevel` via a hot-swappable `slog` level), and reports the restart-pending diff (`config.DiffHot`: file vs the startup-effective config). There is no file watching, SIGHUP, or polling, and the former unused `ReloadConfig` type (whose `Save()` violated the durable-write contract) was removed. Field classification (hot / restart / seed-only) is defined in the ADR and [CONFIGURATION.md](CONFIGURATION.md#hot-reload-adr-009). Every attempt emits a `config.reload` audit event (field names only).
 
-See [ADR 004](adr/004-config-vs-repository-ownership.md) and [CONFIGURATION.md](CONFIGURATION.md#hot-reload).
+See [ADR 009](adr/009-hot-reload-wiring.md), [ADR 004](adr/004-config-vs-repository-ownership.md), and [CONFIGURATION.md](CONFIGURATION.md#hot-reload-adr-009).
 
 ## Web UI serving
 

@@ -58,6 +58,7 @@ const (
 	EventInstanceDismiss  = "instance.dismiss"
 	EventInstanceKill     = "instance.kill"
 	EventInstanceCleanup  = "instance.cleanup"
+	EventConfigReload     = "config.reload"
 )
 
 // AuditEvent is a single structured security audit record.

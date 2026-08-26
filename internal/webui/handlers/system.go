@@ -63,6 +63,7 @@ type SystemHandler struct {
 	webPort     int
 	authEnabled bool
 	configPath  string
+	liveCfg     *config.Config
 	passStore   *security.PasswordStore
 	audit       *audit.AuditLogger
 }
@@ -278,6 +279,62 @@ func (h *SystemHandler) SaveSettings(w http.ResponseWriter, r *http.Request) {
 		hint = "ok"
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "saved", "hint": hint})
+}
+
+// SetApplicationLogLevel replaces the default slog logger with a text
+// handler at the given level (ADR 009: logLevel is a hot field).
+func SetApplicationLogLevel(level slog.Level) {
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})))
+}
+
+// ReloadConfig handles POST /api/v1/admin/reload — explicit hot-reload
+// (ADR 009). It re-reads and validates the config file, applies hot fields
+// (logLevel), and reports which restart-class fields differ from the live
+// configuration. It never writes the file, never applies credential
+// material, and never re-seeds runtimes/models/profiles. A rejected reload
+// leaves live values unchanged (all-or-nothing).
+func (h *SystemHandler) ReloadConfig(w http.ResponseWriter, r *http.Request) {
+	if h.configPath == "" {
+		writeError(w, 500, "config path not available")
+		return
+	}
+	if h.liveCfg == nil {
+		writeError(w, 500, "live config not available")
+		return
+	}
+	fileCfg, err := config.LoadReadOnly(h.configPath)
+	if err != nil {
+		logAudit(h.audit, h.sess, r, audit.EventConfigReload, map[string]string{
+			"status": "rejected",
+			"error":  "invalid_config",
+		})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"status": "rejected", "error": err.Error(), "code": "bad_request"})
+		return
+	}
+	diff := config.DiffHot(fileCfg, *h.liveCfg)
+	if len(diff.Applied) > 0 {
+		level, err := config.LogLevel(fileCfg.LogLevel)
+		if err != nil {
+			logAudit(h.audit, h.sess, r, audit.EventConfigReload, map[string]string{
+				"status": "rejected",
+				"error":  "invalid_config",
+			})
+			writeJSON(w, http.StatusBadRequest, map[string]string{"status": "rejected", "error": err.Error(), "code": "bad_request"})
+			return
+		}
+		SetApplicationLogLevel(level)
+	}
+	logAudit(h.audit, h.sess, r, audit.EventConfigReload, map[string]string{
+		"status":           "reloaded",
+		"applied":          strings.Join(diff.Applied, ","),
+		"restart_required": strings.Join(diff.RestartRequired, ","),
+	})
+	slog.Info("config reloaded", "applied", diff.Applied, "restart_required", diff.RestartRequired)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":           "reloaded",
+		"applied":          diff.Applied,
+		"restart_required": diff.RestartRequired,
+	})
 }
 
 // LogsStream handles GET /api/v1/logs/stream

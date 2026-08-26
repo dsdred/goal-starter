@@ -250,11 +250,18 @@ model's launch args.
 | `environment` | Process environment variables |
 | `active` | Whether the profile is enabled |
 
-### Hot Configuration Reload
+### Hot Configuration Reload (ADR 009)
 
-- `logLevel` — can be changed without restart
-- `healthCheck.interval` — can be changed without restart
-- `listenAddress`, `webPort`, `dataDir` — **require restart**
+After editing `goal.json`, request a reload with `POST /api/v1/admin/reload` (auth + CSRF; no file watching or SIGHUP — a reload happens only when explicitly requested).
+
+| Field | Class |
+|-------|-------|
+| `logLevel` | hot — applied immediately by reload |
+| `listenAddress`, `webPort`, `dataDir`, `authEnabled`, `adminUser` | **require restart** |
+| `adminPasswordHash` | hot via **Settings** only (password changes in the UI take effect immediately); a hand-edited hash applies at the next restart |
+| `runtimes`, `models`, `profiles` | seed-only — applied once at first startup; never re-applied by reload |
+
+The reload response tells you exactly what was applied and what still needs a restart: `{"status":"reloaded","applied":["logLevel"],"restart_required":["webPort"]}`. If the file is invalid, the reload is rejected (`400`) and nothing changes.
 
 ---
 

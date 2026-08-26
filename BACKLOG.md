@@ -202,7 +202,7 @@
   - Исправлен `TestInstancesHandler_StartProfile` — учтено что fake-runtime может отсутствовать
   - Исправлен `TestInstanceStoreJSON_CreateDuplicate` — Create не проверяет уникальность (overwrite)
   - Все тесты handlers проходят (go test ./internal/webui/handlers/...), gofmt и go vet чисты
-- [x] Hot-reload configuration (`internal/config/reload.go`, `ReloadConfig`)
+- [x] Hot-reload configuration (`internal/config/reload.go`, `ReloadConfig`) — superseded by [ADR 009](../docs/adr/009-hot-reload-wiring.md): the `ReloadConfig` type was removed (dead production code; its `Save()` violated the durable-write contract); hot-reload is now the explicit `POST /api/v1/admin/reload` endpoint
 - [x] Config migration from v1 to v2 (`internal/config/config.go`, `migrateV1ToV2`)
   - Добавлена миграция версии конфиг файла
   - Добавлены поля HealthCheck для Profile и Runtime

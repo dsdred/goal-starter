@@ -25,6 +25,9 @@ type Config struct {
 	AdminPasswordHash string    `json:"adminPasswordHash,omitempty"`
 	AdminPassword     string    `json:"adminPassword,omitempty"`
 	AuthEnabled       bool      `json:"authEnabled"`
+	// LogLevel is the application log level: debug, info, warn, or error.
+	// Empty means info (ADR 009: hot field).
+	LogLevel string `json:"logLevel,omitempty"`
 }
 
 // BcryptCost is the bcrypt work factor used for password hashing.
@@ -212,6 +215,29 @@ func Load(path string) (Config, error) {
 	return cfg, nil
 }
 
+// LoadReadOnly reads and validates the config file without side effects.
+// Unlike Load, it never creates a default file (ADR 009 D3: a reload never
+// writes the config file).
+func LoadReadOnly(path string) (Config, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return Config{}, err
+	}
+	var cfg Config
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return Config{}, fmt.Errorf("decode config: %w", err)
+	}
+	if cfg.Version < 1 {
+		if err := migrateV1ToV2(&cfg); err != nil {
+			return Config{}, fmt.Errorf("config migration v1->v2: %w", err)
+		}
+	}
+	if err := cfg.Validate(); err != nil {
+		return Config{}, err
+	}
+	return cfg, nil
+}
+
 // migrateV1ToV2 upgrades config from version 1 to version 2.
 // Adds profile-level and runtime-level health check config.
 // Also normalizes model entries: if a model has "arguments" or "runtimeId" instead of "path",
@@ -267,6 +293,9 @@ func Save(path string, cfg Config) error {
 func (c Config) Validate() error {
 	if c.Version < 1 {
 		return errors.New("config version must be >= 1")
+	}
+	if _, err := LogLevel(c.LogLevel); err != nil {
+		return err
 	}
 	if c.ListenAddress == "" {
 		return errors.New("listenAddress is required")

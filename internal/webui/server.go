@@ -114,6 +114,7 @@ func (a *App) InitRegistry() {
 		handlers.WithWebAssets(templateFS, staticFS),
 		handlers.WithServerInfo(a.cfg.ListenAddress, a.cfg.WebPort, a.authEnabled),
 		handlers.WithConfigPath(a.configPath),
+		handlers.WithLiveConfig(a.cfg),
 		handlers.WithAuditLogger(a.auditLog),
 	)
 }

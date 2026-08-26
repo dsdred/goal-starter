@@ -15,6 +15,7 @@ Configuration is loaded from a JSON file (default: `goal.json`) at application s
 | `adminUser` | string | No | `admin` | Administrator username. Required when `authEnabled` is true. |
 | `adminPasswordHash` | string | Conditional | `""` | Bcrypt hash of the admin password (cost 12, 60 chars). Required when `authEnabled=true`. Never plaintext. |
 | `authEnabled` | bool | No | `false` | Enable session-based authentication and CSRF. |
+| `logLevel` | string | No | `info` | Application log level: `debug`, `info`, `warn`, `error`. Absent means `info`. Hot field (applied by reload, no restart). |
 | `runtimes` | array | No | `[]` | Initial runtime definitions (seeded once). |
 | `models` | array | No | `[]` | Initial model definitions (seeded once). |
 | `profiles` | array | No | `[]` | Initial profile definitions (seeded once). |
@@ -145,24 +146,24 @@ On first startup with a v5 `goal_repo.json`, GoAl automatically migrates to v6:
 
 After migration, `goal_repo.json` contains only `runtimes`, `models`, and `instances`.
 
-## Hot-reload
+## Hot-reload (ADR 009)
 
-The following fields can be changed in `goal.json` without restarting GoAl:
+Field classification is authoritative per [ADR 009](adr/009-hot-reload-wiring.md):
 
-| Field | Requires restart |
-|-------|-----------------|
-| `logLevel` | No |
-| `healthCheck.interval` | No |
+| Field | Class | Notes |
+|-------|-------|-------|
+| `logLevel` | **hot** | Applied immediately by reload. |
+| `adminPasswordHash` | **hot via settings endpoint only** | `PUT /api/v1/settings` updates the live credential store immediately; a hand-edited hash in `goal.json` is applied only at the next restart. Reload never applies credential material. |
+| `listenAddress` | **restart** | The HTTP listener is bound at startup; rebind is not supported. |
+| `webPort` | **restart** | Same as `listenAddress`. |
+| `dataDir` | **restart** | Repository and audit-log paths are fixed at startup. |
+| `authEnabled` | **restart** | Baked into the route registry at startup. |
+| `adminUser` | **restart** | Baked into the route registry at startup. |
+| `runtimes`, `models`, `profiles` | **seed-only, never re-applied** | Seed once into `goal_repo.json` at startup; live editing happens via API. Reload never re-seeds (it would overwrite user data). |
 
-The following fields require a restart:
+Trigger: `POST /api/v1/admin/reload` (auth + CSRF protected). There is no file watching, no SIGHUP, and no polling — a reload happens only when explicitly requested. The endpoint re-reads and validates `goal.json`, applies hot fields, and responds with `{"status":"reloaded","applied":[...],"restart_required":[...]}` (field names only). A rejected reload (unreadable or invalid file) returns `400 {"status":"rejected",...}` and changes nothing: the file on disk is never modified by reload and live values are untouched. Every reload attempt emits a `config.reload` audit event (field names only).
 
-| Field |
-|-------|
-| `listenAddress` |
-| `webPort` |
-| `dataDir` |
-
-Hot-reload is implemented in `internal/config` but not yet wired into main startup.
+The `PUT /api/v1/settings` hint contract is unchanged: password-only change → `hint=ok`; anything else → `hint=restart_required`.
 
 ## Runtime Name uniqueness
 
