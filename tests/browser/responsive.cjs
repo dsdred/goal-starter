@@ -1,7 +1,6 @@
 'use strict';
 const path = require('path');
 const fs = require('fs');
-const os = require('os');
 const H = require('./harness.cjs');
 
 const PORT = 19472;
@@ -13,8 +12,14 @@ async function main() {
   const fakeRt = H.buildFakeRuntime(ws);
   const fakeRtDir = path.dirname(fakeRt);
 
-  const longDir = path.join(os.tmpdir(), 'llama-community-runtimes', 'llama.cpp', 'build', 'bin');
+  // Deterministic long-path fixture: a copy of the canonical fake-runtime in a
+  // deep nested dir with a very long binary name, inside the fresh per-run
+  // workspace (no reliance on pre-existing files in os.tmpdir()).
+  const longDir = path.join(ws.dir, 'llama-community-runtimes', 'llama.cpp', 'build', 'bin');
   const longExe = path.join(longDir, 'llama-server-with-a-very-long-binary-name-for-stress' + H.EXE);
+  fs.mkdirSync(longDir, { recursive: true });
+  fs.copyFileSync(fakeRt, longExe);
+  if (!H.IS_WIN) fs.chmodSync(longExe, 0o755);
 
   H.writeConfig(ws, {
     webPort: PORT,
