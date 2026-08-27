@@ -189,6 +189,11 @@ async function main() {
       const ids = modelInstances.map(i => i.id);
       suite.log('7.3 Instance IDs are unique', new Set(ids).size === ids.length);
     }
+    const runningAfterRestart = await poll(async () => {
+      const list = (await H.api(BASE, 'GET', '/api/v1/instances')).data || [];
+      return list.some(i => i.model_id === lifeId && i.state === 'running');
+    }, 10000);
+    suite.log('7.4 Instance running after restart (old process stopped, new process started)', runningAfterRestart === true, runningAfterRestart === true ? 'running' : 'no running instance');
     await H.api(BASE, 'POST', `/api/v1/models/${lifeId}/stop`);
     await poll(async () => {
       const states = await instanceStates(page, lifeId);

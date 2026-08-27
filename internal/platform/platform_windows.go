@@ -115,8 +115,11 @@ func (w *windowsControl) GracefulStop() error {
 		return nil
 	}
 
-	// Fallback: signal the main process directly if GenerateConsoleCtrlEvent failed.
-	return proc.Signal(os.Interrupt)
+	// GCE is inapplicable or failed (e.g. the server process has no console, so
+	// no process group can receive a console control event). There is no other
+	// graceful signal on Windows — Go's Process.Signal only supports Kill — so
+	// escalate immediately to Job Object termination (ADR 001).
+	return w.ForceKill()
 }
 
 func (w *windowsControl) ForceKill() error {
