@@ -312,10 +312,14 @@ function fmtUptime(startedAt) {
     return String(h).padStart(2, '0') + ':' + String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0');
 }
 
+function isZeroDate(d) {
+    return isNaN(d.getTime()) || d.getUTCFullYear() < 1000;
+}
+
 function fmtTime(ts) {
     if (!ts) return '—';
     const d = new Date(ts);
-    if (isNaN(d.getTime()) || d.getUTCFullYear() < 1000) return '—';
+    if (isZeroDate(d)) return '—';
     return d.toLocaleString();
 }
 
@@ -337,7 +341,7 @@ function sameDay(a, b) {
 function fmtRange(a, b) {
     if (!a || !b) return '';
     const da = new Date(a), db = new Date(b);
-    if (isNaN(da.getTime()) || isNaN(db.getTime())) return '';
+    if (isZeroDate(da) || isZeroDate(db)) return '';
     if (sameDay(a, b)) return fmtHM(a) + '→' + fmtHM(b);
     return fmtMD(a) + ' ' + fmtHM(a) + '→' + fmtMD(b) + ' ' + fmtHM(b);
 }
@@ -773,7 +777,18 @@ function onWizRtModeChange() {
     document.getElementById('wiz-rt-new-section').style.display = mode === 'new' ? '' : 'none';
 }
 
+function wizRuntimeReady() {
+    const mode = document.querySelector('input[name=wiz-rt-mode]:checked').value;
+    return mode !== 'existing' || !!rtSelectedId;
+}
+
 function wizGoto(step) {
+    if (step === 3 && !wizRuntimeReady()) {
+        wizStep = 2;
+        updateWizardStep();
+        wizError(t('wizard.error.runtime'));
+        return;
+    }
     wizStep = step;
     updateWizardStep();
 }
@@ -799,6 +814,10 @@ async function handleWizardSubmit(e) {
     if (wizStep < 3) {
         if (wizStep === 1 && !document.getElementById('wiz-name').value.trim()) {
             wizError(t('wizard.error.name'));
+            return;
+        }
+        if (wizStep === 2 && !wizRuntimeReady()) {
+            wizError(t('wizard.error.runtime'));
             return;
         }
         wizStep++;
