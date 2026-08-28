@@ -447,8 +447,8 @@ function renderModels() {
             '<div class="model-row-main">' +
                 '<div class="model-row-name">' +
                     autoBadge +
-                    '<span class="status-badge ' + status + '"' + badgeTitle + '>' + t('models.status.' + status) + '</span> ' +
-                    esc(m.name) +
+                    '<span class="status-badge ' + status + '"' + badgeTitle + '>' + t('models.status.' + status) + '</span>' +
+                    '<span class="model-row-title">' + esc(m.name) + '</span>' +
                 '</div>' +
                 '<div class="model-row-sub">' +
                     esc(getRuntimeName(m.runtime_id)) +

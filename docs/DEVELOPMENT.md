@@ -89,6 +89,7 @@ Each suite builds the `goal` binary and a platform-native `fake-runtime` into a 
 | `orphan.cjs` | Orphan recovery, RU/EN badges/tooltips, Kill/Dismiss buttons, Dismiss → stale, helper survives Dismiss, Models-page orphan display (badge, no Start, PID, state filter) |
 | `migration.cjs` | v5 → v7 repository migration on startup, migrated model resolves |
 | `stress.cjs` | Long live-log stream (fake-runtime `flood` mode, ~100 lines/s) past the 2000-line client window: tab stays responsive, rendered log DOM bounded (≤ 2000), logs advance, autoscroll tracks the tail, page-scoped stream (consumer stops on leave — hidden view tail frozen, at most 1 reconnect, replay deduped by sequence), pause/search/clear work, server responsive |
+| `validation.cjs` | Wizard validation RU/EN (empty-name localized app error without native HTML5, step-2 runtime guard incl. direct tab jump, happy paths), running-instance zero-time display @430/desktop, long model name: status badge not crushed/clipped and title ellipsizes without overlap at 430px / ~287px (≈ 430 @ 150% zoom) / 1920px |
 
 Run locally:
 
@@ -99,7 +100,7 @@ npx playwright install chromium
 npm test
 ```
 
-`npm test` runs all five suites sequentially and exits non-zero on any failure.
+`npm test` runs all six suites sequentially and exits non-zero on any failure.
 
 **CI:** the `browser-acceptance` job in `.github/workflows/ci.yml` runs the same `npm test` on ubuntu-latest with headless Chromium.
 
