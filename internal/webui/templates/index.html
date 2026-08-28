@@ -33,6 +33,11 @@
     <!-- Toast container -->
     <div id="toast-container"></div>
 
+    <!-- Server connection banner -->
+    <div id="conn-banner" class="conn-banner" style="display:none;">
+        <span data-i18n="conn.lost">Сервер недоступен. Повторное подключение...</span>
+    </div>
+
     <!-- Confirm Modal -->
     <div id="confirm-modal" class="modal-overlay" style="display:none;">
         <div class="modal-box">
@@ -267,7 +272,7 @@
                     </select>
                 </div>
                 <div class="server-status">
-                    <span class="status-dot online"></span>
+                    <span class="status-dot online" id="server-dot"></span>
                     <span data-i18n="sidebar.status">Сервер</span>
                     <span class="server-version-inline" id="server-version"></span>
                 </div>

@@ -56,6 +56,31 @@ func TestEmbeddedJavaScriptResetsLoginStateAcrossAuthTransitions(t *testing.T) {
 	}
 }
 
+func TestEmbeddedJavaScriptMonitorsServerConnection(t *testing.T) {
+	source, err := fs.ReadFile(staticFS, "static/app.js")
+	if err != nil {
+		t.Fatalf("read embedded app.js: %v", err)
+	}
+	js := string(source)
+
+	required := []string{
+		"getElementById('server-dot')",
+		"getElementById('conn-banner')",
+		"fetch('/api/v1/health'",
+		"window.addEventListener('offline'",
+		"window.addEventListener('online'",
+		"if (serverOnline) probeServer();",
+	}
+	for _, fragment := range required {
+		if !strings.Contains(js, fragment) {
+			t.Fatalf("embedded app.js does not contain required connection-monitor behavior %q", fragment)
+		}
+	}
+	if strings.Contains(js, "logEs.onerror = function () {};") {
+		t.Fatal("embedded app.js still has the empty logEs.onerror handler (no connection feedback)")
+	}
+}
+
 func TestEmbeddedJavaScriptWindowExportsResolve(t *testing.T) {
 	source, err := fs.ReadFile(staticFS, "static/app.js")
 	if err != nil {

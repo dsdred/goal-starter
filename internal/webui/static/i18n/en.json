@@ -10,6 +10,8 @@
   "sidebar.status": "Server",
   "sidebar.version": "GoAl Server",
   "sidebar.repo": "Repository",
+  "conn.lost": "Server unreachable. Reconnecting...",
+  "conn.restored": "Server connection restored",
   "auth.login.title": "Sign In",
   "auth.login.username": "Username",
   "auth.login.password": "Password",

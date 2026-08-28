@@ -280,6 +280,7 @@ After starting, GoAl is available at: **http://127.0.0.1:8088**
 - **Metrics** — built-in application metrics
 - **Theme** — System / Dark / Light (sidebar footer, persisted in browser localStorage)
 - **Language** — Russian / English (sidebar footer, persisted in browser localStorage)
+- **Server connection status** — the sidebar "Server" dot reflects live reachability (green = reachable, red = unreachable). If the server becomes unreachable, a red banner appears at the top of the page; when the connection is restored, the banner disappears and a short "connection restored" notification is shown. Detection polls `GET /api/v1/health` every 5 seconds and reacts immediately to browser network offline/online events.
 
 ### Theme and Language
 

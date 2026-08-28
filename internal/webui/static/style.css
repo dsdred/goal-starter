@@ -145,6 +145,14 @@ code { font-family: var(--font-mono); font-size: 0.9em; background: var(--bg-inp
 .toast.warning { border-color: var(--warning); }
 @keyframes toastIn { from { opacity: 0; transform: translateX(20px); } to { opacity: 1; transform: translateX(0); } }
 
+/* Connection banner (server unreachable) */
+.conn-banner {
+    position: fixed; top: 0; left: 0; right: 0; z-index: 3000;
+    display: flex; align-items: center; justify-content: center; gap: 8px;
+    padding: 8px 16px; background: var(--danger); color: #fff;
+    font-size: 0.85rem; font-weight: 500;
+}
+
 /* Logo */
 .logo { display: flex; align-items: center; gap: 10px; color: var(--accent); margin-bottom: 0.5rem; font-size: 1.3rem; font-weight: 700; }
 .logo svg { flex-shrink: 0; }
@@ -264,6 +272,7 @@ code { font-family: var(--font-mono); font-size: 0.9em; background: var(--bg-inp
 .status-badge.stale { background: rgba(154, 154, 180, 0.12); color: var(--text-muted); }
 .status-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
 .status-dot.online { background: var(--success); }
+.status-dot.offline { background: var(--danger); }
 .status-dot.running { animation: pulse 2s infinite; }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
 

@@ -10,6 +10,8 @@
   "sidebar.status": "Сервер",
   "sidebar.version": "Сервер GoAl",
   "sidebar.repo": "Репозиторий",
+  "conn.lost": "Сервер недоступен. Повторное подключение...",
+  "conn.restored": "Соединение с сервером восстановлено",
   "auth.login.title": "Вход",
   "auth.login.username": "Пользователь",
   "auth.login.password": "Пароль",

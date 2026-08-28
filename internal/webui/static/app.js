@@ -98,6 +98,7 @@ async function init() {
     const setLangEl = document.getElementById('set-lang');
     if (setLangEl) setLangEl.value = currentLang;
     await loadI18n(currentLang);
+    startHealthMonitor();
     document.getElementById('wizard-form').addEventListener('submit', handleWizardSubmit);
     document.getElementById('wiz-autostart').addEventListener('change', function () {
         document.getElementById('wiz-delay-group').style.display = this.checked ? '' : 'none';
@@ -601,7 +602,11 @@ function connectLogStream(instanceId) {
         if (logPaused) return;
         appendLogLine(d);
     };
-    logEs.onerror = function () {};
+    // EventSource retries by itself; probe now (instead of waiting up to the
+    // 5 s interval) so a dropped server surfaces in the UI immediately.
+    logEs.onerror = function () {
+        if (serverOnline) probeServer();
+    };
 }
 
 function appendLogLine(d) {
@@ -1492,6 +1497,53 @@ function showToast(msg, type) {
     document.getElementById('toast-container').appendChild(div);
     setTimeout(function () { div.remove(); }, 4000);
 }
+
+// ─── Server connection monitor ────────────────────────────────────────────
+
+let serverOnline = true;
+let healthProbeInFlight = false;
+let healthTimer = null;
+
+async function probeServer() {
+    if (healthProbeInFlight) return;
+    healthProbeInFlight = true;
+    try {
+        // Any HTTP response (even non-2xx) proves the server is reachable;
+        // only a fetch-level network failure means the connection is down.
+        // The body is consumed (and discarded): an unconsumed fetch body keeps
+        // the request in-flight in the browser's network stack.
+        const r = await fetch('/api/v1/health', { cache: 'no-store' });
+        await r.text();
+        setServerOnline(true);
+    } catch {
+        setServerOnline(false);
+    } finally {
+        healthProbeInFlight = false;
+    }
+}
+
+function setServerOnline(online) {
+    if (serverOnline === online) return;
+    serverOnline = online;
+    const dot = document.getElementById('server-dot');
+    if (dot) dot.className = 'status-dot ' + (online ? 'online' : 'offline');
+    const banner = document.getElementById('conn-banner');
+    if (banner) banner.style.display = online ? 'none' : 'flex';
+    if (online) showToast(t('conn.restored'), 'success');
+}
+
+function startHealthMonitor() {
+    if (healthTimer) return;
+    probeServer();
+    healthTimer = setInterval(probeServer, 5000);
+}
+
+window.addEventListener('offline', function () {
+    setServerOnline(false);
+});
+window.addEventListener('online', function () {
+    probeServer();
+});
 
 // ─── Refresh loop ───────────────────────────────────────────────────────────
 

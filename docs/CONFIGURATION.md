@@ -182,6 +182,8 @@ Terminal instances move from Instances to History automatically when they reach 
 
 The sidebar footer contains compact Theme and Language selectors, a server status indicator with version, and (when authentication is enabled) the authenticated username with a Logout button. When authentication is disabled, no username or Logout is displayed.
 
+The server status dot is live: the client polls `GET /api/v1/health` every 5 seconds (plus immediate checks on browser offline/online events and on live-log stream errors) and switches the dot between green (`online`) and red (`offline`). While the server is unreachable, a red connection banner is shown at the top of the page; on recovery the banner is hidden and a localized "connection restored" toast appears. Any HTTP response counts as reachable — only a fetch-level network failure marks the connection offline.
+
 ## Server settings in Web UI
 
 Server parameters (`listenAddress`, `webPort`, `authEnabled`, `adminUser`, and the admin password) can be edited from **Settings → Server → Edit**. The edit modal is where the "Enable authentication" toggle and the admin username / password fields live.

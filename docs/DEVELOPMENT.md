@@ -91,6 +91,7 @@ Each suite builds the `goal` binary and a platform-native `fake-runtime` into a 
 | `stress.cjs` | Long live-log stream (fake-runtime `flood` mode, ~100 lines/s) past the 2000-line client window: tab stays responsive, rendered log DOM bounded (≤ 2000), logs advance, autoscroll tracks the tail, page-scoped stream (consumer stops on leave — hidden view tail frozen, at most 1 reconnect, replay deduped by sequence), pause/search/clear work, server responsive |
 | `validation.cjs` | Wizard validation RU/EN (empty-name localized app error without native HTML5, step-2 runtime guard incl. direct tab jump, happy paths), running-instance zero-time display @430/desktop, long model name: status badge not crushed/clipped and title ellipsizes without overlap at 430px / ~287px (≈ 430 @ 150% zoom) / 1920px |
 | `i18n.cjs` | RU/EN nav labels (runtimes item translated, no raw "Runtime"), login failure/network failure localized in RU+EN (raw "invalid credentials" never shown), successful login in EN, server-message mapping (known strings localized, unmatched strings kept in a localized frame, stable `code` wins over message) |
+| `connection.cjs` | Server connection feedback: sidebar dot starts online; with all requests aborted (server "down") the dot turns red and a top banner appears (RU/EN text); after unabort the dot returns to green, the banner hides, and a localized recovery toast is shown — loss/recovery detected within two 5 s health-probe cycles |
 
 Run locally:
 
@@ -101,7 +102,7 @@ npx playwright install chromium
 npm test
 ```
 
-`npm test` runs all seven suites sequentially and exits non-zero on any failure.
+`npm test` runs all eight suites sequentially and exits non-zero on any failure.
 
 **CI:** the `browser-acceptance` job in `.github/workflows/ci.yml` runs the same `npm test` on ubuntu-latest with headless Chromium.
 
