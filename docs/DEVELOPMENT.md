@@ -86,9 +86,9 @@ Each suite builds the `goal` binary and a platform-native `fake-runtime` into a 
 |-------|----------|
 | `core.cjs` | Wizard (existing/new runtime), resolve, start/stop/restart lifecycle, logs, history, instances, edit/delete, runtime-delete 409, autostart, polling, auth OFF/ON, env-secret safety |
 | `responsive.cjs` | Monotonic 768px table→cards contract, no page-level horizontal overflow at 8 viewports, action visibility, sidebar behavior |
-| `orphan.cjs` | Orphan recovery, RU/EN badges/tooltips, Kill/Dismiss buttons, Dismiss → stale, helper survives Dismiss |
+| `orphan.cjs` | Orphan recovery, RU/EN badges/tooltips, Kill/Dismiss buttons, Dismiss → stale, helper survives Dismiss, Models-page orphan display (badge, no Start, PID, state filter) |
 | `migration.cjs` | v5 → v7 repository migration on startup, migrated model resolves |
-| `stress.cjs` | Long live-log stream (fake-runtime `flood` mode, ~100 lines/s) past the 2000-line client window: tab stays responsive, rendered log DOM bounded (≤ 2000), logs advance, autoscroll tracks the tail, navigation/pause/search/clear work, single SSE consumer, server responsive |
+| `stress.cjs` | Long live-log stream (fake-runtime `flood` mode, ~100 lines/s) past the 2000-line client window: tab stays responsive, rendered log DOM bounded (≤ 2000), logs advance, autoscroll tracks the tail, page-scoped stream (consumer stops on leave — hidden view tail frozen, at most 1 reconnect, replay deduped by sequence), pause/search/clear work, server responsive |
 
 Run locally:
 

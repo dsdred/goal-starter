@@ -142,6 +142,24 @@ async function main() {
     const modelsAlive = await probe(() => 'alive');
     const modelRows = await page.evaluate(() => document.querySelectorAll('#model-list .model-row').length);
     suite.log('Navigation to Models works (no reload)', modelsAlive === 'alive' && modelRows >= 1, `rows=${modelRows}`);
+
+    // The live-log stream is page-scoped: while on another page the consumer
+    // must be closed, so the hidden #log-view must not keep receiving lines
+    // (pre-fix it kept appending at full flood rate on every non-Logs page).
+    // Tail index, not line count: the count is capped at the 2000-line window
+    // either way, but the tail advances only while the consumer is alive.
+    const hiddenTail = () => page.evaluate(() => {
+      const lines = document.querySelectorAll('#log-view .log-line');
+      const last = lines[lines.length - 1];
+      if (!last) return -1;
+      const m = last.textContent.match(/flood-line-(\d+)/);
+      return m ? parseInt(m[1], 10) : -1;
+    });
+    const tail1 = await hiddenTail();
+    await sleep(2500);
+    const tail2 = await hiddenTail();
+    suite.log('Leaving Logs stops the consumer (hidden view tail frozen)', tail1 >= 0 && tail2 === tail1, `tail ${tail1} -> ${tail2}`);
+
     await page.evaluate(() => window.navigate('logs'));
     await sleep(1500);
     const s2 = await lineInfo();

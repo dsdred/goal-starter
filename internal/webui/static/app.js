@@ -6,6 +6,8 @@ let currentView = 'models';
 let logEs = null;
 let logPaused = false;
 let refreshTimer = null;
+let lastLogSeq = 0;
+let currentLogInstance = '';
 
 // Client-side display window for the live log view: at most this many
 // rendered .log-line elements are kept in #log-view. Older lines are trimmed;
@@ -571,16 +573,30 @@ function updateLogInstanceBar(instId) {
 
 function connectLogStream(instanceId) {
     if (logEs) { logEs.close(); logEs = null; }
+    currentLogInstance = instanceId || '';
     const url = instanceId
         ? '/api/v1/instances/' + encodeURIComponent(instanceId) + '/logs/stream'
         : '/api/v1/logs/stream';
     logEs = new EventSource(url);
     logEs.onmessage = function (e) {
-        if (logPaused) return;
+        let d;
         try {
-            const d = JSON.parse(e.data);
-            appendLogLine(d);
-        } catch {}
+            d = JSON.parse(e.data);
+        } catch { return; }
+        // Client-side dedup by broker sequence: the server replays the last
+        // 1000 lines on every (re)connect, so without this a reconnect (return
+        // to the Logs page, stream switch, network blip) re-appends lines
+        // already rendered. The broker sequence is a single monotonic counter;
+        // a value below the last seen one means the counter restarted (server
+        // restart), in which case accepting resumes from scratch.
+        const seq = d.sequence;
+        if (typeof seq === 'number') {
+            if (seq < lastLogSeq) lastLogSeq = 0;
+            if (seq <= lastLogSeq) return;
+            lastLogSeq = seq;
+        }
+        if (logPaused) return;
+        appendLogLine(d);
     };
     logEs.onerror = function () {};
 }
@@ -630,10 +646,12 @@ function toggleLogPause() {
 
 function clearLogView() {
     document.getElementById('log-view').innerHTML = '';
+    // The DOM is empty now, so replayed history may be appended again on the
+    // next (re)connect without duplicating rendered lines.
+    lastLogSeq = 0;
 }
 
 function viewInstanceLogs(instanceId) {
-    navigate('logs');
     const sel = document.getElementById('log-instance-select');
     if (instanceId) {
         sel.value = instanceId;
@@ -641,7 +659,8 @@ function viewInstanceLogs(instanceId) {
     } else {
         updateLogInstanceBar('');
     }
-    connectLogStream(instanceId);
+    navigate('logs');
+    if (logEs && currentLogInstance !== (instanceId || '')) connectLogStream(instanceId);
 }
 
 // ─── Navigation ─────────────────────────────────────────────────────────────
@@ -655,7 +674,20 @@ function navigate(view) {
     const navBtn = document.querySelector('.nav-item[data-view="' + view + '"]');
     if (navBtn) navBtn.classList.add('active');
 
-    if (view === 'logs' && !logEs) connectLogStream('');
+    // The live-log stream is page-scoped: leaving the Logs page closes the
+    // EventSource (frees the server subscription, network, and the main-thread
+    // append work on the hidden #log-view); returning reconnects to the
+    // currently selected instance. Replayed history is deduped by sequence, so
+    // the view continues without duplicated lines.
+    if (view === 'logs') {
+        if (!logEs) {
+            const sel = document.getElementById('log-instance-select');
+            connectLogStream(sel ? sel.value : '');
+        }
+    } else if (logEs) {
+        logEs.close();
+        logEs = null;
+    }
     if (view === 'adv-settings') loadSettings();
 }
 

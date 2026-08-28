@@ -586,6 +586,10 @@ curl http://127.0.0.1:8088/api/v1/runtimes/health/ollama
 
 ## Logs
 
+### Live Log Stream in the Web UI
+
+The Logs page shows a live SSE stream (all instances, or one selected instance). The stream is **page-scoped**: leaving the Logs page closes the stream (the server subscription and background updates stop), and returning reconnects to the selected instance. Replayed history is deduplicated by sequence, so lines are not duplicated after a return or a network reconnect. The visible view always shows at most the last 2000 lines; full history stays available through the API.
+
 ### Viewing Instance Logs
 
 **Via API:**
