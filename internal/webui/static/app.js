@@ -290,15 +290,21 @@ function getActiveInstances(modelId) {
     return instancesData.filter(function (i) { return i.model_id === modelId && isActive(i.state); });
 }
 
+function getOrphanInstances(modelId) {
+    return instancesData.filter(function (i) { return i.model_id === modelId && i.state === 'orphan'; });
+}
+
 function isActive(s) { return s === 'running' || s === 'starting' || s === 'stopping'; }
 
 function modelStatus(model) {
     const active = getActiveInstances(model.id);
-    if (active.length === 0) return 'stopped';
-    const states = active.map(function (i) { return i.state; });
-    if (states.indexOf('running') !== -1) return 'running';
-    if (states.indexOf('starting') !== -1) return 'starting';
-    if (states.indexOf('stopping') !== -1) return 'stopping';
+    if (active.length > 0) {
+        const states = active.map(function (i) { return i.state; });
+        if (states.indexOf('running') !== -1) return 'running';
+        if (states.indexOf('starting') !== -1) return 'starting';
+        if (states.indexOf('stopping') !== -1) return 'stopping';
+    }
+    if (getOrphanInstances(model.id).length > 0) return 'orphan';
     return 'stopped';
 }
 
@@ -416,8 +422,9 @@ function renderModels() {
     list.innerHTML = filtered.map(function (m) {
         const status = modelStatus(m);
         const active = getActiveInstances(m.id);
-        const inst = active[0];
-        const uptime = inst ? fmtUptime(inst.started_at) : '';
+        const orphan = getOrphanInstances(m.id);
+        const inst = active[0] || orphan[0];
+        const uptime = (inst && isActive(inst.state)) ? fmtUptime(inst.started_at) : '';
 
         let actionBtns = '';
         if (status === 'running') {
@@ -425,17 +432,20 @@ function renderModels() {
                 iconBtn(ICONS.stop, t('models.actions.stop'), 'danger', 'stopModel', m.id);
         } else if (status === 'starting' || status === 'stopping') {
             actionBtns = '<span class="hint-text model-transitional">' + t('models.status.' + status) + '</span>';
+        } else if (status === 'orphan') {
+            actionBtns = '<span class="hint-text model-transitional">' + t('instances.orphan.hint') + '</span>';
         } else {
             actionBtns = iconBtn(ICONS.start, t('models.actions.start'), 'success', 'startModel', m.id);
         }
 
         const autoBadge = m.active ? '<span class="autostart-indicator" title="' + esc(t('models.autostart')) + '">A</span>' : '';
+        const badgeTitle = status === 'orphan' ? ' title="' + esc(t('instances.orphan.hint')) + '"' : '';
 
         return '<div class="model-row">' +
             '<div class="model-row-main">' +
                 '<div class="model-row-name">' +
                     autoBadge +
-                    '<span class="status-badge ' + status + '">' + t('models.status.' + status) + '</span> ' +
+                    '<span class="status-badge ' + status + '"' + badgeTitle + '>' + t('models.status.' + status) + '</span> ' +
                     esc(m.name) +
                 '</div>' +
                 '<div class="model-row-sub">' +
@@ -446,7 +456,7 @@ function renderModels() {
             '</div>' +
             '<div class="model-row-actions">' +
                 actionBtns +
-                iconBtn(ICONS.logs, t('models.actions.logs'), 'ghost', 'viewInstanceLogs', active.length ? active[0].id : '') +
+                iconBtn(ICONS.logs, t('models.actions.logs'), 'ghost', 'viewInstanceLogs', inst ? inst.id : '') +
                 iconBtn(ICONS.edit, t('models.actions.edit'), 'ghost', 'openWizard', m.id) +
                 iconBtn(ICONS.del, t('models.actions.delete'), 'danger', 'deleteModel', m.id) +
             '</div>' +

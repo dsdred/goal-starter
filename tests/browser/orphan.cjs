@@ -125,9 +125,35 @@ async function main() {
     suite.log('UI: Kill button (RU)', await killRU.isVisible().catch(() => false));
     await H.screenshot(pageRU, ws, 'orphan_ru_desktop');
 
-    // Switch to EN
+    // Models page: the orphan model must be visible as ORPHAN, not "stopped" with a Start button
+    await pageRU.evaluate(() => window.navigate('models'));
+    await pageRU.waitForTimeout(500);
+    const mBadge = pageRU.locator('#model-list .status-badge.orphan').first();
+    const mBadgeVis = await mBadge.isVisible().catch(() => false);
+    suite.log('UI: Models page orphan badge (RU)', mBadgeVis,
+      mBadgeVis ? `text="${(await mBadge.textContent()).trim()}"` : 'not visible');
+    const mStartBtns = await pageRU.locator('#model-list .model-row button[aria-label="Запустить"]').count();
+    suite.log('UI: Models page no Start button for orphan model (RU)', mStartBtns === 0, `start buttons=${mStartBtns}`);
+    const mRowSub = (await pageRU.locator('#model-list .model-row .model-row-sub').first().textContent().catch(() => '')) || '';
+    suite.log('UI: Models page shows orphan PID (RU)', mRowSub.includes(String(helperPid)), mRowSub.trim());
+    await H.screenshot(pageRU, ws, 'orphan_models_ru');
+
+    await pageRU.evaluate(() => { const s = document.getElementById('mf-state'); s.value = 'orphan'; s.dispatchEvent(new Event('change')); });
+    await pageRU.waitForTimeout(300);
+    const mRowsOrphan = await pageRU.locator('#model-list .model-row').count();
+    suite.log('UI: state filter=orphan shows the row (RU)', mRowsOrphan === 1, `rows=${mRowsOrphan}`);
+    await pageRU.evaluate(() => { const s = document.getElementById('mf-state'); s.value = 'stopped'; s.dispatchEvent(new Event('change')); });
+    await pageRU.waitForTimeout(300);
+    const mRowsStopped = await pageRU.locator('#model-list .model-row').count();
+    suite.log('UI: state filter=stopped hides the orphan row (RU)', mRowsStopped === 0, `rows=${mRowsStopped}`);
+    await pageRU.evaluate(() => { const s = document.getElementById('mf-state'); s.value = ''; s.dispatchEvent(new Event('change')); });
+    await pageRU.waitForTimeout(300);
+    await pageRU.evaluate(() => window.navigate('adv-instances'));
+    await pageRU.waitForTimeout(300);
+
+    // Switch to EN; dynamic lists re-render in the new language on the 3 s poll tick
     await pageRU.evaluate(() => window.setLanguage('en'));
-    await pageRU.waitForTimeout(1000);
+    await pageRU.waitForTimeout(3500);
 
     const orphanBadgeEn = pageRU.locator('#instances-table-wrap .status-badge.orphan').first();
     const orphanVisEN = await orphanBadgeEn.isVisible().catch(() => false);
@@ -143,6 +169,16 @@ async function main() {
     const killEN = pageRU.locator('#instances-table-wrap button:has-text("Kill")').first();
     suite.log('UI: Kill button (EN)', await killEN.isVisible().catch(() => false));
     await H.screenshot(pageRU, ws, 'orphan_en_desktop');
+
+    await pageRU.evaluate(() => window.navigate('models'));
+    await pageRU.waitForTimeout(3500);
+    const mBadgeEn = pageRU.locator('#model-list .status-badge.orphan').first();
+    const mBadgeEnVis = await mBadgeEn.isVisible().catch(() => false);
+    suite.log('UI: Models page orphan badge (EN)', mBadgeEnVis,
+      mBadgeEnVis ? `text="${(await mBadgeEn.textContent()).trim()}"` : 'not visible');
+    const mStartBtnsEn = await pageRU.locator('#model-list .model-row button[aria-label="Start"]').count();
+    suite.log('UI: Models page no Start button for orphan model (EN)', mStartBtnsEn === 0, `start buttons=${mStartBtnsEn}`);
+    await H.screenshot(pageRU, ws, 'orphan_models_en');
 
     // Mobile viewport (RU)
     const ctxM = await browser.newContext({ viewport: { width: 375, height: 667 }, locale: 'ru-RU' });

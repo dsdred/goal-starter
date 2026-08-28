@@ -417,7 +417,7 @@ older than 30 days). Active instances are never deleted by cleanup.
 
 ### Orphaned processes (ORPHAN)
 
-After a GoAl restart, a previously active instance whose process may still be running outside GoAl is shown as **ORPHAN** ("May still be running outside GoAl"). Two actions are available:
+After a GoAl restart, a previously active instance whose process may still be running outside GoAl is shown as **ORPHAN** ("May still be running outside GoAl") — on the Instances page and on the Models page (the model row shows the ORPHAN badge with the instance PID; no Start/Stop/Restart action is offered while the instance is `orphan`, so a second copy of the model is not launched by mistake). Two actions are available:
 
 - **Dismiss** — safe reconciliation: the record moves to `stale`, but the process is **not touched**. Use it when you are sure the process is gone or you will stop it yourself.
 - **Kill** — destructive: actually terminates the orphan process. The UI asks for explicit confirmation. Before every signal GoAl re-verifies the process identity (executable + start time); if it cannot confirm the identity, the kill is refused and the orphan stays listed (retry, or Dismiss). On Windows the process is terminated immediately; on Linux a graceful stop (5 s) is attempted first, then a forced kill. If the process is already gone, the record is reconciled without sending any signal.
