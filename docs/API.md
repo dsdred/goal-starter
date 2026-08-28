@@ -12,21 +12,23 @@ All endpoints are under the `/api/v1` prefix. Base URL is `http://127.0.0.1:8088
 Session cookie: `goal_session` (HTTP-only, SameSite=Lax).
 CSRF cookie: `goal_csrf_token` (double-submit pattern). Send the same value in `X-CSRF-Token` for unsafe authenticated requests.
 
-## Structured errors
+## Error responses
 
-All errors return JSON:
+All errors return JSON with an `error` string. Two shapes occur:
 
 ```json
-{
-  "error": {
-    "error_code": "invalid_port",
-    "error": "invalid port: out of range",
-    "details": []
-  }
-}
+{ "error": "runtime not found: rt-1" }
 ```
 
-Error codes: `bad_request`, `unauthorized`, `forbidden`, `not_found`, `conflict`, `rate_limited`, `invalid_port`, `invalid_host`, `invalid_address`, `invalid_runtime`, `invalid_model`, `internal_server_error`.
+```json
+{ "error": "too many login attempts, please try again later", "code": "rate_limited" }
+```
+
+The second shape adds a stable `code` (and optional `details`, an array of strings) on the following endpoints: login rate limiting (`rate_limited`), runtime delete/replace/cascade-delete (404/409 mapping: `not_found`, `invalid_runtime`, `conflict`, `bad_request`), model 404 (`invalid_model`), and the audit query endpoint (`bad_request`, `internal_server_error`).
+
+Known error codes: `bad_request`, `unauthorized`, `forbidden`, `not_found`, `conflict`, `rate_limited`, `invalid_port`, `invalid_host`, `invalid_address`, `invalid_runtime`, `invalid_model`, `internal_server_error`.
+
+The `error` strings are English by design; the Web UI maps them to localized messages on the client side.
 
 ## Health & version
 

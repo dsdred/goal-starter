@@ -191,10 +191,10 @@ async function handleLogin(e) {
         } else {
             let data = {};
             try { data = await r.json(); } catch {}
-            showLoginError(data.error || 'Authentication failed');
+            showLoginError(data.error ? translateServerMessage(data.error) : t('auth.login.failed'));
         }
     } catch (err) {
-        showLoginError('Login request failed: ' + err.message);
+        showLoginError(t('auth.login.network_error'));
     }
     return false;
 }
@@ -218,14 +218,17 @@ async function api(path, opts) {
     if (!r.ok) {
         let msg = r.statusText;
         let details = null;
+        let code = '';
         try {
             const d = await r.json();
             msg = d.error || msg;
+            code = d.code || '';
             if (Array.isArray(d.details)) details = d.details;
         } catch {}
         const err = new Error(msg);
         err.status = r.status;
         err.details = details;
+        err.code = code;
         throw err;
     }
     if (r.status === 204) return null;
@@ -1394,24 +1397,50 @@ async function loadSettings() {
 
 // ─── Error messages ─────────────────────────────────────────────────────────
 
-function friendlyError(err) {
-    let msg = (err && err.message) || '';
-    const patterns = [
-        [/model not found/i, 'err.model_not_found'],
-        [/runtime not found/i, 'err.runtime_not_found'],
-        [/instance not found/i, 'err.instance_not_found'],
-        [/in use|referenced|depend/i, 'err.in_use'],
-        [/port.*in use|address already in use/i, 'err.port_in_use'],
-        [/executable.*not found|no such file/i, 'err.executable_not_found'],
-        [/cannot enable auth/i, 'err.auth_credentials'],
-        [/not a valid bind address/i, 'err.addr_invalid'],
-        [/web_port must be/i, 'err.port_invalid'],
-    ];
-    for (let i = 0; i < patterns.length; i++) {
-        if (patterns[i][0].test(msg)) return t(patterns[i][1]);
-    }
+const errorPatterns = [
+    [/invalid credentials/i, 'err.invalid_credentials'],
+    [/too many login attempts|rate.?limited/i, 'err.rate_limited'],
+    [/invalid csrf token/i, 'err.invalid_csrf'],
+    [/^unauthorized$/i, 'err.unauthorized'],
+    [/model not found/i, 'err.model_not_found'],
+    [/runtime not found/i, 'err.runtime_not_found'],
+    [/instance not found/i, 'err.instance_not_found'],
+    [/no running instance/i, 'err.no_running_instance'],
+    [/in use|referenced|depend/i, 'err.in_use'],
+    [/port.*in use|address already in use/i, 'err.port_in_use'],
+    [/executable.*not found|no such file/i, 'err.executable_not_found'],
+    [/cannot enable auth/i, 'err.auth_credentials'],
+    [/not a valid bind address/i, 'err.addr_invalid'],
+    [/web_port must be/i, 'err.port_invalid'],
+    [/password must not exceed/i, 'err.password_too_long'],
+    [/failed to save config/i, 'err.config_save_failed'],
+    [/failed to load config/i, 'err.config_load_failed'],
+    [/validation failed/i, 'err.validation_failed'],
+    [/failed to hash password|failed to create session|template error|internal server error/i, 'err.internal'],
+    [/not found/i, 'err.not_found'],
+];
+
+const errorCodeKeys = {
+    rate_limited: 'err.rate_limited',
+    conflict: 'err.in_use',
+    invalid_runtime: 'err.runtime_not_found',
+    invalid_model: 'err.model_not_found',
+    not_found: 'err.not_found',
+    unauthorized: 'err.unauthorized',
+    internal_server_error: 'err.internal',
+};
+
+function translateServerMessage(msg) {
     if (!msg) return t('err.unknown');
-    return msg;
+    for (let i = 0; i < errorPatterns.length; i++) {
+        if (errorPatterns[i][0].test(msg)) return t(errorPatterns[i][1]);
+    }
+    return t('err.server_wrap', { detail: msg });
+}
+
+function friendlyError(err) {
+    if (err && err.code && errorCodeKeys[err.code]) return t(errorCodeKeys[err.code]);
+    return translateServerMessage((err && err.message) || '');
 }
 
 // ─── Modal helpers ──────────────────────────────────────────────────────────
@@ -1628,6 +1657,8 @@ window.rtDropdownKeydown = rtDropdownKeydown;
 window.selectRtItem = selectRtItem;
 window.setTheme = setTheme;
 window.setLanguage = setLanguage;
+window.friendlyError = friendlyError;
+window.translateServerMessage = translateServerMessage;
 window.renderModels = renderModels;
 window.renderHistory = renderHistory;
 window.closeRTDelete = closeRTDelete;

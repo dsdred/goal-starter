@@ -42,8 +42,8 @@ func TestEmbeddedJavaScriptResetsLoginStateAcrossAuthTransitions(t *testing.T) {
 		"errorEl.style.display = 'none';",
 		"function showLoginError(message)",
 		"function showLogin()",
-		"showLoginError(data.error || 'Authentication failed');",
-		"showLoginError('Login request failed: ' + err.message);",
+		"showLoginError(data.error ? translateServerMessage(data.error) : t('auth.login.failed'));",
+		"showLoginError(t('auth.login.network_error'));",
 	}
 	for _, fragment := range required {
 		if !strings.Contains(js, fragment) {
