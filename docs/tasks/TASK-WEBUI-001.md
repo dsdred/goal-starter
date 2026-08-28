@@ -88,5 +88,5 @@ Make the GoAl web dashboard actually usable from the compiled binary, without re
 ## Rollback/compatibility
 
 - No breaking API changes.
-- `web/` and `webui/` directories remain in the repository for development but are no longer required at runtime.
+- `web/` and `webui/` directories remain in the repository for development but are no longer required at runtime. **Superseded 2026-08-28:** both duplicate copies were removed — root `webui/` was a stale v0.8 snapshot referenced nowhere, root `web/` was untracked and empty (ROADMAP P1 technical-debt item; see ADR 003 implementation note).
 - If problems arise, reverting to disk-based static serving is a one-line code change (but would re-break the single-binary contract).

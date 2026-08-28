@@ -1,6 +1,6 @@
 # ADR 003: Web UI Serving via Embedded FS
 
-**Status:** Proposed
+**Status:** Accepted (decision 1 implemented; decision 2 withdrawn — see implementation note)
 **Date:** 2026-08-10
 **Related:** ADR 001 (Single binary), ADR 002 (Supervisor)
 
@@ -55,3 +55,9 @@ This is a documented but broken behavior, not a merely theoretical mismatch.
 
 - Template caching / hot reload inside the binary.
 - Advanced asset pipelines (minification, compression).
+
+## Implementation note (2026-08-28)
+
+- Decision 1 (embedded FS as the primary source, working-directory independence) shipped in v1.0.0 via TASK-WEBUI-001: `templateFS`/`staticFS` in `internal/webui/server.go`, real `ServeIndex` render, `/static/` served from `staticFS`.
+- Decision 2 (optional on-disk override via `--dev-assets` / `GOAL_DEV_ASSETS`) was **never implemented** and is now **withdrawn**: no code path consults disk assets. The duplicate UI copies — root `webui/` (tracked, stale v0.8 snapshot, referenced nowhere) and root `web/` (untracked, empty) — were removed on 2026-08-28 (ROADMAP P1 technical-debt item). UI changes are made directly in `internal/webui/` and verified by the maintained browser-acceptance suite (`tests/browser/`); a dev-override mechanism can be re-proposed later if hot-reload of UI files becomes a real need.
+- The Context section above is a point-in-time problem statement from 2026-08-10.
