@@ -153,3 +153,5 @@ config ← main (загружается один раз при старте)
 | 0006 | Безопасное хранение креденшелов (bcrypt `adminPasswordHash`) | Accepted |
 | 0007 | Полное аудит-логирование (структурированные security-события, `goal_audit.jsonl`) | Accepted |
 | 0008 | Recovery: завершение процесса-сироты (деструктивное завершение с повторной проверкой идентичности) | Accepted |
+| 0009 | Hot-reload (классификация полей, явный `POST /api/v1/admin/reload`) | Accepted |
+| 0010 | Pipeline: групповой запуск существующих моделей с per-model override аргументов (Accepted 2026-08-29, реализация не начата) | Accepted |

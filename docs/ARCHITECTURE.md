@@ -157,3 +157,5 @@ config ← main (loaded once at startup)
 | 0006 | Secure credential storage (bcrypt `adminPasswordHash`) | Accepted |
 | 0007 | Full audit logging (structured security events, `goal_audit.jsonl`) | Accepted |
 | 0008 | Recovery: kill of an orphan (identity re-verified destructive termination) | Accepted |
+| 0009 | Hot-reload wiring (field classification, explicit `POST /api/v1/admin/reload`) | Accepted |
+| 0010 | Pipeline: group launch of existing Models with per-model Args override (Accepted 2026-08-29, implementation pending) | Accepted |
