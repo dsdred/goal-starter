@@ -307,6 +307,7 @@ func TestRuntimeRedactionIsIdenticalWithAuthOffAndOn(t *testing.T) {
 			router := NewRouteRegistry(
 				application.NewInstanceService(supervisor, repo),
 				application.NewRuntimeService(repo), application.NewModelService(repo),
+				application.NewPipelineService(supervisor, repo),
 				supervisor, repo,
 				security.NewCSRF(), security.NewSessionStore(), passwords,
 				WithAuthEnabled(authEnabled), WithWebAssets(fs.FS(assets), fs.FS(assets)),

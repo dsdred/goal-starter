@@ -13,13 +13,14 @@ GoAl is a lightweight cross-platform manager for local AI runtimes and models. O
 5. [API](#api)
 6. [Instance Management](#instance-management)
 7. [Models](#models)
-8. [Runtimes](#runtimes)
-9. [Logs](#logs)
-10. [Runtime Health](#runtime-health)
-11. [Security](#security)
-12. [Install as Service (Linux systemd)](#install-as-service-linux-systemd)
-13. [Install as Service (Windows)](#install-as-service-windows)
-14. [FAQ](#faq)
+8. [Pipelines](#pipelines)
+9. [Runtimes](#runtimes)
+10. [Logs](#logs)
+11. [Runtime Health](#runtime-health)
+12. [Security](#security)
+13. [Install as Service (Linux systemd)](#install-as-service-linux-systemd)
+14. [Install as Service (Windows)](#install-as-service-windows)
+15. [FAQ](#faq)
 
 ---
 
@@ -509,6 +510,49 @@ curl -X POST http://127.0.0.1:8088/api/v1/models/my-model/resolve \
 ```
 
 Returns the full command that will be executed.
+
+---
+
+## Pipelines
+
+A **Pipeline** is an ordered group of existing Models that start, stop, and restart
+together. It is a *launcher* over your models — it does not create new models and does
+not store its own launch parameters.
+
+**Per-model Args override (all-or-nothing).** Each model in a pipeline can carry an
+optional Args override. If the override is non-empty, it **replaces the model's Args
+entirely** for that launch (no merge, no append). If it is empty, the model's own Args
+are used. The override is applied only at launch; the model's stored Args are never
+modified. The instance history shows exactly what ran, including overrides.
+
+**Group lifecycle.**
+- **Start** launches the models in list order, sequentially and best-effort: a failure on
+  one model does not stop the rest, and already-started models are not rolled back. A model
+  that already has a running instance is skipped (`already-running`) — a pipeline never
+  starts a second copy or adopts a manually started instance. A model whose latest instance
+  is `orphan` is skipped (`orphan-skipped`).
+- **Stop** stops only the instances the pipeline started, in **reverse** order. Manually
+  started instances of the same model are untouched.
+- **Restart** = reverse stop, then an always-forward start of all entries.
+
+**Autostart (distinct from the Start button).** A pipeline has an `Active` toggle and each
+model entry has an `AutoStart` checkbox. These are *startup settings only* — they do not
+affect the manual **Start** action. When GoAl starts, `Active` pipelines launch their
+`AutoStart` models first (before model-level autostart), so a model covered by both
+mechanisms gets exactly one instance, owned by the pipeline.
+
+**Integrity (no implicit cascade).** Deleting a model that a pipeline references returns a
+conflict — edit or delete the pipeline first. Structural edits (add/remove/reorder models)
+and deletion are refused with a conflict while the pipeline has active owned instances;
+rename, Args, `Active`, and per-entry `AutoStart` can always be changed.
+
+**Via Web Interface:**
+1. Go to the **Pipelines** section
+2. Click **+ Create pipeline**
+3. Enter a name, optionally enable the GoAl autostart toggle, add one row per model, and
+   for each row pick the model, an optional Args override, and the autostart checkbox
+4. **Start / Stop / Restart** act on the whole group; per-model status chips show
+   running/stopped/orphan state
 
 ---
 

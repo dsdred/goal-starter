@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/dsdred/goal/internal/application"
 	"github.com/dsdred/goal/internal/config"
 	"github.com/dsdred/goal/internal/domain"
 	"github.com/dsdred/goal/internal/process"
@@ -101,7 +102,12 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Autostart: launch active models after recovery.
+	// Autostart (ADR 010 D4): pipeline autostart runs BEFORE model-level
+	// autostart, so a model covered by both mechanisms gets exactly one
+	// instance — the pipeline-owned one; model-level autostart then skips
+	// it (already-running).
+	pipelineSvc := application.NewPipelineService(supervisor, repo)
+	autostartPipelines(appCtx, repo, pipelineSvc)
 	autostartModels(appCtx, repo, supervisor)
 
 	// Create and initialize the web UI app.
@@ -189,6 +195,42 @@ func autostartModels(ctx context.Context, repo storage.Repository, supervisor *p
 		}
 		if _, err := supervisor.Start(ctx, domainModel, domainRuntime, nil, nil); err != nil {
 			slog.Error("autostart: start failed", "model", m.Name, "error", err)
+		}
+	}
+}
+
+// autostartPipelines starts entries of Active pipelines after recovery and
+// before model-level autostart (ADR 010 D4). Pipelines are processed in
+// repository order, entries in list order, sequentially; only entries with
+// AutoStart=true are considered. The model-level AutostartDelay is not
+// applied on the pipeline path in first scope. Per-entry failures are
+// operational logs and never abort the pipeline, the remaining pipelines,
+// or startup. Pipeline autostart emits no pipeline.* audit events
+// (no user/session context at startup).
+func autostartPipelines(ctx context.Context, repo storage.Repository, svc *application.PipelineService) {
+	pipelines, err := repo.ListPipelines()
+	if err != nil {
+		slog.Warn("pipeline autostart: list pipelines", "error", err)
+		return
+	}
+	for _, p := range pipelines {
+		if !p.Active {
+			continue
+		}
+		if ctx.Err() != nil {
+			return
+		}
+		res, err := svc.Autostart(ctx, p.ID)
+		if err != nil {
+			slog.Error("pipeline autostart: pipeline failed", "pipeline", p.ID, "error", err)
+			continue
+		}
+		for _, r := range res.Results {
+			if r.Status == application.OutcomeFailed {
+				slog.Error("pipeline autostart: entry failed", "pipeline", p.ID, "model", r.ModelID, "reason", r.Error)
+			} else {
+				slog.Info("pipeline autostart: entry outcome", "pipeline", p.ID, "model", r.ModelID, "status", r.Status)
+			}
 		}
 	}
 }

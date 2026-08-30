@@ -2,15 +2,27 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
 	"testing"
 	"time"
 
+	"github.com/dsdred/goal/internal/application"
 	"github.com/dsdred/goal/internal/process"
 	"github.com/dsdred/goal/internal/storage"
+	fakeruntime "github.com/dsdred/goal/testdata/fake-runtime/testutil"
 )
+
+func TestMain(m *testing.M) {
+	code := m.Run()
+	if err := fakeruntime.Cleanup(); err != nil {
+		fmt.Fprintln(os.Stderr, "fake runtime cleanup:", err)
+		os.Exit(1)
+	}
+	os.Exit(code)
+}
 
 func setupAutostartRepo(t *testing.T) (storage.Repository, string) {
 	t.Helper()
@@ -268,8 +280,199 @@ func TestAutostart_NoDuplicateInstances(t *testing.T) {
 
 func TestAutostart_SchemaVersion(t *testing.T) {
 	repo, _ := setupAutostartRepo(t)
-	if repo.SchemaVersion() != 7 {
-		t.Errorf("expected schema version 7, got %d", repo.SchemaVersion())
+	if repo.SchemaVersion() != 8 {
+		t.Errorf("expected schema version 8, got %d", repo.SchemaVersion())
+	}
+}
+
+// addPipelineFixture creates a single-entry pipeline referencing modelID.
+// Creation order is the repository order used by pipeline autostart.
+func addPipelineFixture(t *testing.T, repo storage.Repository, name string, modelID string, pipelineActive, autoStart bool) string {
+	t.Helper()
+	entry := &storage.PipelineEntry{
+		Name:   name,
+		Active: pipelineActive,
+		Models: []storage.PipelineModel{{ModelID: modelID, AutoStart: autoStart}},
+	}
+	if err := repo.CreatePipeline(entry); err != nil {
+		t.Fatalf("CreatePipeline: %v", err)
+	}
+	return entry.ID
+}
+
+// runStartupSimulates the fixed cmd/goal startup sequence (ADR 010 D4):
+// pipeline autostart BEFORE model-level autostart, then shutdown.
+func runStartup(t *testing.T, repo storage.Repository) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	sup := process.NewSupervisorWithContext(ctx, repo)
+	svc := application.NewPipelineService(sup, repo)
+	autostartPipelines(ctx, repo, svc)
+	autostartModels(ctx, repo, sup)
+	shutdownCtx, scancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer scancel()
+	_ = sup.ShutdownWithPersistence(shutdownCtx)
+}
+
+// addAliveModelFixture creates a model whose process stays alive (fake
+// runtime "graceful" mode) so ownership can be observed deterministically
+// across the pipeline → model autostart handoff.
+func addAliveModelFixture(t *testing.T, repo storage.Repository, name string, active bool) string {
+	t.Helper()
+	rt := &storage.RuntimeEntry{Name: name + "-rt", Executable: fakeruntime.Path(t)}
+	if err := repo.CreateRuntime(rt); err != nil {
+		t.Fatalf("CreateRuntime: %v", err)
+	}
+	m := &storage.ModelEntry{Name: name, RuntimeID: rt.ID, Active: active, Args: []string{"graceful"}}
+	if err := repo.CreateModel(m); err != nil {
+		t.Fatalf("CreateModel: %v", err)
+	}
+	return m.ID
+}
+
+type pipelineSpec struct {
+	active    bool
+	autoStart bool
+}
+
+// ADR 010 acceptance 14 (D4 ownership matrix).
+func TestAutostartPipelines_OwnershipMatrix(t *testing.T) {
+	cases := []struct {
+		name        string
+		modelActive bool
+		pipeline    *pipelineSpec
+		wantCount   int
+		wantOwned   bool
+	}{
+		{name: "no-active-flags", modelActive: false, pipeline: nil, wantCount: 0},
+		{name: "pipeline-only", modelActive: false, pipeline: &pipelineSpec{true, true}, wantCount: 1, wantOwned: true},
+		{name: "model-only", modelActive: true, pipeline: nil, wantCount: 1},
+		{name: "both-pipeline-wins", modelActive: true, pipeline: &pipelineSpec{true, true}, wantCount: 1, wantOwned: true},
+		{name: "pipeline-entry-not-autostarted", modelActive: true, pipeline: &pipelineSpec{true, false}, wantCount: 1},
+		{name: "pipeline-inactive", modelActive: false, pipeline: &pipelineSpec{false, true}, wantCount: 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			repo, _ := setupAutostartRepo(t)
+			modelID := addAliveModelFixture(t, repo, tc.name, tc.modelActive)
+			var pipelineID string
+			if tc.pipeline != nil {
+				pipelineID = addPipelineFixture(t, repo, tc.name+"-pipe", modelID, tc.pipeline.active, tc.pipeline.autoStart)
+			}
+
+			runStartup(t, repo)
+
+			instances, err := repo.ListInstances()
+			if err != nil {
+				t.Fatalf("ListInstances: %v", err)
+			}
+			if len(instances) != tc.wantCount {
+				t.Fatalf("instances = %d, want %d: %+v", len(instances), tc.wantCount, instances)
+			}
+			if tc.wantCount == 1 {
+				inst := instances[0]
+				if tc.wantOwned && inst.PipelineID != pipelineID {
+					t.Fatalf("instance pipeline_id = %q, want the pipeline id %q (ownership wins)", inst.PipelineID, pipelineID)
+				}
+				if !tc.wantOwned && inst.PipelineID != "" {
+					t.Fatalf("instance pipeline_id = %q, want empty (manual launch)", inst.PipelineID)
+				}
+			}
+		})
+	}
+}
+
+// ADR 010 acceptance 14: two Active pipelines sharing a model — the earlier
+// pipeline (repository order) owns the single instance.
+func TestAutostartPipelines_TwoPipelinesShareModel(t *testing.T) {
+	repo, _ := setupAutostartRepo(t)
+	modelID := addAliveModelFixture(t, repo, "shared", false)
+	p1 := addPipelineFixture(t, repo, "pipe-early", modelID, true, true)
+	p2 := addPipelineFixture(t, repo, "pipe-late", modelID, true, true)
+	_ = p2
+
+	runStartup(t, repo)
+
+	instances, err := repo.ListInstances()
+	if err != nil {
+		t.Fatalf("ListInstances: %v", err)
+	}
+	if len(instances) != 1 {
+		t.Fatalf("exactly one instance expected, got %d: %+v", len(instances), instances)
+	}
+	if instances[0].PipelineID != p1 {
+		t.Fatalf("ownership = %q, want the earlier pipeline %q", instances[0].PipelineID, p1)
+	}
+}
+
+// ADR 010 D4: a per-entry pipeline autostart failure is logged operationally
+// and never aborts the remaining pipelines or model-level autostart.
+func TestAutostartPipelines_FailureDoesNotBlockStartup(t *testing.T) {
+	repo, _ := setupAutostartRepo(t)
+	exe := makeFakeExe(t)
+
+	// Pipeline entry 1: bad executable (fails); entry 2: healthy autostart.
+	badRT := &storage.RuntimeEntry{Name: "bad-rt", Executable: filepath.Join(t.TempDir(), "missing-exe")}
+	if err := repo.CreateRuntime(badRT); err != nil {
+		t.Fatal(err)
+	}
+	badModel := &storage.ModelEntry{Name: "will-fail", RuntimeID: badRT.ID}
+	if err := repo.CreateModel(badModel); err != nil {
+		t.Fatal(err)
+	}
+	goodRT := &storage.RuntimeEntry{Name: "good-rt", Executable: exe}
+	if err := repo.CreateRuntime(goodRT); err != nil {
+		t.Fatal(err)
+	}
+	goodModel := &storage.ModelEntry{Name: "will-succeed", RuntimeID: goodRT.ID}
+	if err := repo.CreateModel(goodModel); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.CreatePipeline(&storage.PipelineEntry{
+		Name:   "mixed",
+		Active: true,
+		Models: []storage.PipelineModel{
+			{ModelID: badModel.ID, AutoStart: true},
+			{ModelID: goodModel.ID, AutoStart: true},
+		},
+	}); err != nil {
+		t.Fatalf("CreatePipeline: %v", err)
+	}
+
+	// A model-level Active model must also start despite the pipeline failure.
+	addAutostartFixture(t, repo, "model-level", exe, true, 0)
+
+	runStartup(t, repo)
+
+	instances, err := repo.ListInstances()
+	if err != nil {
+		t.Fatalf("ListInstances: %v", err)
+	}
+	goodStarted, modelStarted, badStarted := 0, 0, 0
+	for _, inst := range instances {
+		switch inst.ModelID {
+		case goodModel.ID:
+			goodStarted++
+			if inst.PipelineID == "" {
+				t.Errorf("pipeline entry instance must carry the pipeline_id, got %q", inst.PipelineID)
+			}
+		case badModel.ID:
+			badStarted++
+		default:
+			modelStarted++
+		}
+	}
+	if goodStarted != 1 {
+		t.Errorf("healthy pipeline entry after failed entry: instances = %d, want 1", goodStarted)
+	}
+	if modelStarted != 1 {
+		t.Errorf("model-level autostart after pipeline failure: instances = %d, want 1", modelStarted)
+	}
+	// A resolve failure (missing executable) persists no instance record —
+	// the standard Supervisor semantics, same as a manual model start.
+	if badStarted != 0 {
+		t.Errorf("resolve-failed entry: instances = %d, want 0", badStarted)
 	}
 }
 

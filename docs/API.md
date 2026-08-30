@@ -234,6 +234,27 @@ Models are configured launch definitions combining a runtime with launch argumen
 Model environment values are write-only: they are accepted on create/update but never
 returned in API responses. Only `environment_keys` (the list of variable names) is exposed.
 
+## Pipelines
+
+A **Pipeline** (ADR 010) is an ordered group of existing Models with a group lifecycle.
+Instances it launches carry `pipeline_id`; stop/restart act only on those owned instances.
+Per-model Args are all-or-nothing: a non-empty `args` array replaces the referenced model's
+args entirely at launch; an empty/absent `args` uses the model's own args.
+
+| Method | Path | Auth | CSRF | Description |
+|--------|------|------|------|-------------|
+| GET | /api/v1/pipelines | Yes | — | List pipelines (ordered models with `model_name`, `args`, `auto_start`, `active`). |
+| GET | /api/v1/pipelines/{id} | Yes | — | Pipeline detail + per-model live status (`state`, `instance_id`, `pid`, `started_at`, `has_args_override`). |
+| POST | /api/v1/pipelines | Yes | Yes | Create `{name, active?, models:[{model_id, args?, auto_start?}]}` → `201`. `400` on empty name, empty model list, duplicate or unknown model id. `active`/`auto_start` default `false`. |
+| PUT | /api/v1/pipelines/{id} | Yes | Yes | Update. `name`/`args`/`active`/`auto_start` always allowed; structural change (add/remove/reorder) → `409` while the pipeline has active owned instances. |
+| DELETE | /api/v1/pipelines/{id} | Yes | Yes | Delete. `409` while it has active owned instances; `404` on unknown id. Terminal instances keep their historical `pipeline_id`. |
+| POST | /api/v1/pipelines/{id}/start | Yes | Yes | Start all entries sequentially in order (best-effort). `200 {pipeline_id, results:[{model_id, status, instance_id?, error?}]}`. `status` ∈ `started|already-running|orphan-skipped|no-runtime|model-missing|failed`. |
+| POST | /api/v1/pipelines/{id}/stop | Yes | Yes | Stop owned active instances in REVERSE order (best-effort). `200 {pipeline_id, results:[{model_id, instance_id, status, error?}]}`. `status` ∈ `stopped|failed`. |
+| POST | /api/v1/pipelines/{id}/restart | Yes | Yes | Reverse stop then ALWAYS forward start. `200 {pipeline_id, stop_results:[…], start_results:[…]}`. |
+
+Lifecycle requests emit one `pipeline.start` / `pipeline.stop` / `pipeline.restart` audit
+event each (bounded counters only). Pipeline CRUD is not audited in first scope.
+
 ## Logs (aggregated)
 
 | Method | Path | Auth | Description |

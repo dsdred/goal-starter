@@ -36,6 +36,7 @@ func newLoginRateLimitedRouter(t *testing.T, limit int) http.Handler {
 		application.NewInstanceService(supervisor, repo),
 		application.NewRuntimeService(repo),
 		application.NewModelService(repo),
+		application.NewPipelineService(supervisor, repo),
 		supervisor,
 		repo,
 		security.NewCSRF(),

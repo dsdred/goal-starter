@@ -18,6 +18,8 @@ import (
 type LaunchInstanceEntry = domain.LaunchInstanceEntry
 type RuntimeEntry = domain.RuntimeEntry
 type ModelEntry = domain.ModelEntry
+type PipelineEntry = domain.PipelineEntry
+type PipelineModel = domain.PipelineModel
 
 // InstanceStore is a minimal interface for instance operations needed by supervisor.
 type InstanceStore interface {
@@ -57,6 +59,12 @@ type Repository interface {
 	DeleteModel(id string) error
 	ListModels() ([]*ModelEntry, error)
 
+	CreatePipeline(e *PipelineEntry) error
+	GetPipeline(id string) (*PipelineEntry, error)
+	UpdatePipeline(e *PipelineEntry) error
+	DeletePipeline(id string) error
+	ListPipelines() ([]*PipelineEntry, error)
+
 	CreateLaunchInstance(e *LaunchInstanceEntry) error
 	GetLaunchInstance(id string) (*LaunchInstanceEntry, error)
 	UpdateLaunchInstance(e *LaunchInstanceEntry) error
@@ -79,6 +87,7 @@ type JSONRepository struct {
 	runtimes    []*RuntimeEntry
 	models      []*ModelEntry
 	instances   []*LaunchInstanceEntry
+	pipelines   []*PipelineEntry
 	idGenerator func() string
 }
 
@@ -209,18 +218,36 @@ func (r *JSONRepository) load() error {
 			return fmt.Errorf("migrate v6 to v7: %w", err)
 		}
 	} else {
+		// v7 and v8 share the same shape; v8 is purely additive (the
+		// pipelines key is simply absent in v7 files and loads as an empty
+		// list; ADR 010 D1.2).
 		var unified struct {
 			SchemaVersion int                    `json:"schema_version"`
 			Runtimes      []*RuntimeEntry        `json:"runtimes"`
 			Models        []*ModelEntry          `json:"models"`
 			Instances     []*LaunchInstanceEntry `json:"instances"`
+			Pipelines     []*PipelineEntry       `json:"pipelines"`
 		}
 		if err := json.Unmarshal(data, &unified); err != nil {
-			return fmt.Errorf("unmarshal v6: %w", err)
+			return fmt.Errorf("unmarshal unified schema: %w", err)
 		}
 		r.runtimes = unified.Runtimes
 		r.models = unified.Models
 		r.instances = unified.Instances
+		r.pipelines = unified.Pipelines
+	}
+
+	if r.runtimes == nil {
+		r.runtimes = make([]*RuntimeEntry, 0)
+	}
+	if r.models == nil {
+		r.models = make([]*ModelEntry, 0)
+	}
+	if r.instances == nil {
+		r.instances = make([]*LaunchInstanceEntry, 0)
+	}
+	if r.pipelines == nil {
+		r.pipelines = make([]*PipelineEntry, 0)
 	}
 
 	return nil
@@ -445,19 +472,21 @@ func (r *JSONRepository) tryBackup() ([]byte, error) {
 }
 
 func (r *JSONRepository) saveLocked() error {
-	unified := map[string]interface{}{
-		"schema_version": 7,
+	return r.writeUnified(r.filePath)
+}
+
+func (r *JSONRepository) writeUnified(path string) error {
+	data, err := json.MarshalIndent(map[string]interface{}{
+		"schema_version": 8,
 		"runtimes":       r.runtimes,
 		"models":         r.models,
 		"instances":      r.instances,
-	}
-
-	data, err := json.MarshalIndent(unified, "", "  ")
+		"pipelines":      r.pipelines,
+	}, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal JSON: %w", err)
 	}
-
-	return fsutil.WriteFileDurable(r.filePath, data, 0o600)
+	return fsutil.WriteFileDurable(path, data, 0o600)
 }
 
 func (r *JSONRepository) save() error {
@@ -466,21 +495,14 @@ func (r *JSONRepository) save() error {
 	return r.saveLocked()
 }
 
-func (r *JSONRepository) SchemaVersion() int { return 7 }
+func (r *JSONRepository) SchemaVersion() int { return 8 }
 
 func (r *JSONRepository) Upgrade() error { return r.save() }
 
 func (r *JSONRepository) SaveUnified(path string) error {
-	data, err := json.MarshalIndent(map[string]interface{}{
-		"schema_version": 7,
-		"runtimes":       r.runtimes,
-		"models":         r.models,
-		"instances":      r.instances,
-	}, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshal JSON: %w", err)
-	}
-	return fsutil.WriteFileDurable(path, data, 0o600)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.writeUnified(path)
 }
 
 // ─── Runtime CRUD ───
@@ -811,6 +833,98 @@ func (r *JSONRepository) ListModels() ([]*ModelEntry, error) {
 	defer r.mu.RUnlock()
 	out := make([]*ModelEntry, len(r.models))
 	for i, e := range r.models {
+		cp := *e
+		out[i] = &cp
+	}
+	return out, nil
+}
+
+// ─── Pipeline CRUD ───
+
+func (r *JSONRepository) CreatePipeline(e *PipelineEntry) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if e.ID == "" {
+		e.ID = r.idGenerator()
+	}
+	now := time.Now()
+	e.CreatedAt = now
+	e.UpdatedAt = now
+	for _, x := range r.pipelines {
+		if x.ID == e.ID {
+			return fmt.Errorf("pipeline already exists: %s", e.ID)
+		}
+	}
+	cp := *e
+	if e.Models == nil {
+		cp.Models = make([]PipelineModel, 0)
+	}
+	previous := r.pipelines
+	r.pipelines = append(r.pipelines, &cp)
+	if err := r.saveLocked(); err != nil {
+		r.pipelines = previous
+		return err
+	}
+	return nil
+}
+
+func (r *JSONRepository) GetPipeline(id string) (*PipelineEntry, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, e := range r.pipelines {
+		if e.ID == id {
+			cp := *e
+			return &cp, nil
+		}
+	}
+	return nil, fmt.Errorf("pipeline not found: %s", id)
+}
+
+func (r *JSONRepository) UpdatePipeline(e *PipelineEntry) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i, x := range r.pipelines {
+		if x.ID == e.ID {
+			e.UpdatedAt = time.Now()
+			cp := *e
+			if e.Models == nil {
+				cp.Models = make([]PipelineModel, 0)
+			}
+			previous := r.pipelines[i]
+			r.pipelines[i] = &cp
+			if err := r.saveLocked(); err != nil {
+				r.pipelines[i] = previous
+				return err
+			}
+			return nil
+		}
+	}
+	return fmt.Errorf("pipeline not found: %s", e.ID)
+}
+
+func (r *JSONRepository) DeletePipeline(id string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i, e := range r.pipelines {
+		if e.ID == id {
+			previous := make([]*PipelineEntry, len(r.pipelines))
+			copy(previous, r.pipelines)
+			r.pipelines = append(r.pipelines[:i], r.pipelines[i+1:]...)
+			if err := r.saveLocked(); err != nil {
+				r.pipelines = previous
+				return err
+			}
+			return nil
+		}
+	}
+	return fmt.Errorf("pipeline not found: %s", id)
+}
+
+func (r *JSONRepository) ListPipelines() ([]*PipelineEntry, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make([]*PipelineEntry, len(r.pipelines))
+	for i, e := range r.pipelines {
 		cp := *e
 		out[i] = &cp
 	}

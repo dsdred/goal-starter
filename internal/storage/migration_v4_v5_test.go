@@ -161,11 +161,11 @@ func TestMigration_V5toV7_RealFixture(t *testing.T) {
 	if err := json.Unmarshal(savedData, &saved); err != nil {
 		t.Fatal(err)
 	}
-	if saved.SchemaVersion != 7 {
-		t.Errorf("after Upgrade, schema_version = %d, want 7", saved.SchemaVersion)
+	if saved.SchemaVersion != 8 {
+		t.Errorf("after Upgrade, schema_version = %d, want 8", saved.SchemaVersion)
 	}
 
-	// Reload v7 and verify all data still intact.
+	// Reload and verify all data still intact.
 	repo2, err := NewJSONRepository(path)
 	if err != nil {
 		t.Fatalf("reload v7: %v", err)

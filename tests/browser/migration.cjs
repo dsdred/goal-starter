@@ -8,7 +8,7 @@ const BASE = `http://127.0.0.1:${PORT}`;
 
 // Reconstructs the legacy v5 repository fixture: one runtime, one old-style
 // model (path + mmproj + arguments), one profile referencing it, one exited
-// instance referencing the profile. GoAl must migrate v5 -> v7 on startup.
+// instance referencing the profile. GoAl must migrate v5 -> v8 on startup.
 function writeV5Fixture(ws, fakeRt, fakeRtDir) {
   const ts = '2026-01-01T00:00:00Z';
   const modelPath = path.join(ws.dir, 'models', 'model.gguf');
@@ -62,7 +62,7 @@ function writeV5Fixture(ws, fakeRt, fakeRtDir) {
 }
 
 async function main() {
-  console.log('=== v5 -> v7 repository migration (real Chromium) ===\n');
+  console.log('=== v5 -> v8 repository migration (real Chromium) ===\n');
 
   const ws = H.makeWorkspace('migration');
   const goalBin = H.buildGoal(ws);
@@ -86,14 +86,15 @@ async function main() {
   }
   console.log('Server started with v5 data. Checking migration...\n');
 
-  const suite = H.newSuite('MIGRATION (v5 -> v7)');
+  const suite = H.newSuite('MIGRATION (v5 -> v8)');
   const browser = await H.launchBrowser();
   let ok = false;
   try {
     const repo = JSON.parse(fs.readFileSync(path.join(ws.dataDir, 'goal_repo.json'), 'utf8'));
-    suite.log('M1. Repository migrated to schema v7', repo.schema_version === 7, 'version=' + repo.schema_version);
-    suite.log('M2. No profiles key in v7', !('profiles' in repo));
+    suite.log('M1. Repository migrated to schema v8', repo.schema_version === 8, 'version=' + repo.schema_version);
+    suite.log('M2. No profiles key in v8', !('profiles' in repo));
     suite.log('M3. Has models key', Array.isArray(repo.models), 'count=' + (repo.models || []).length);
+    suite.log('M3b. v7 -> v8 additive: empty pipelines key present', Array.isArray(repo.pipelines) && repo.pipelines.length === 0, 'pipelines=' + JSON.stringify(repo.pipelines));
 
     if (repo.models && repo.models.length === 1) {
       const m = repo.models[0];

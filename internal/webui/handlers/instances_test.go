@@ -394,8 +394,9 @@ func TestRouteRegistry_Build(t *testing.T) {
 	rtSvc := application.NewRuntimeService(repo)
 	modelSvc := application.NewModelService(repo)
 
+	pipelineSvc := application.NewPipelineService(sup, repo)
 	reg := NewRouteRegistry(
-		insSvc, rtSvc, modelSvc,
+		insSvc, rtSvc, modelSvc, pipelineSvc,
 		sup, repo, csrf, sessionStore, passwordStore,
 	)
 
@@ -416,8 +417,9 @@ func TestRouteRegistry_AuthEndpoints_NoAuthRequired(t *testing.T) {
 	rtSvc := application.NewRuntimeService(repo)
 	modelSvc := application.NewModelService(repo)
 
+	pipelineSvc := application.NewPipelineService(sup, repo)
 	reg := NewRouteRegistry(
-		insSvc, rtSvc, modelSvc,
+		insSvc, rtSvc, modelSvc, pipelineSvc,
 		sup, repo, csrf, sessionStore, passwordStore,
 	)
 

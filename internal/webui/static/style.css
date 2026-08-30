@@ -402,6 +402,23 @@ code { font-family: var(--font-mono); font-size: 0.9em; background: var(--bg-inp
 .compact-actions .icon-btn { width: 40px; height: 40px; }
 .compact-actions .icon-btn svg { width: 20px; height: 20px; }
 
+/* Pipeline page (ADR 010 D7) */
+/* Active toggle: visually distinct from the model autostart "A" badge and
+   from the manual Start action (persistent setting, accent color). */
+.toggle-pipeline input:checked + .toggle-slider { background: var(--accent); }
+.pl-chips-cell { max-width: 480px; }
+.pl-chips-cell .status-badge { margin: 2px 4px 2px 0; }
+.pl-chips-wrap { flex-wrap: wrap; gap: 2px; white-space: normal; }
+.pl-chips-wrap .status-badge { margin: 0 4px 2px 0; }
+.pl-actions-cell { white-space: nowrap; }
+.pl-model-row {
+    display: grid; grid-template-columns: minmax(120px, 1.2fr) minmax(160px, 1.6fr) auto auto;
+    gap: 8px; align-items: center; margin-bottom: 8px;
+}
+.pl-model-row .pl-args-input { width: 100%; }
+.pl-model-row .icon-btn { width: 32px; height: 32px; }
+.pl-model-row .icon-btn svg { width: 16px; height: 16px; }
+
 /* Layout switch: single monotonic contract, pure CSS, one explicit breakpoint.
    viewport > 768px: table; viewport <= 768px: compact cards (never reverts).
    The mode depends on the viewport width only, never on measured content width:
@@ -410,9 +427,9 @@ code { font-family: var(--font-mono); font-size: 0.9em; background: var(--bg-inp
    and flips the mode table -> cards -> table -> cards while the window shrinks.
    .visible = the renderer has data for this entity; an empty entity shows
    neither representation. overflow-x keeps long table content contained. */
-#runtimes-table-wrap, #instances-table-wrap, #history-table-wrap { display: none; overflow-x: auto; }
-#runtimes-table-wrap.visible, #instances-table-wrap.visible, #history-table-wrap.visible { display: block; }
-#runtimes-compact.visible, #instances-compact.visible, #history-compact.visible { display: none; }
+#runtimes-table-wrap, #instances-table-wrap, #history-table-wrap, #pipelines-table-wrap { display: none; overflow-x: auto; }
+#runtimes-table-wrap.visible, #instances-table-wrap.visible, #history-table-wrap.visible, #pipelines-table-wrap.visible { display: block; }
+#runtimes-compact.visible, #instances-compact.visible, #history-compact.visible, #pipelines-compact.visible { display: none; }
 
 /* Empty state */
 .empty-state { text-align: center; padding: 2rem 1rem; color: var(--text-muted); }
@@ -474,8 +491,8 @@ code { font-family: var(--font-mono); font-size: 0.9em; background: var(--bg-inp
     .main-content { margin-left: 0; margin-top: 52px; padding: 1rem; }
     /* Monotonic list contract: below 768px the list is cards, always,
        with no return to the table at smaller widths. */
-    #runtimes-table-wrap.visible, #instances-table-wrap.visible, #history-table-wrap.visible { display: none; }
-    #runtimes-compact.visible, #instances-compact.visible, #history-compact.visible { display: flex; }
+    #runtimes-table-wrap.visible, #instances-table-wrap.visible, #history-table-wrap.visible, #pipelines-table-wrap.visible { display: none; }
+    #runtimes-compact.visible, #instances-compact.visible, #history-compact.visible, #pipelines-compact.visible { display: flex; }
     .model-row { flex-wrap: wrap; gap: 8px; }
     .model-row-actions { width: 100%; justify-content: flex-end; margin-top: 4px; }
     .form-row { grid-template-columns: 1fr; }

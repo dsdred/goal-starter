@@ -19,6 +19,7 @@ let runtimesData = [];
 let modelsData = [];
 let instancesData = [];
 let historyData = [];
+let pipelinesData = [];
 
 let wizStep = 1;
 let wizEditId = null;
@@ -239,13 +240,14 @@ async function api(path, opts) {
 // ─── Data loading ───────────────────────────────────────────────────────────
 
 async function reloadAllData() {
-    const [rt, mo, ins, hist] = await Promise.allSettled([
-        api('/runtimes'), api('/models'), api('/instances'), api('/history')
+    const [rt, mo, ins, hist, pl] = await Promise.allSettled([
+        api('/runtimes'), api('/models'), api('/instances'), api('/history'), api('/pipelines')
     ]);
     runtimesData = rt.status === 'fulfilled' ? rt.value : [];
     modelsData = mo.status === 'fulfilled' ? mo.value : [];
     instancesData = ins.status === 'fulfilled' ? ins.value : [];
     historyData = hist.status === 'fulfilled' ? hist.value : [];
+    pipelinesData = pl.status === 'fulfilled' ? pl.value : [];
     loadVersion();
     updateFilterOptions();
 }
@@ -391,6 +393,7 @@ function parseArgs(raw) {
 
 function renderAll() {
     renderModels();
+    renderPipelines();
     renderAdvRuntimes();
     renderAdvInstances();
     renderHistory();
@@ -530,6 +533,226 @@ async function toggleAutostart(id) {
         }
         await reloadAllData(); renderAll();
     } catch (err) { showToast(friendlyError(err), 'error'); await reloadAllData(); renderAll(); }
+}
+
+// ─── Pipelines (ADR 010) ───────────────────────────────────────────────────
+
+function statusForModel(modelId) {
+    const active = getActiveInstances(modelId);
+    if (active.length > 0) {
+        const states = active.map(function (i) { return i.state; });
+        if (states.indexOf('running') !== -1) return 'running';
+        if (states.indexOf('starting') !== -1) return 'starting';
+        if (states.indexOf('stopping') !== -1) return 'stopping';
+    }
+    if (getOrphanInstances(modelId).length > 0) return 'orphan';
+    return 'stopped';
+}
+
+function pipelineModelChips(p) {
+    return p.models.map(function (m) {
+        const st = statusForModel(m.model_id);
+        const name = getModelName(m.model_id);
+        const auto = m.auto_start ? ' A' : '';
+        const ov = m.args && m.args.length ? ' ↯' : '';
+        return '<span class="status-badge ' + st + '" title="' + esc(name) + (ov ? ' — ' + esc(t('pipelines.chip.override')) : '') + '">' + esc(name) + esc(auto + ov) + '</span>';
+    }).join(' ');
+}
+
+function pipelineActiveToggle(p) {
+    return '<label class="filter-switch" title="' + esc(t('pipelines.field.active_hint')) + '">' +
+        '<span class="toggle-switch toggle-pipeline"><input type="checkbox"' + (p.active ? ' checked' : '') +
+        ' onchange="togglePipelineActive(\'' + safeId(p.id) + '\', this.checked)"><span class="toggle-slider"></span></span></label>';
+}
+
+function renderPipelines() {
+    const empty = document.getElementById('pipelines-empty');
+    const tableWrap = document.getElementById('pipelines-table-wrap');
+    const compact = document.getElementById('pipelines-compact');
+    if (pipelinesData.length === 0) {
+        document.getElementById('pipelines-body').innerHTML = '';
+        if (empty) empty.style.display = 'block';
+        if (tableWrap) tableWrap.classList.remove('visible');
+        if (compact) compact.classList.remove('visible');
+        return;
+    }
+    if (empty) empty.style.display = 'none';
+    if (tableWrap) tableWrap.classList.add('visible');
+    if (compact) compact.classList.add('visible');
+    document.getElementById('pipelines-body').innerHTML = pipelinesData.map(function (p) {
+        const actions = iconBtn(ICONS.start, t('pipelines.actions.start'), 'primary', 'startPipeline', p.id) +
+            iconBtn(ICONS.stop, t('pipelines.actions.stop'), 'danger', 'stopPipeline', p.id) +
+            iconBtn(ICONS.restart, t('pipelines.actions.restart'), 'warning', 'restartPipeline', p.id) +
+            iconBtn(ICONS.logs, t('pipelines.actions.logs'), 'ghost', 'viewPipelineLogs', p.id) +
+            iconBtn(ICONS.edit, t('pipelines.actions.edit'), 'ghost', 'editPipeline', p.id) +
+            iconBtn(ICONS.del, t('pipelines.actions.delete'), 'danger', 'deletePipeline', p.id);
+        return '<tr><td>' + esc(p.name) + '</td><td class="pl-chips-cell">' + pipelineModelChips(p) + '</td>' +
+            '<td>' + pipelineActiveToggle(p) + '</td>' +
+            '<td class="actions-cell pl-actions-cell">' + actions + '</td></tr>';
+    }).join('');
+    compact.innerHTML = pipelinesData.map(function (p) {
+        const actions = iconBtn(ICONS.start, t('pipelines.actions.start'), 'primary', 'startPipeline', p.id) +
+            iconBtn(ICONS.stop, t('pipelines.actions.stop'), 'danger', 'stopPipeline', p.id) +
+            iconBtn(ICONS.restart, t('pipelines.actions.restart'), 'warning', 'restartPipeline', p.id) +
+            iconBtn(ICONS.edit, t('pipelines.actions.edit'), 'ghost', 'editPipeline', p.id) +
+            iconBtn(ICONS.del, t('pipelines.actions.delete'), 'danger', 'deletePipeline', p.id);
+        return '<div class="compact-row pl-row">' +
+            '<div class="compact-main">' +
+                '<div class="compact-l1">' + pipelineActiveToggle(p) + '<span class="compact-title">' + esc(p.name) + '</span></div>' +
+                '<div class="compact-l2 pl-chips-wrap">' + pipelineModelChips(p) + '</div>' +
+            '</div>' +
+            '<div class="compact-actions">' + actions + '</div>' +
+        '</div>';
+    }).join('');
+}
+
+function viewPipelineLogs() {
+    navigate('logs');
+}
+
+async function pipelineAction(action, id, successKey) {
+    try {
+        await api('/pipelines/' + id + '/' + action, { method: 'POST' });
+        showToast(t(successKey), 'success');
+        await reloadAllData(); renderAll();
+    } catch (e) { showToast(friendlyError(e), 'error'); }
+}
+
+function startPipeline(id) { pipelineAction('start', id, 'common.started'); }
+function stopPipeline(id) { pipelineAction('stop', id, 'common.stopped'); }
+function restartPipeline(id) { pipelineAction('restart', id, 'common.restarted'); }
+
+async function togglePipelineActive(id, active) {
+    const p = pipelinesData.find(function (x) { return x.id === id; });
+    if (!p) return;
+    const body = JSON.stringify({ name: p.name, active: active, models: p.models });
+    try {
+        await api('/pipelines/' + id, { method: 'PUT', body: body });
+        await reloadAllData(); renderAll();
+    } catch (err) { showToast(friendlyError(err), 'error'); await reloadAllData(); renderAll(); }
+}
+
+function deletePipeline(id) {
+    const p = pipelinesData.find(function (x) { return x.id === id; });
+    const name = p ? p.name : id;
+    showConfirm(t('pipelines.delete.confirm', { name: name }), async function () {
+        try {
+            await api('/pipelines/' + id, { method: 'DELETE' });
+            closeConfirm();
+            showToast(t('common.deleted'), 'success');
+            await reloadAllData(); renderAll();
+        } catch (err) {
+            closeConfirm();
+            showToast(friendlyError(err), 'error');
+        }
+    });
+}
+
+function plModelOptions(selectedId) {
+    return '<option value="">' + esc(t('pipelines.field.model_select')) + '</option>' +
+        modelsData.map(function (m) {
+            return '<option value="' + esc(m.id) + '"' + (m.id === selectedId ? ' selected' : '') + '>' + esc(m.name) + '</option>';
+        }).join('');
+}
+
+function addPlModelRow(modelId, args, autoStart) {
+    const container = document.getElementById('pl-models-container');
+    const row = document.createElement('div');
+    row.className = 'pl-model-row';
+    row.innerHTML =
+        '<select class="pl-model-select">' + plModelOptions(modelId) + '</select>' +
+        '<input type="text" class="pl-args-input" value="' + esc(args || '') + '" placeholder="' + esc(t('pipelines.field.args_hint')) + '">' +
+        '<label class="filter-switch" title="' + esc(t('pipelines.field.autostart_hint')) + '">' +
+            '<span class="toggle-switch toggle-pipeline"><input type="checkbox" class="pl-autostart"' + (autoStart ? ' checked' : '') + '><span class="toggle-slider"></span></span></label>' +
+        '<button type="button" class="icon-btn icon-btn-danger" title="' + esc(t('pipelines.btn.remove_model')) + '" onclick="removePlModelRow(this)">' + ICONS.kill + '</button>';
+    container.appendChild(row);
+}
+
+function removePlModelRow(btn) {
+    const container = document.getElementById('pl-models-container');
+    if (container.children.length > 1) {
+        btn.closest('.pl-model-row').remove();
+    }
+}
+
+function openPipelineModal(p) {
+    if (modelsData.length === 0) {
+        showToast(t('pipelines.error.no_models'), 'error');
+        return;
+    }
+    const form = document.getElementById('pipeline-form');
+    form.reset();
+    document.getElementById('pipeline-modal-title').textContent = p ? t('pipelines.edit.title') : t('pipelines.create.title');
+    document.getElementById('pipeline-submit-btn').textContent = p ? t('pipelines.btn.save') : t('pipelines.btn.create');
+    form.id.value = p ? p.id : '';
+    form.name.value = p ? p.name : '';
+    form.active.checked = p ? !!p.active : false;
+    const container = document.getElementById('pl-models-container');
+    container.innerHTML = '';
+    if (p && p.models && p.models.length) {
+        p.models.forEach(function (m) {
+            addPlModelRow(m.model_id, m.args ? m.args.join(' ') : '', m.auto_start);
+        });
+    } else {
+        addPlModelRow('', '', false);
+    }
+    document.getElementById('pipeline-modal').style.display = 'flex';
+}
+
+function openCreatePipelineModal() {
+    openPipelineModal(null);
+}
+
+function editPipeline(id) {
+    openPipelineModal(pipelinesData.find(function (x) { return x.id === id; }) || null);
+}
+
+async function handlePipelineSubmit(e) {
+    e.preventDefault();
+    const f = e.target;
+    const rows = Array.prototype.slice.call(document.querySelectorAll('#pl-models-container .pl-model-row'));
+    const models = [];
+    for (const row of rows) {
+        const modelId = row.querySelector('.pl-model-select').value;
+        if (!modelId) { showToast(t('pipelines.error.model_required'), 'error'); return false; }
+        if (models.some(function (m) { return m.model_id === modelId; })) {
+            showToast(t('pipelines.error.duplicate_model'), 'error');
+            return false;
+        }
+        const args = parseArgs(row.querySelector('.pl-args-input').value);
+        models.push({
+            model_id: modelId,
+            args: args,
+            auto_start: row.querySelector('.pl-autostart').checked
+        });
+    }
+    if (models.length === 0) {
+        showToast(t('pipelines.error.no_models_selected'), 'error');
+        return false;
+    }
+    const body = JSON.stringify({ name: f.name.value, active: f.active.checked, models: models });
+    const id = f.id.value;
+    const btn = document.getElementById('pipeline-submit-btn');
+    const oldLabel = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = t('common.loading');
+    try {
+        if (id) {
+            await api('/pipelines/' + id, { method: 'PUT', body: body });
+            showToast(t('common.saved'), 'success');
+        } else {
+            await api('/pipelines', { method: 'POST', body: body });
+            showToast(t('common.created'), 'success');
+        }
+        closeModal('pipeline-modal');
+        await reloadAllData(); renderAll();
+    } catch (err) {
+        showToast(friendlyError(err), 'error');
+    } finally {
+        btn.disabled = false;
+        btn.textContent = oldLabel;
+    }
+    return false;
 }
 
 // ─── Logs ───────────────────────────────────────────────────────────────────
@@ -1729,6 +1952,18 @@ window.openSettingsEdit = openSettingsEdit;
 window.closeSettingsEdit = closeSettingsEdit;
 window.saveSettingsEdit = saveSettingsEdit;
 window.onSettingsAuthToggle = onSettingsAuthToggle;
+window.renderPipelines = renderPipelines;
+window.startPipeline = startPipeline;
+window.stopPipeline = stopPipeline;
+window.restartPipeline = restartPipeline;
+window.deletePipeline = deletePipeline;
+window.togglePipelineActive = togglePipelineActive;
+window.viewPipelineLogs = viewPipelineLogs;
+window.openCreatePipelineModal = openCreatePipelineModal;
+window.editPipeline = editPipeline;
+window.handlePipelineSubmit = handlePipelineSubmit;
+window.addPlModelRow = addPlModelRow;
+window.removePlModelRow = removePlModelRow;
 
 // ─── Boot ───────────────────────────────────────────────────────────────────
 

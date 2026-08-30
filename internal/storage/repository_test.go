@@ -292,8 +292,8 @@ func TestJSONRepository_SchemaVersion(t *testing.T) {
 	path := filepath.Join(dir, "repo.json")
 	repo, _ := NewJSONRepository(path)
 
-	if repo.SchemaVersion() != 7 {
-		t.Errorf("expected schema version 7, got %d", repo.SchemaVersion())
+	if repo.SchemaVersion() != 8 {
+		t.Errorf("expected schema version 8, got %d", repo.SchemaVersion())
 	}
 }
 
@@ -630,8 +630,8 @@ func TestJSONRepository_MarshalJSONRoundTrip(t *testing.T) {
 	if err := json.Unmarshal(data, &parsed); err != nil {
 		t.Fatalf("Unmarshal: %v", err)
 	}
-	if parsed["schema_version"] != float64(7) {
-		t.Errorf("expected schema_version 7, got %v", parsed["schema_version"])
+	if parsed["schema_version"] != float64(8) {
+		t.Errorf("expected schema_version 8, got %v", parsed["schema_version"])
 	}
 	if _, ok := parsed["runtimes"]; !ok {
 		t.Error("expected runtimes key to exist")
@@ -1076,8 +1076,8 @@ func TestJSONRepository_Persistence(t *testing.T) {
 	if err := json.Unmarshal(data, &parsed); err != nil {
 		t.Fatalf("Unmarshal: %v", err)
 	}
-	if parsed["schema_version"] != float64(7) {
-		t.Errorf("expected schema_version 7, got %v", parsed["schema_version"])
+	if parsed["schema_version"] != float64(8) {
+		t.Errorf("expected schema_version 8, got %v", parsed["schema_version"])
 	}
 	if _, ok := parsed["models"]; !ok {
 		t.Error("expected models key in JSON")

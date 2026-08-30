@@ -26,6 +26,11 @@ type Model struct {
 	Active         bool
 	AutostartDelay int
 
+	// PipelineID is set on the in-memory effective model copy when a Pipeline
+	// launch pre-substitutes Args (ADR 010 D2); it is propagated into the
+	// created instance. Never persisted on ModelEntry.
+	PipelineID string
+
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }

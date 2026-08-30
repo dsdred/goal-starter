@@ -251,6 +251,10 @@
                     <svg class="nav-icon" viewBox="0 0 20 20" fill="currentColor"><path d="M10 2a8 8 0 100 16 8 8 0 000-16zm1 4H9v5l4 2 .75-1.5L11 10.5V6z"/></svg>
                     <span data-i18n="nav.history">История</span>
                 </button>
+                <button class="nav-item" data-view="pipelines" onclick="navigate('pipelines')">
+                    <svg class="nav-icon" viewBox="0 0 20 20" fill="currentColor"><path d="M2 4h6v4H2V4zm8 0h8v4h-8V4zM6 8h4v4H6V8zm2-2h2v2h4v6h-4v-4H6V12H4V8h4V6z"/></svg>
+                    <span data-i18n="nav.pipelines">Пайплайны</span>
+                </button>
             </nav>
             <div class="sidebar-divider"></div>
             <div class="sidebar-label" data-i18n="nav.advanced">РАСШИРЕННО</div>
@@ -308,6 +312,30 @@
                 <div class="empty-state" id="models-empty" style="display:none;">
                     <p data-i18n="models.empty">Модели не добавлены.</p>
                     <button class="btn btn-primary" onclick="openWizard()" data-i18n="models.empty_cta">Добавить первую модель</button>
+                </div>
+            </section>
+
+            <!-- View: Pipelines -->
+            <section class="view" id="view-pipelines">
+                <div class="view-header">
+                    <h1 data-i18n="pipelines.title">Пайплайны</h1>
+                    <button class="btn btn-primary" onclick="openCreatePipelineModal()" data-i18n="pipelines.add">+ Создать пайплайн</button>
+                </div>
+                <div class="empty-state" id="pipelines-empty" style="display:none;">
+                    <p data-i18n="pipelines.empty">Пайплайны не созданы.</p>
+                    <button class="btn btn-primary" onclick="openCreatePipelineModal()" data-i18n="pipelines.empty_cta">Создать первый пайплайн</button>
+                </div>
+                <div id="pipelines-compact" class="compact-list"></div>
+                <div id="pipelines-table-wrap">
+                    <table class="data-table">
+                        <thead><tr>
+                            <th data-i18n="pipelines.col.name">Имя</th>
+                            <th data-i18n="pipelines.col.models">Модели</th>
+                            <th data-i18n="pipelines.col.autostart">Автостарт</th>
+                            <th></th>
+                        </tr></thead>
+                        <tbody id="pipelines-body"></tbody>
+                    </table>
                 </div>
             </section>
 
@@ -477,6 +505,27 @@
                 <div class="form-group"><label data-i18n="runtimes.field.env">Окружение</label><div id="rt-edit-env-container"></div>
                 <button type="button" class="btn btn-ghost btn-sm" onclick="addEnvRow('rt-edit-env-container')">+ Переменная</button></div>
                 <div class="modal-actions"><button type="submit" class="btn btn-primary" data-i18n="runtimes.btn.save">Сохранить</button><button type="button" class="btn btn-ghost" onclick="closeModal('edit-runtime-modal')" data-i18n="common.cancel">Отмена</button></div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Pipeline Editor Modal (create + edit) -->
+    <div id="pipeline-modal" class="modal-overlay" style="display:none;">
+        <div class="modal-box modal-wide">
+            <div class="modal-header"><h2 id="pipeline-modal-title" data-i18n="pipelines.create.title">Создать пайплайн</h2><button class="modal-close" onclick="closeModal('pipeline-modal')">&times;</button></div>
+            <form id="pipeline-form" onsubmit="return handlePipelineSubmit(event)">
+                <input type="hidden" name="id">
+                <div class="form-group"><label data-i18n="pipelines.field.name">Имя *</label><input type="text" name="name" required></div>
+                <div class="form-group">
+                    <label class="filter-switch"><span class="toggle-switch toggle-pipeline"><input type="checkbox" name="active"><span class="toggle-slider"></span></span><span data-i18n="pipelines.field.active">Автостарт GoAl</span></label>
+                    <div><small class="hint" data-i18n="pipelines.field.active_hint">Запускает пайплайн при старте GoAl. На кнопку «Старт» не влияет.</small></div>
+                </div>
+                <div class="form-group">
+                    <label data-i18n="pipelines.field.models">Модели (порядок запуска) *</label>
+                    <div id="pl-models-container"></div>
+                    <button type="button" class="btn btn-ghost btn-sm" onclick="addPlModelRow()" data-i18n="pipelines.btn.add_model">+ Модель</button>
+                </div>
+                <div class="modal-actions"><button type="submit" class="btn btn-primary" id="pipeline-submit-btn" data-i18n="pipelines.btn.create">Создать</button><button type="button" class="btn btn-ghost" onclick="closeModal('pipeline-modal')" data-i18n="common.cancel">Отмена</button></div>
             </form>
         </div>
     </div>

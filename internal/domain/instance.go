@@ -41,6 +41,10 @@ type LaunchInstance struct {
 	ModelName string     `json:"model_name,omitempty"`
 	RuntimeID string     `json:"runtime_id"`
 
+	// PipelineID attributes the instance to a Pipeline launch (ADR 010 D1.4).
+	// Empty for manual / model-endpoint / model-autostart launches.
+	PipelineID string `json:"pipeline_id,omitempty"`
+
 	// Process info populated at launch time.
 	PID       int           `json:"pid,omitempty"`
 	State     InstanceState `json:"state"`
@@ -146,6 +150,7 @@ func ToStorageEntry(i *LaunchInstance) *LaunchInstanceEntry {
 		ModelID:          i.ModelID,
 		ModelName:        i.ModelName,
 		RuntimeID:        i.RuntimeID,
+		PipelineID:       i.PipelineID,
 		Executable:       i.Executable,
 		Args:             i.Args,
 		WorkingDirectory: i.WorkingDirectory,
@@ -175,6 +180,7 @@ func ToDomain(e *LaunchInstanceEntry) *LaunchInstance {
 		ModelID:          e.ModelID,
 		ModelName:        e.ModelName,
 		RuntimeID:        e.RuntimeID,
+		PipelineID:       e.PipelineID,
 		PID:              e.PID,
 		State:            InstanceState(e.State),
 		StartedAt:        e.StartedAt,

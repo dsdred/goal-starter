@@ -10,6 +10,7 @@ type LaunchInstanceEntry struct {
 	ModelID          string            `json:"model_id"`
 	ModelName        string            `json:"model_name,omitempty"`
 	RuntimeID        string            `json:"runtime_id"`
+	PipelineID       string            `json:"pipeline_id,omitempty"`
 	Executable       string            `json:"executable,omitempty"`
 	Args             []string          `json:"args,omitempty"`
 	WorkingDirectory string            `json:"working_directory,omitempty"`

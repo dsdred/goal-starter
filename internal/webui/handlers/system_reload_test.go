@@ -77,6 +77,7 @@ func newReloadEnv(t *testing.T) *reloadEnv {
 		application.NewInstanceService(sup, repo),
 		application.NewRuntimeService(repo),
 		application.NewModelService(repo),
+		application.NewPipelineService(sup, repo),
 		sup,
 		repo,
 		security.NewCSRF(),

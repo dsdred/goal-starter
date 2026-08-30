@@ -2,21 +2,24 @@
 
 GoAl is a single-binary application composed of distinct ownership layers. This document describes the current GoAl 2.0 architecture.
 
-## Domain Model (v7)
+## Domain Model (v8)
 
-GoAl 2.0 uses a simplified 3-entity domain:
+GoAl 2.0 uses a simplified 4-entity domain:
 
 - **Runtime** — execution engine configuration (executable, working directory, environment)
 - **Model** — configured launch definition (runtime reference, launch args, environment, autostart)
 - **Instance** — concrete launch history (immutable record of a process launch)
+- **Pipeline** — ordered group of existing Models with group lifecycle and a per-model all-or-nothing Args override (ADR 010). Persisted under the `pipelines` key (schema v8); instances it launches carry `pipeline_id`.
 
 All launch parameters (`--host`, `--port`, `-m`, `--mmproj`, etc.) are expressed
-through Model Args. There are no separate host/port fields on Model.
+through Model Args. There are no separate host/port fields on Model. A Pipeline never
+stores launch parameters of its own — each entry either overrides the referenced Model's
+Args entirely (non-empty) or defers to `Model.Args` (empty).
 
 Physical model files (GGUF, MMProj) are NOT separate domain entities. They are ordinary
 launch arguments (e.g., `-m <path>`, `--mmproj <path>`).
 
-Relationship: Runtime ← Model → Instance
+Relationship: Runtime ← Model → Instance; Pipeline → (ordered) Model references
 
 ## Composition root
 
@@ -158,4 +161,4 @@ config ← main (loaded once at startup)
 | 0007 | Full audit logging (structured security events, `goal_audit.jsonl`) | Accepted |
 | 0008 | Recovery: kill of an orphan (identity re-verified destructive termination) | Accepted |
 | 0009 | Hot-reload wiring (field classification, explicit `POST /api/v1/admin/reload`) | Accepted |
-| 0010 | Pipeline: group launch of existing Models with per-model Args override (Accepted 2026-08-29, implementation pending) | Accepted |
+| 0010 | Pipeline: group launch of existing Models with per-model Args override (Accepted 2026-08-29, implemented 2026-08-31 — schema v8, group lifecycle, 8-endpoint API, lifecycle audit, Pipelines UI, `tests/browser/pipeline.cjs`) | Accepted |

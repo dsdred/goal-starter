@@ -337,6 +337,7 @@ func newSettingsSecurityRouter(t *testing.T, configPath string) http.Handler {
 		application.NewInstanceService(supervisor, repo),
 		application.NewRuntimeService(repo),
 		application.NewModelService(repo),
+		application.NewPipelineService(supervisor, repo),
 		supervisor,
 		repo,
 		security.NewCSRF(),

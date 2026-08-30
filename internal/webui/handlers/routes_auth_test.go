@@ -35,6 +35,7 @@ func newAuthenticatedTestRouter(t *testing.T) http.Handler {
 		application.NewInstanceService(supervisor, repo),
 		application.NewRuntimeService(repo),
 		application.NewModelService(repo),
+		application.NewPipelineService(supervisor, repo),
 		supervisor,
 		repo,
 		security.NewCSRF(),

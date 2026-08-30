@@ -29,6 +29,7 @@ type RouteRegistry struct {
 	runtimeHandler    *RuntimesHandler
 	modelHandler      *ModelsHandler
 	instanceHandler   *InstancesHandler
+	pipelineHandler   *PipelineHandler
 	systemHandler     *SystemHandler
 	auditHandler      *AuditHandler
 	csrf              *security.CSRF
@@ -89,13 +90,16 @@ func WithLiveConfig(cfg *config.Config) RouteRegistryOption {
 }
 
 // WithAuditLogger wires the durable audit logger (ADR 007) into the auth,
-// system, and instance handlers and the login rate-limit wrapper.
+// system, instance, and pipeline handlers and the login rate-limit wrapper.
 func WithAuditLogger(logger *audit.AuditLogger) RouteRegistryOption {
 	return func(r *RouteRegistry) {
 		r.audit = logger
 		r.authHandler.WithAudit(logger)
 		r.systemHandler.WithAudit(logger)
 		r.instanceHandler.WithAudit(logger).WithSessionStore(r.sessionStore)
+		if r.pipelineHandler != nil {
+			r.pipelineHandler.WithAudit(logger).WithSessionStore(r.sessionStore)
+		}
 		r.auditHandler = NewAuditHandler(logger)
 	}
 }
@@ -104,6 +108,7 @@ func NewRouteRegistry(
 	instanceSvc *application.InstanceService,
 	runtimeSvc *application.RuntimeService,
 	modelSvc *application.ModelService,
+	pipelineSvc *application.PipelineService,
 	supervisor *process.Supervisor,
 	repo storage.Repository,
 	csrf *security.CSRF,
@@ -116,12 +121,16 @@ func NewRouteRegistry(
 		runtimeHandler:  NewRuntimesHandler(runtimeSvc, instanceSvc, supervisor, csrf),
 		modelHandler:    NewModelsHandler(modelSvc, instanceSvc, supervisor, repo, csrf),
 		instanceHandler: NewInstancesHandler(instanceSvc, csrf),
+		pipelineHandler: NewPipelineHandler(pipelineSvc, repo, instanceSvc, csrf),
 		systemHandler:   NewSystemHandler(supervisor, sessionStore, csrf, instanceSvc),
 		csrf:            csrf,
 		sessionStore:    sessionStore,
 		passwordStore:   passwordStore,
 		loginLimiter:    security.NewRateLimiter(loginRateLimit, loginRateWindow),
 		authEnabled:     true,
+	}
+	if pipelineSvc != nil {
+		modelSvc.WithPipelineIntegrity(pipelineSvc.ListPipelinesReferencingModel)
 	}
 	r.systemHandler.passStore = passwordStore
 	for _, opt := range opts {
@@ -195,6 +204,16 @@ func (r *RouteRegistry) Build() http.Handler {
 	mux.HandleFunc("POST /api/v1/runtimes/{id}/replace", r.requireAuthCSRF(r.runtimeHandler.Replace))
 	mux.HandleFunc("POST /api/v1/runtimes/{id}/cascade-delete", r.requireAuthCSRF(r.runtimeHandler.CascadeDelete))
 	mux.HandleFunc("POST /api/v1/runtimes/{id}/action/{action}", r.requireAuthCSRF(r.runtimeHandler.Action))
+
+	// Pipelines (ADR 010 D5).
+	mux.HandleFunc("GET /api/v1/pipelines", r.requireAuth(r.pipelineHandler.List))
+	mux.HandleFunc("GET /api/v1/pipelines/{id}", r.requireAuth(r.pipelineHandler.Get))
+	mux.HandleFunc("POST /api/v1/pipelines", r.requireAuthCSRF(r.pipelineHandler.Create))
+	mux.HandleFunc("PUT /api/v1/pipelines/{id}", r.requireAuthCSRF(r.pipelineHandler.Update))
+	mux.HandleFunc("DELETE /api/v1/pipelines/{id}", r.requireAuthCSRF(r.pipelineHandler.Delete))
+	mux.HandleFunc("POST /api/v1/pipelines/{id}/start", r.requireAuthCSRF(r.pipelineHandler.Start))
+	mux.HandleFunc("POST /api/v1/pipelines/{id}/stop", r.requireAuthCSRF(r.pipelineHandler.Stop))
+	mux.HandleFunc("POST /api/v1/pipelines/{id}/restart", r.requireAuthCSRF(r.pipelineHandler.Restart))
 
 	mux.HandleFunc("/", r.systemHandler.ServeIndex)
 

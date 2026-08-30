@@ -37,6 +37,7 @@ type App struct {
 	instanceSvc   *application.InstanceService
 	runtimeSvc    *application.RuntimeService
 	modelSvc      *application.ModelService
+	pipelineSvc   *application.PipelineService
 	repo          storage.Repository
 	csrf          *security.CSRF
 	passwordStore *security.PasswordStore
@@ -57,6 +58,7 @@ func NewApp(cfg *config.Config, repo storage.Repository, supervisor *process.Sup
 	instanceSvc := application.NewInstanceService(supervisor, repo)
 	runtimeSvc := application.NewRuntimeService(repo)
 	modelSvc := application.NewModelService(repo)
+	pipelineSvc := application.NewPipelineService(supervisor, repo)
 
 	dataDir := cfg.DataDir
 	if dataDir == "" {
@@ -69,6 +71,7 @@ func NewApp(cfg *config.Config, repo storage.Repository, supervisor *process.Sup
 		instanceSvc:   instanceSvc,
 		runtimeSvc:    runtimeSvc,
 		modelSvc:      modelSvc,
+		pipelineSvc:   pipelineSvc,
 		repo:          repo,
 		csrf:          security.NewCSRF(),
 		passwordStore: security.NewPasswordStore(),
@@ -105,6 +108,7 @@ func (a *App) InitRegistry() {
 		a.instanceSvc,
 		a.runtimeSvc,
 		a.modelSvc,
+		a.pipelineSvc,
 		a.supervisor,
 		a.repo,
 		a.csrf,

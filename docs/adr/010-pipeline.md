@@ -1,6 +1,6 @@
 # ADR 010: Pipeline — Group Launch of Existing Models with Per-Model Args Override
 
-**Status:** Accepted — owner contract agreed 2026-08-29 (D1–D7 incl. the agreed changes: `Pipeline.Active` / per-entry `AutoStart`, reverse-order stop, always-start restart, `failed`-start terminal record, startup-autostart semantics; pipeline-level concurrency cap and pipeline CRUD audit confirmed out of MVP). Implementation NOT STARTED.
+**Status:** Accepted — owner contract agreed 2026-08-29 (D1–D7 incl. the agreed changes: `Pipeline.Active` / per-entry `AutoStart`, reverse-order stop, always-start restart, `failed`-start terminal record, startup-autostart semantics; pipeline-level concurrency cap and pipeline CRUD audit confirmed out of MVP). **Implemented 2026-08-31** — all 16 acceptance items satisfied: storage schema v8 (additive `pipelines` key + `pipeline_id` instance attribution), `PipelineService` group lifecycle, 8-endpoint API (auth + CSRF), additive ADR 007 lifecycle audit events, deterministic startup autostart (D4), the Pipelines UI (EN/RU, responsive), and the maintained `tests/browser/pipeline.cjs` regression. See ROADMAP P1 "Pipeline MVP".
 **Date:** 2026-08-29
 **Related:** ROADMAP P1 "Pipeline MVP" and "Pipeline contract (design note)", ADR 002 (Supervisor and Instance Model), ADR 004 (Config vs Repository ownership), ADR 005 (Recovery — Orphan Detection), ADR 007 (Audit Logging — event taxonomy), ADR 008 (Kill of an Orphan — post-kill lifecycle)
 

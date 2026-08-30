@@ -498,15 +498,15 @@ func TestMigration_V5toV6_EdgeCases(t *testing.T) {
 		if len(instances) != 0 {
 			t.Errorf("expected 0 instances, got %d", len(instances))
 		}
-		if repo.SchemaVersion() != 7 {
-			t.Errorf("SchemaVersion = %d, want 7", repo.SchemaVersion())
+		if repo.SchemaVersion() != 8 {
+			t.Errorf("SchemaVersion = %d, want 8", repo.SchemaVersion())
 		}
 		if err := repo.Upgrade(); err != nil {
 			t.Fatalf("Upgrade: %v", err)
 		}
 		repo2, runtimes2, models2, instances2 := loadMigrated(t, path)
-		if repo2.SchemaVersion() != 7 {
-			t.Errorf("reloaded SchemaVersion = %d, want 7", repo2.SchemaVersion())
+		if repo2.SchemaVersion() != 8 {
+			t.Errorf("reloaded SchemaVersion = %d, want 8", repo2.SchemaVersion())
 		}
 		if len(runtimes2) != 0 || len(models2) != 0 || len(instances2) != 0 {
 			t.Errorf("after reload: runtimes=%d models=%d instances=%d (want 0 each)",
