@@ -469,10 +469,10 @@ func TestAutostartPipelines_FailureDoesNotBlockStartup(t *testing.T) {
 	if modelStarted != 1 {
 		t.Errorf("model-level autostart after pipeline failure: instances = %d, want 1", modelStarted)
 	}
-	// A resolve failure (missing executable) persists no instance record —
-	// the standard Supervisor semantics, same as a manual model start.
-	if badStarted != 0 {
-		t.Errorf("resolve-failed entry: instances = %d, want 0", badStarted)
+	// A start failure (missing executable → os.Stat in Manager.Start) persists
+	// a terminal failed instance record (ADR 010 standard Supervisor semantics).
+	if badStarted != 1 {
+		t.Errorf("start-failed entry: instances = %d, want 1 (terminal failed record persisted)", badStarted)
 	}
 }
 

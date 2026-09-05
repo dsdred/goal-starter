@@ -12,15 +12,13 @@ import (
 // Builder creates MSI installer using WiX Toolset.
 type Builder struct {
 	// Paths configuration
-	BinaryPath      string
-	InstallScript   string
-	UninstallScript string
-	ExampleConfig   string
-	ReadmePath      string
-	ReadmeRuPath    string
-	WiXDir          string // Path to wix directory (contains light.exe, candle.exe)
-	OutputPath      string
-	Version         string
+	BinaryPath    string
+	ExampleConfig string
+	ReadmePath    string
+	ReadmeRuPath  string
+	WiXDir        string // Path to wix directory (contains light.exe, candle.exe)
+	OutputPath    string
+	Version       string
 
 	// Internal state
 	wixObjPath string // set after candle compilation
@@ -62,20 +60,6 @@ func (b *Builder) validate() error {
 	}
 	if _, err := os.Stat(b.BinaryPath); os.IsNotExist(err) {
 		return fmt.Errorf("binary not found: %s", b.BinaryPath)
-	}
-
-	if b.InstallScript == "" {
-		return fmt.Errorf("install script path is required")
-	}
-	if _, err := os.Stat(b.InstallScript); os.IsNotExist(err) {
-		return fmt.Errorf("install script not found: %s", b.InstallScript)
-	}
-
-	if b.UninstallScript == "" {
-		return fmt.Errorf("uninstall script path is required")
-	}
-	if _, err := os.Stat(b.UninstallScript); os.IsNotExist(err) {
-		return fmt.Errorf("uninstall script not found: %s", b.UninstallScript)
 	}
 
 	if b.ExampleConfig == "" {
@@ -151,8 +135,6 @@ func (b *Builder) compileWXS() error {
 		"-arch", "x64",
 		fmt.Sprintf("-DVersion=%s", b.Version),
 		fmt.Sprintf("-DBinaryPath=%s", b.BinaryPath),
-		fmt.Sprintf("-DInstallScriptPath=%s", b.InstallScript),
-		fmt.Sprintf("-DUninstallScriptPath=%s", b.UninstallScript),
 		fmt.Sprintf("-DExampleConfigPath=%s", b.ExampleConfig),
 		fmt.Sprintf("-DReadmePath=%s", b.ReadmePath),
 		fmt.Sprintf("-DReadmeRuPath=%s", b.ReadmeRuPath),
@@ -258,19 +240,17 @@ func normalizeVersion(v string) string {
 
 // BuildMSI is the high-level function to build an installer.
 // It tries MSI first, falls back to SFX if WiX is not available.
-func BuildMSI(binaryPath, installScript, uninstallScript, exampleConfig, readme, readmeRu, output, version string) error {
+func BuildMSI(binaryPath, exampleConfig, readme, readmeRu, output, version string) error {
 	// Try WiX MSI first
 	if getWixDirForBuilder() != "" || CheckWiXAvailability() == nil {
 		return (&Builder{
-			BinaryPath:      binaryPath,
-			InstallScript:   installScript,
-			UninstallScript: uninstallScript,
-			ExampleConfig:   exampleConfig,
-			ReadmePath:      readme,
-			ReadmeRuPath:    readmeRu,
-			OutputPath:      output,
-			Version:         version,
-			WiXDir:          getWixDirForBuilder(),
+			BinaryPath:    binaryPath,
+			ExampleConfig: exampleConfig,
+			ReadmePath:    readme,
+			ReadmeRuPath:  readmeRu,
+			OutputPath:    output,
+			Version:       version,
+			WiXDir:        getWixDirForBuilder(),
 		}).Build()
 	}
 
@@ -279,7 +259,7 @@ func BuildMSI(binaryPath, installScript, uninstallScript, exampleConfig, readme,
 	if len(output) > 4 && output[len(output)-4:] == ".msi" {
 		sfxOutput = output[:len(output)-4] + ".zip"
 	}
-	return BuildSFX(binaryPath, installScript, uninstallScript, exampleConfig, readme, readmeRu, sfxOutput, version)
+	return BuildSFX(binaryPath, exampleConfig, readme, readmeRu, sfxOutput, version)
 }
 
 // getWixDir attempts to locate the WiX tools directory.

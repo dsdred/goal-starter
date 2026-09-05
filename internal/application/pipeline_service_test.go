@@ -244,10 +244,10 @@ func TestPipelineStart_BestEffortFailure(t *testing.T) {
 	}
 }
 
-// A missing executable fails at resolve — the same standard Supervisor
-// semantics as a manual model start: a bounded resolve-failed reason and no
-// instance record (the pending record is only persisted after resolve).
-func TestPipelineStart_MissingExecutableResolveFailed(t *testing.T) {
+// A missing executable fails at Manager.Start (os.Stat) — standard Supervisor
+// failure semantics: a terminal "failed" instance record IS persisted (ADR 010),
+// and the bounded reason is start-failed.
+func TestPipelineStart_MissingExecutableStartFailed(t *testing.T) {
 	e := newPipelineEnv(t)
 	ctx := context.Background()
 
@@ -258,7 +258,7 @@ func TestPipelineStart_MissingExecutableResolveFailed(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("UpdateRuntime: %v", err)
 	}
-	pipe := e.addPipeline(t, "resolve-fail",
+	pipe := e.addPipeline(t, "start-fail",
 		storage.PipelineModel{ModelID: m1},
 		storage.PipelineModel{ModelID: m2},
 	)
@@ -271,11 +271,11 @@ func TestPipelineStart_MissingExecutableResolveFailed(t *testing.T) {
 	if res.Results[0].Status != OutcomeStarted {
 		t.Fatalf("m1 = %+v, want started (failure must not block)", res.Results[0])
 	}
-	if res.Results[1].Status != OutcomeFailed || res.Results[1].Error != ReasonResolveFailed {
-		t.Fatalf("m2 = %+v, want failed/resolve-failed", res.Results[1])
+	if res.Results[1].Status != OutcomeFailed || res.Results[1].Error != ReasonStartFailed {
+		t.Fatalf("m2 = %+v, want failed/start-failed", res.Results[1])
 	}
-	if got := e.instancesFor(t, "m2"); len(got) != 0 {
-		t.Fatalf("resolve failure persists no instance record (same as manual start): %+v", got)
+	if got := e.instancesFor(t, "m2"); len(got) != 1 {
+		t.Fatalf("start failure persists a terminal failed instance (ADR 010): got %d, want 1: %+v", len(got), got)
 	}
 }
 

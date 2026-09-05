@@ -5,19 +5,37 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
+	"strings"
+	"sync"
 	"syscall"
 	"time"
 
 	"github.com/dsdred/goal/internal/application"
 	"github.com/dsdred/goal/internal/config"
 	"github.com/dsdred/goal/internal/domain"
+	"github.com/dsdred/goal/internal/platform"
 	"github.com/dsdred/goal/internal/process"
 	"github.com/dsdred/goal/internal/storage"
 	"github.com/dsdred/goal/internal/version"
 	"github.com/dsdred/goal/internal/webui"
+)
+
+const (
+	serviceDefaultName = "GoAl"
+	serviceDisplayName = "GoAl - Local AI Runtime Manager"
+	serviceDescription = "GoAl - local AI runtime and model manager: instance lifecycle, Web UI, and audit as a Windows service (ADR 011)."
+)
+
+// appRepo and appRepoMu expose the running repository to the SCM Interrogate
+// response (ADR 011 D6.4: real state derived from the Supervisor snapshot).
+var (
+	appRepo   storage.Repository
+	appRepoMu sync.RWMutex
 )
 
 func main() {
@@ -27,6 +45,9 @@ func main() {
 	}
 	configPath := flag.String("config", defaultConfig, "path to configuration file (env: GOAL_CONFIG)")
 	showVersion := flag.Bool("version", false, "print version and exit")
+	service := flag.String("service", "", "Windows service verb: install, uninstall, start, stop, restart, status, run (Windows only; ADR 011)")
+	serviceName := flag.String("service-name", serviceDefaultName, "Windows service name (default GoAl)")
+	serviceStart := flag.String("start", "auto", "Windows service start type for install: auto or manual")
 	flag.Parse()
 
 	if *showVersion {
@@ -34,17 +55,174 @@ func main() {
 		os.Exit(0)
 	}
 
-	cfg, err := config.Load(*configPath)
+	if *service != "" {
+		os.Exit(serviceMain(*service, *serviceName, *serviceStart, *configPath))
+	}
+
+	os.Exit(foregroundMain(*configPath))
+}
+
+// foregroundMain is the unchanged foreground entry: the lifecycle context comes
+// from OS signals and the application runs the shared lifecycle.
+func foregroundMain(configPath string) int {
+	appCtx, appStop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer appStop()
+	if err := runApplication(configPath, appCtx); err != nil {
+		return 1
+	}
+	return 0
+}
+
+// serviceMain dispatches the --service verbs (ADR 011 D1). On non-Windows
+// platforms every verb returns the bounded "not supported" error.
+func serviceMain(verb, name, startType, configPath string) int {
+	m := platform.NewServiceManager()
+	switch verb {
+	case "run":
+		return serviceRun(m, name, configPath)
+	case "install":
+		return serviceInstall(m, name, startType, configPath)
+	case "uninstall":
+		if err := m.Uninstall(name); err != nil {
+			return serviceFail(err)
+		}
+		fmt.Printf("service %q uninstalled (registration removed; user data untouched)\n", name)
+		return 0
+	case "start":
+		if err := m.Start(name); err != nil {
+			return serviceFail(err)
+		}
+		fmt.Printf("service %q is Running\n", name)
+		return 0
+	case "stop":
+		if err := m.Stop(name); err != nil {
+			return serviceFail(err)
+		}
+		fmt.Printf("service %q is Stopped\n", name)
+		return 0
+	case "restart":
+		if err := m.Restart(name); err != nil {
+			return serviceFail(err)
+		}
+		fmt.Printf("service %q restarted (Stop -> Stopped -> Start -> Running)\n", name)
+		return 0
+	case "status":
+		st, err := m.Status(name)
+		if err != nil {
+			return serviceFail(err)
+		}
+		fmt.Printf("service %q: state=%s pid=%d uptime=%s\n", name, st.State, st.PID, st.Uptime)
+		return 0
+	default:
+		return serviceFail(fmt.Errorf("service: unknown verb %q (expected install, uninstall, start, stop, restart, status, run)", verb))
+	}
+}
+
+func serviceFail(err error) int {
+	fmt.Fprintln(os.Stderr, err)
+	return 1
+}
+
+// serviceRun is the internal SCM entrypoint (ADR 011 D1.2). It is valid only
+// under an SCM session; outside one the manager returns a bounded error.
+func serviceRun(m platform.ServiceManager, name, configPath string) int {
+	addr := ""
+	if cfg, err := config.LoadReadOnly(configPath); err == nil {
+		addr = net.JoinHostPort(cfg.ListenAddress, strconv.Itoa(cfg.WebPort))
+	}
+	err := m.RunService(platform.ServiceRunOptions{
+		Name:      name,
+		ServeAddr: addr,
+		RunApp:    func(ctx context.Context) error { return runApplication(configPath, ctx) },
+		StatusText: func() string {
+			appRepoMu.RLock()
+			repo := appRepo
+			appRepoMu.RUnlock()
+			if repo == nil {
+				return "application starting"
+			}
+			instances, err := repo.ListInstances()
+			if err != nil {
+				return "instance state unavailable"
+			}
+			counts := map[string]int{}
+			for _, inst := range instances {
+				counts[inst.State]++
+			}
+			parts := make([]string, 0, len(counts))
+			for state, n := range counts {
+				parts = append(parts, fmt.Sprintf("%s=%d", state, n))
+			}
+			if len(parts) == 0 {
+				return "no instances"
+			}
+			return "instances: " + strings.Join(parts, ", ")
+		},
+	})
+	if err != nil {
+		return serviceFail(err)
+	}
+	return 0
+}
+
+// serviceInstall validates (D3 pre-flight, refuse before register) and then
+// registers the service without starting it (D5).
+func serviceInstall(m platform.ServiceManager, name, startType, configPath string) int {
+	exe, err := os.Executable()
+	if err != nil {
+		return serviceFail(fmt.Errorf("service: resolve executable: %w", err))
+	}
+	exe, err = filepath.Abs(filepath.Clean(exe))
+	if err != nil {
+		return serviceFail(fmt.Errorf("service: resolve executable: %w", err))
+	}
+	absCfg, problems := serviceInstallPreflight(exe, configPath)
+	if len(problems) > 0 {
+		fmt.Fprintln(os.Stderr, "service install refused (no registration created, no files written):")
+		for _, p := range problems {
+			fmt.Fprintln(os.Stderr, "  - "+p)
+		}
+		return 1
+	}
+	st := platform.StartTypeAuto
+	if startType == "manual" {
+		st = platform.StartTypeManual
+	}
+	req := platform.InstallRequest{
+		Name:        name,
+		DisplayName: serviceDisplayName,
+		Description: serviceDescription,
+		ExePath:     exe,
+		ConfigPath:  absCfg,
+		StartType:   st,
+		StopTimeout: platform.DefaultStopTimeout,
+	}
+	if err := m.Install(req); err != nil {
+		return serviceFail(err)
+	}
+	fmt.Printf("service %q registered: account LocalSystem, start type %s, stop timeout 45s\n", name, startType)
+	fmt.Printf("image: %q\n", serviceImageString(exe, absCfg))
+	fmt.Printf("the service was NOT started; start it explicitly: goal --service start --service-name %s\n", name)
+	return 0
+}
+
+// runApplication executes the one shared application lifecycle used by both
+// foreground and service modes (ADR 011 D1.3/D6.1): config load → credential
+// migration → ValidateFull → repository init/seed → Recover → ADR 010
+// autostart → webui. ctx is the lifecycle context (OS signals in foreground,
+// the SCM stop request in service mode). A non-nil return is a failure.
+func runApplication(configPath string, ctx context.Context) error {
+	cfg, err := config.Load(configPath)
 	if err != nil {
 		slog.Error("load config", "error", err)
-		os.Exit(1)
+		return err
 	}
 
 	// Migrate legacy plaintext credentials to bcrypt hash.
-	cfg, migrated, err := config.MigrateCredentials(cfg, *configPath)
+	cfg, migrated, err := config.MigrateCredentials(cfg, configPath)
 	if err != nil {
 		slog.Error("credential migration failed", "error", err)
-		os.Exit(1)
+		return err
 	}
 	if migrated {
 		slog.Info("credential migrated to bcrypt hash")
@@ -54,7 +232,7 @@ func main() {
 	if err := cfg.ValidateFull(); err != nil {
 		slog.Error("config validation failed", "error", err)
 		fmt.Fprintf(os.Stderr, "Configuration error: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 
 	dataDir := cfg.DataDir
@@ -68,8 +246,12 @@ func main() {
 	repo, err := storage.NewJSONRepository(repoPath)
 	if err != nil {
 		slog.Error("init repository", "error", err)
-		os.Exit(1)
+		return err
 	}
+
+	appRepoMu.Lock()
+	appRepo = repo
+	appRepoMu.Unlock()
 
 	// Migrate legacy data if needed.
 	oldProfilesPath := filepath.Join(dataDir, "profiles.json")
@@ -86,20 +268,14 @@ func main() {
 	// Seed repository from config file (initial runtimes/models/profiles).
 	storage.SeedFromConfig(repo, &cfg)
 
-	// Create application-level context for Supervisor lifecycle.
-	// All instance processes inherit this context, so HTTP request timeouts
-	// do not kill running processes.
-	appCtx, appStop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer appStop()
-
 	// Create Supervisor with lifecycle context.
-	supervisor := process.NewSupervisorWithContext(appCtx, repo)
+	supervisor := process.NewSupervisorWithContext(ctx, repo)
 
 	// Recover instances from previous runs that were not properly stopped.
 	// Marks running/starting/stopping/pending instances as stale.
 	if err := supervisor.Recover(context.Background()); err != nil {
 		slog.Error("supervisor recovery", "error", err)
-		os.Exit(1)
+		return err
 	}
 
 	// Autostart (ADR 010 D4): pipeline autostart runs BEFORE model-level
@@ -107,27 +283,27 @@ func main() {
 	// instance — the pipeline-owned one; model-level autostart then skips
 	// it (already-running).
 	pipelineSvc := application.NewPipelineService(supervisor, repo)
-	autostartPipelines(appCtx, repo, pipelineSvc)
-	autostartModels(appCtx, repo, supervisor)
+	autostartPipelines(ctx, repo, pipelineSvc)
+	autostartModels(ctx, repo, supervisor)
 
 	// Create and initialize the web UI app.
 	app, err := webui.NewApp(&cfg, repo, supervisor)
 	if err != nil {
 		slog.Error("init webui", "error", err)
-		os.Exit(1)
+		return err
 	}
 
 	// Set config path for settings save endpoint.
-	app.SetConfigPath(*configPath)
+	app.SetConfigPath(configPath)
 
 	// Initialize route registry.
 	app.InitRegistry()
 
 	// Start periodic health check goroutine.
-	go app.StartHealthChecker(appCtx)
+	go app.StartHealthChecker(ctx)
 
 	// Run the application (HTTP server).
-	runErr := app.Run(appCtx)
+	runErr := app.Run(ctx)
 
 	// Gracefully shutdown all instance processes and persist final states.
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -147,8 +323,12 @@ func main() {
 	}
 
 	if runErr != nil || shutdownErr != nil {
-		os.Exit(1)
+		if runErr != nil {
+			return runErr
+		}
+		return shutdownErr
 	}
+	return nil
 }
 
 // autostartModels starts all models marked as Active after recovery.

@@ -240,6 +240,47 @@ func TestLogStoreCollectAllWithInstanceID(t *testing.T) {
 	}
 }
 
+// TestLogStoreCollectAllPreservesSequence verifies that CollectAllWithInstanceID
+// propagates the LogStore-assigned sequence numbers into AggregatedLogEntry.
+// Without this, SSE replay sends sequence:0 for every event and the frontend
+// dedup (seq <= lastLogSeq, both initially 0) rejects all lines.
+func TestLogStoreCollectAllPreservesSequence(t *testing.T) {
+	store := NewLogStore(1000)
+
+	base := time.Date(2026, 9, 5, 12, 0, 0, 0, time.UTC)
+	store.Add(LogEvent{Time: base, Stream: "stdout", Message: "line1"})
+	store.Add(LogEvent{Time: base.Add(time.Second), Stream: "stdout", Message: "line2"})
+	store.Add(LogEvent{Time: base.Add(2 * time.Second), Stream: "stderr", Message: "line3"})
+
+	entries := store.CollectAllWithInstanceID("inst-1")
+	if len(entries) != 3 {
+		t.Fatalf("expected 3 entries, got %d", len(entries))
+	}
+
+	for i, e := range entries {
+		want := uint64(i + 1)
+		if e.Sequence != want {
+			t.Errorf("entry[%d].Sequence = %d, want %d", i, e.Sequence, want)
+		}
+		if e.InstanceID != "inst-1" {
+			t.Errorf("entry[%d].InstanceID = %q, want %q", i, e.InstanceID, "inst-1")
+		}
+	}
+
+	// Verify through the same code path the SSE handler uses:
+	// Supervisor.QueryLogs -> CollectAllWithInstanceID -> QueryAggregatedLogs
+	// -> LogEvent{Sequence: e.Sequence, ...}
+	result := QueryAggregatedLogs(entries, LogQuery{Page: 1, PageSize: 50})
+	if result.Total != 3 {
+		t.Fatalf("QueryAggregatedLogs total = %d, want 3", result.Total)
+	}
+	for i, ev := range result.Items {
+		if ev.Sequence == 0 {
+			t.Errorf("result.Items[%d].Sequence = 0 (would be dropped by frontend dedup)", i)
+		}
+	}
+}
+
 // TestLogBrokerDropCounter verifies DroppedEvents counter.
 func TestLogBrokerDropCounter(t *testing.T) {
 	broker := NewLogBroker(10)

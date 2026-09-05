@@ -101,9 +101,9 @@ Schema version is tracked (`version` field) with automatic migrations for config
 
 ## Packaging
 
-### Windows only via PowerShell service scripts
+### Windows service: in-binary registration only
 
-`deploy/windows/install-service.ps1` and `uninstall-service.ps1` provide Windows service installation. No MSI installer or Chocolatey package.
+Windows service installation is provided by the binary itself: `goal --service install` (Administrator required; [ADR 011](adr/011-windows-service.md)). Install refuses registration unless the resolved config passes validation, the effective `dataDir` exists (install never creates it), and all runtime executables/working directories and model paths (config-seeded and current repository) are absolute paths — relative or missing paths are never a supported service configuration and are not reinterpreted at runtime. The service account is LocalSystem: everything the service touches must be accessible to LocalSystem, and `C:\Users\<user>\…` locations are not a supported service configuration. No MSI installer or Chocolatey package.
 
 ### Linux only via systemd unit file
 

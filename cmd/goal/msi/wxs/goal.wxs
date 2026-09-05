@@ -29,7 +29,6 @@
     <!-- Feature definition -->
     <Feature Id="ProductFeature" Title="GoAl" Level="1">
       <ComponentGroupRef Id="ProductComponents" />
-      <ComponentGroupRef Id="ServiceScripts" />
       <ComponentGroupRef Id="ConfigFiles" />
       <ComponentGroupRef Id="Documentation" />
     </Feature>
@@ -42,7 +41,6 @@
     <Directory Id="TARGETDIR" Name="SourceDir">
       <Directory Id="ProgramFiles64Folder">
         <Directory Id="INSTALLDIR" Name="GoAl">
-          <Directory Id="ServiceScriptsDir" Name="service" />
           <Directory Id="ConfigDir" Name="etc" />
           <Directory Id="DocsDir" Name="docs" />
         </Directory>
@@ -62,15 +60,6 @@
           <RegistryValue Name="InstallPath" Type="string" Value="[INSTALLDIR]" Action="write" />
           <RegistryValue Name="Version" Type="string" Value="$(var.Version)" Action="write" />
         </RegistryKey>
-      </Component>
-    </ComponentGroup>
-
-    <ComponentGroup Id="ServiceScripts">
-      <Component Id="InstallServiceScript" Guid="c3d4e5f6-a7b8-9012-cdef-123456789012" Directory="ServiceScriptsDir">
-        <File Source="$(var.InstallScriptPath)" KeyName="install-service.ps1" />
-      </Component>
-      <Component Id="UninstallServiceScript" Guid="d4e5f6a7-b8c9-0123-def0-234567890123" Directory="ServiceScriptsDir">
-        <File Source="$(var.UninstallScriptPath)" KeyName="uninstall-service.ps1" />
       </Component>
     </ComponentGroup>
 

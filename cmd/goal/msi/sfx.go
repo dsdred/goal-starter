@@ -13,14 +13,12 @@ import (
 // SFXBuilder creates a self-extracting archive installer.
 // Works on both Windows and Linux without external dependencies.
 type SFXBuilder struct {
-	BinaryPath      string
-	InstallScript   string
-	UninstallScript string
-	ExampleConfig   string
-	ReadmePath      string
-	ReadmeRuPath    string
-	OutputPath      string
-	Version         string
+	BinaryPath    string
+	ExampleConfig string
+	ReadmePath    string
+	ReadmeRuPath  string
+	OutputPath    string
+	Version       string
 }
 
 // Build creates a self-extracting archive installer.
@@ -72,8 +70,6 @@ func (b *SFXBuilder) createArchive() error {
 		src, dst string
 	}{
 		{b.BinaryPath, "goal.exe"},
-		{b.InstallScript, "service/install-service.ps1"},
-		{b.UninstallScript, "service/uninstall-service.ps1"},
 		{b.ExampleConfig, "goal.example.json"},
 		{b.ReadmePath, "README.md"},
 		{b.ReadmeRuPath, "README_RU.md"},
@@ -137,23 +133,19 @@ set INSTALL_DIR=%%PROGRAMFILES%%\GoAl
 if not exist "%%INSTALL_DIR%%" mkdir "%%INSTALL_DIR%%"
 
 :: Extract files
-for %%f in (goal.exe service\\*.ps1 goal.example.json README.md README_RU.md) do (
+for %%f in (goal.exe goal.example.json README.md README_RU.md) do (
     if exist "%%f" (
         move /y "%%f" "%%INSTALL_DIR%%\\" >nul 2>&1
     )
 )
 
-:: Move service subdirectory
-if exist "service" (
-    if not exist "%%INSTALL_DIR%%\\service" mkdir "%%INSTALL_DIR%%\\service"
-    move /y "service\\*.ps1" "%%INSTALL_DIR%%\\service\\" >nul 2>&1
-)
-
 echo GoAl v%s installed to %%INSTALL_DIR%%
 echo.
-echo To install as Windows service, run:
-echo   cd %%INSTALL_DIR%%\\service
-echo   powershell -ExecutionPolicy Bypass -File install-service.ps1
+echo Next steps:
+echo   1. Copy goal.example.json to goal.json and edit it.
+echo   2. Install as Windows service (as Administrator):
+echo      %%INSTALL_DIR%%\\goal.exe --service install --config "%%INSTALL_DIR%%\\goal.json"
+echo      %%INSTALL_DIR%%\\goal.exe --service start
 echo.
 pause
 `, b.Version, b.Version)
@@ -167,16 +159,14 @@ pause
 }
 
 // BuildSFX creates a self-extracting installer.
-func BuildSFX(binaryPath, installScript, uninstallScript, exampleConfig, readme, readmeRu, output, version string) error {
+func BuildSFX(binaryPath, exampleConfig, readme, readmeRu, output, version string) error {
 	return (&SFXBuilder{
-		BinaryPath:      binaryPath,
-		InstallScript:   installScript,
-		UninstallScript: uninstallScript,
-		ExampleConfig:   exampleConfig,
-		ReadmePath:      readme,
-		ReadmeRuPath:    readmeRu,
-		OutputPath:      output,
-		Version:         version,
+		BinaryPath:    binaryPath,
+		ExampleConfig: exampleConfig,
+		ReadmePath:    readme,
+		ReadmeRuPath:  readmeRu,
+		OutputPath:    output,
+		Version:       version,
 	}).Build()
 }
 

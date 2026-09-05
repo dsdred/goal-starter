@@ -49,9 +49,6 @@ func (r *LaunchResolver) Resolve(
 		return nil, fmt.Errorf("runtime executable is empty")
 	}
 	exePath := resolveExecutablePath(runtime.Executable, runtime.WorkingDirectory)
-	if _, err := os.Stat(exePath); err != nil {
-		return nil, fmt.Errorf("runtime executable does not exist: %s: %w", exePath, err)
-	}
 
 	args := make([]string, 0, len(model.Args)+len(customArgs))
 	args = append(args, model.Args...)

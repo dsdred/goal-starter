@@ -133,13 +133,13 @@ $env:GOOS='linux'; $env:GOARCH='amd64'; go build -o bin/goal-linux-amd64 ./cmd/g
 | `cmd/goal-msi/` | MSI installer builder |
 | `internal/config/` | Config parsing, validation, hot-reload, migrations |
 | `internal/process/` | Process lifecycle, log store, broker |
-| `internal/platform/` | OS-specific process handling |
+| `internal/platform/` | OS-specific process handling, Windows service (SCM) integration |
 | `internal/storage/` | JSON repository (authoritative persistence) |
 | `internal/domain/` | Domain types, DTO converters |
 | `internal/application/` | Business logic services |
 | `internal/webui/` | HTTP server, handlers, embedded UI, security |
 | `testdata/fake-runtime/` | Fake runtime for integration tests |
-| `deploy/` | Systemd services, Windows service scripts |
+| `deploy/` | Systemd unit file (the Windows service is registered in-binary via `goal --service`, ADR 011) |
 | `scripts/` | Build and bootstrap scripts |
 
 ## Code conventions

@@ -762,29 +762,72 @@ sudo systemctl start goal
 
 ---
 
-## Install as Service (Windows)
+## Windows Service (in-binary, `goal --service`)
 
-### Via PowerShell
+GoAl registers itself as a real Windows service from the same binary (no external
+scripts; [ADR 011](adr/011-windows-service.md)). `goal --service …` is Windows-only;
+on Linux the service is owned by systemd (`deploy/systemd/goal.service`) and the verb
+prints a bounded "not supported" error.
+
+### Installing the Service (Administrator required)
 
 ```powershell
-# 1. Copy binary to C:\goal-starter
-# 2. Create goal.json
-Copy-Item goal.example.json C:\goal-starter\goal.json
-notepad C:\goal-starter\goal.json
+# 1. Copy binary + config to a stable location, e.g. C:\GoAl
+# 2. Create the dataDir directory and goal.json with an ABSOLUTE existing dataDir (and absolute runtime paths)
+# 3. Install (as Administrator)
+goal.exe --service install --config "C:\GoAl\goal.json"
 
-# 3. Install as Windows Service
-cd C:\goal-starter
-.\deploy\windows\install-service.ps1
+# 4. Start it (install does NOT start the service)
+goal.exe --service start
+```
 
-# 4. Check the service
-Get-Service goal
+- Service name defaults to `GoAl` (`--service-name` to change), display name
+  "GoAl - Local AI Runtime Manager", account **LocalSystem**, start type
+  `auto` on boot (`--start manual` to opt out), SCM stop timeout 45 s.
+- **Install refuses** (nothing is written) when the config cannot be loaded and
+  validated, when the effective `dataDir` is relative **or does not exist**
+  (install never creates it), or when any runtime executable / working
+  directory (in the config or in an existing `goal_repo.json`) or model path
+  (in the config) is a relative path — a service's working directory is
+  `C:\Windows\System32`, so relative paths are not a supported service
+  configuration. Service deployments must use absolute paths for `dataDir`,
+  runtimes, and models, and the `dataDir` directory must exist.
+- Re-running install with the same image is an idempotent no-op; a different
+  image (exe, config, or arguments) is refused — uninstall first.
+
+### Managing the Service
+
+```powershell
+goal.exe --service status     # SCM state, PID, uptime
+goal.exe --service stop       # graceful: StopPending -> Stopped (<= 30 s app budget)
+goal.exe --service start
+goal.exe --service restart    # Stop -> wait Stopped -> Start -> wait Running
 ```
 
 ### Uninstalling the Service
 
 ```powershell
-.\deploy\windows\uninstall-service.ps1
+goal.exe --service uninstall
 ```
+
+Uninstall performs the graceful stop first, then deletes the registration. It
+never touches user data (config, repository, audit, logs).
+
+### Service mode notes
+
+- The service runs the exact same application as foreground mode: Web UI on the
+  configured port, instances, autostart, and audit (`goal_audit.jsonl`) work
+  identically. The Web UI is the primary interface.
+- Operational logs go to the **Windows Event Log** (Application, source `GoAl`)
+  in service mode and to stdout in foreground mode. The audit file is never
+  mirrored into the Event Log.
+- **LocalSystem account:** the service has no interactive user profile.
+  Everything the service touches (config, `dataDir`, runtimes, models) must be
+  accessible to LocalSystem; locations under `C:\Users\<user>\…` are not a
+  supported service configuration.
+- A stop request takes at most the unchanged 30 s application shutdown budget
+  (well inside the 45 s SCM timeout). A hard kill beyond that leaves the same
+  accepted residual as foreground (orphans/stale reconciled on next start).
 
 ---
 

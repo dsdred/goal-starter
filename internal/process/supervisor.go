@@ -795,6 +795,7 @@ func (ic *InstanceController) startCore(operationCtx context.Context, reservatio
 	if err := ic.manager.Start(operationCtx, *spec); err != nil {
 		cancelLogs()
 		ic.instance.Fail(err.Error(), domain.InstanceExitError)
+		slog.Error("instance start failed", "instance_id", string(ic.instance.ID), "model_id", ic.instance.ModelID, "error", err.Error())
 		if persistErr := ic.persistStateLocked(); persistErr != nil {
 			slog.Error("persist start failure state", "instance_id", string(ic.instance.ID), "persist_error", persistErr)
 		}

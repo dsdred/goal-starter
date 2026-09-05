@@ -330,6 +330,38 @@ func TestSupervisorStartFailureReleasesSlot(t *testing.T) {
 	}
 }
 
+// TestSupervisorStartFailurePersistsFailedInstance verifies that when Start
+// fails (non-existent executable → os.Stat error, same code path as
+// Windows ERROR_ACCESS_DENIED), a terminal "failed" LaunchInstance is
+// persisted in the store (ADR 010 contract: "a terminal failed instance
+// record is persisted").
+func TestSupervisorStartFailurePersistsFailedInstance(t *testing.T) {
+	store := newMockStore()
+	sup := NewSupervisorWithContext(context.Background(), store)
+	model := &domain.Model{ID: "denied-model", Name: "denied", RuntimeID: "denied"}
+	rt := &domain.Runtime{ID: "denied", Name: "denied-rt", Executable: "/nonexistent/denied.exe"}
+	ctx := context.Background()
+
+	_, err := sup.Start(ctx, model, rt, nil, nil)
+	if err == nil {
+		t.Fatal("expected error for non-existent executable")
+	}
+	t.Logf("start error: %v", err)
+
+	entries, _ := store.ListByModelID("denied-model")
+	if len(entries) == 0 {
+		t.Fatal("FAIL: no LaunchInstance persisted for denied-model after start failure (count=0)")
+	}
+	e := entries[0]
+	if e.State != "failed" {
+		t.Fatalf("FAIL: instance state = %q, want %q", e.State, "failed")
+	}
+	if e.LastError == "" {
+		t.Fatal("FAIL: instance LastError is empty, want bounded error text")
+	}
+	t.Logf("PASS: persisted instance state=%s last_error=%q", e.State, e.LastError)
+}
+
 // TestSupervisorNaturalExitReleasesSlot verifies slot is released on natural exit.
 func TestSupervisorNaturalExitReleasesSlot(t *testing.T) {
 	store := newMockStore()

@@ -722,29 +722,75 @@ sudo systemctl start goal
 
 ---
 
-## Установка как сервис (Windows)
+## Windows-сервис (встроенный, `goal --service`)
 
-### Через PowerShell
+GoAl регистрирует себя как полноценный Windows-сервис из того же бинарника
+(без внешних скриптов; [ADR 011](adr/011-windows-service.md)). `goal --service …`
+доступен только на Windows; на Linux жизненный циклом владеет systemd
+(`deploy/systemd/goal.service`), а команда выводит ограниченную ошибку
+"not supported".
+
+### Установка сервиса (требуется Administrator)
 
 ```powershell
-# 1. Скопируйте бинарник в C:\goal-starter
-# 2. Создайте goal.json
-Copy-Item goal.example.json C:\goal-starter\goal.json
-notepad C:\goal-starter\goal.json
+# 1. Скопируйте бинарник и конфиг в стабильное место, например C:\GoAl
+# 2. Создайте каталог dataDir и goal.json с АБСОЛЮТНЫМ существующим dataDir (и абсолютными путями рантаймов)
+# 3. Установите (от Administrator)
+goal.exe --service install --config "C:\GoAl\goal.json"
 
-# 3. Установите как Windows Service
-cd C:\goal-starter
-.\deploy\windows\install-service.ps1
+# 4. Запустите (установка НЕ запускает сервис)
+goal.exe --service start
+```
 
-# 4. Проверьте сервис
-Get-Service goal
+- Имя сервиса по умолчанию `GoAl` (сменить через `--service-name`), display name
+  "GoAl - Local AI Runtime Manager", аккаунт **LocalSystem**, тип старта `auto`
+  при загрузке (`--start manual` для отключения), таймаут остановки SCM 45 с.
+- **Установка отказывается** (ничего не записывается), если конфиг не проходит
+  загрузку и валидацию, если эффективный `dataDir` — относительный путь **или
+  не существует** (установка никогда не создаёт его), либо если executable /
+  working directory какого-либо рантайма (в конфиге или в существующем
+  `goal_repo.json`) или path модели (в конфиге) — относительный путь: рабочий
+  каталог сервиса — `C:\Windows\System32`, поэтому относительные пути для
+  сервиса не поддерживаются. Для сервисного развёртывания используйте абсолютные
+  пути для `dataDir`, рантаймов и моделей, и каталог `dataDir` должен
+  существовать.
+- Повторная установка с тем же образом — идемпотентный no-op; другой образ
+  (exe, конфиг или аргументы) — отказ, сначала выполните uninstall.
+
+### Управление сервисом
+
+```powershell
+goal.exe --service status     # состояние SCM, PID, uptime
+goal.exe --service stop       # корректно: StopPending -> Stopped (<= 30 с)
+goal.exe --service start
+goal.exe --service restart    # Stop -> ожидание Stopped -> Start -> ожидание Running
 ```
 
 ### Удаление сервиса
 
 ```powershell
-.\deploy\windows\uninstall-service.ps1
+goal.exe --service uninstall
 ```
+
+Удаление сначала выполняет корректную остановку, затем снимает регистрацию.
+Пользовательские данные (конфиг, репозиторий, аудит, логи) не затрагиваются.
+
+### Замечания по сервисному режиму
+
+- Сервис выполняет то же самое приложение, что и foreground-режим: Web UI на
+  заданном порту, инстансы, автостарт и аудит (`goal_audit.jsonl`) работают
+  идентично. Web UI — основной интерфейс.
+- Операционные логи в сервисном режиме пишутся в **Event Log Windows**
+  (Application, источник `GoAl`), в foreground-режиме — в stdout. Аудит-файл
+  никогда не дублируется в Event Log.
+- **Аккаунт LocalSystem:** у сервиса нет интерактивного профиля пользователя.
+  Всё, что сервис использует (конфиг, `dataDir`, рантаймы, модели), должно
+  быть доступно LocalSystem; расположение под `C:\Users\<user>\…` для сервиса
+  не поддерживается.
+- Остановка занимает не более неизменного 30-секундного бюджета приложения
+  (с запасом внутри 45-секундного таймаута SCM). Жёсткое убийство сверх этого
+  оставляет тот же принятый остаток, что и в foreground (orphans/stale
+  согласуются при следующем запуске).
 
 ---
 

@@ -175,6 +175,7 @@ func (s *LogStore) CollectAllWithInstanceID(instanceID string) []AggregatedLogEn
 	entries := make([]AggregatedLogEntry, 0, len(s.events))
 	for _, event := range s.events {
 		entries = append(entries, AggregatedLogEntry{
+			Sequence:   event.Sequence,
 			InstanceID: instanceID,
 			Timestamp:  event.Time,
 			Stream:     event.Stream,

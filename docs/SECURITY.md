@@ -163,7 +163,7 @@ For maximum security:
 2. Set a strong admin password (stored as `adminPasswordHash`)
 3. Bind to a non-loopback address
 4. Run behind a reverse proxy with TLS
-5. Use `deploy/systemd/goal.service` (Linux) or `deploy/windows/install-service.ps1` (Windows) for managed process lifecycle
+5. Use `deploy/systemd/goal.service` (Linux) or `goal --service install` (Windows, in-binary SCM registration per ADR 011 — LocalSystem account, absolute paths required) for managed process lifecycle
 
 ## Windows code signing
 

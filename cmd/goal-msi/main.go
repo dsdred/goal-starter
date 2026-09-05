@@ -59,19 +59,15 @@ func main() {
 	}
 
 	// Set default paths for optional files
-	installScript := filepath.Join(baseDir, "deploy", "windows", "install-service.ps1")
-	uninstallScript := filepath.Join(baseDir, "deploy", "windows", "uninstall-service.ps1")
 	exampleConfig := filepath.Join(baseDir, "goal.example.json")
 	readme := filepath.Join(baseDir, "README.md")
 	readmeRu := filepath.Join(baseDir, "README_RU.md")
 
 	// Check if files exist
 	for name, path := range map[string]string{
-		"install-script":   installScript,
-		"uninstall-script": uninstallScript,
-		"example-config":   exampleConfig,
-		"readme":           readme,
-		"readme-ru":        readmeRu,
+		"example-config": exampleConfig,
+		"readme":         readme,
+		"readme-ru":      readmeRu,
 	} {
 		if _, err := os.Stat(path); os.IsNotExist(err) {
 			fmt.Fprintf(os.Stderr, "Warning: %s not found: %s\n", name, path)
@@ -94,27 +90,9 @@ func main() {
 	// Build the installer
 	buildErr := error(nil)
 	if *sfx {
-		buildErr = msi.BuildSFX(
-			binaryPath,
-			installScript,
-			uninstallScript,
-			exampleConfig,
-			readme,
-			readmeRu,
-			outputPath,
-			*version,
-		)
+		buildErr = msi.BuildSFX(binaryPath, exampleConfig, readme, readmeRu, outputPath, *version)
 	} else {
-		buildErr = msi.BuildMSI(
-			binaryPath,
-			installScript,
-			uninstallScript,
-			exampleConfig,
-			readme,
-			readmeRu,
-			outputPath,
-			*version,
-		)
+		buildErr = msi.BuildMSI(binaryPath, exampleConfig, readme, readmeRu, outputPath, *version)
 	}
 	if buildErr != nil {
 		fmt.Fprintf(os.Stderr, "Error building installer: %v\n", buildErr)

@@ -260,7 +260,8 @@ function New-WindowsReleaseText {
 ## Install as Windows Service
 
 ``````powershell
-.\install-service.ps1
+goal.exe --service install --config "C:\path\to\goal.json"
+goal.exe --service start
 ``````
 
 ## Windows Trust
@@ -281,8 +282,6 @@ Get-AuthenticodeSignature .\goal.exe
 
 - ``goal.exe`` - GoAl binary
 - ``goal.example.json`` - Example configuration; copy or rename it to ``goal.json``
-- ``install-service.ps1`` - Install as Windows Service
-- ``uninstall-service.ps1`` - Uninstall Windows Service
 - ``README.md`` - English documentation
 - ``README_RU.md`` - Russian documentation
 "@
@@ -553,8 +552,6 @@ Copy-Item $WIN_OUTPUT "$WIN_STAGING\goal\goal.exe"
 Copy-Item "goal.example.json" "$WIN_STAGING\goal\goal.example.json"
 Copy-Item "README.md" "$WIN_STAGING\goal\README.md"
 Copy-Item "README_RU.md" "$WIN_STAGING\goal\README_RU.md"
-Copy-Item "deploy\windows\install-service.ps1" "$WIN_STAGING\goal\install-service.ps1"
-Copy-Item "deploy\windows\uninstall-service.ps1" "$WIN_STAGING\goal\uninstall-service.ps1"
 
 # Create Windows release metadata from the verified artifact state.
 $WIN_README = New-WindowsReleaseText -Signature $WINDOWS_SIGNATURE
