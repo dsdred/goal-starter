@@ -589,11 +589,10 @@ what ran, including overrides.
 - **Stop** stops only the instances the pipeline started, per entry, in **reverse** order.
   Manually started instances of the same model are untouched.
 - **Restart** = reverse stop, then an always-forward start of all entries.
-- The list shows a single **primary** action — **Start** when the pipeline owns no active
-  instances, **Stop** when it does — with **Restart / Edit / Delete** in a **"…" overflow menu**
-(Delete destructive inside the menu). A **State** column
+- The list shows a **Models-style inline icon strip** — stopped: Start + Edit + Delete;
+  running: Restart + Stop + Edit + Delete. A **State** column
   aggregates the entries' live states (running / starting / stopping / failed / orphan /
-  stopped), and repeated models render once per entry with a `×n` badge and their own state.
+  stopped), and repeated models render once per entry with their own state.
 
 **Autostart (distinct from the Start button).** A pipeline has an **Active** toggle
 ("Pipeline autostart"). This is a *startup setting only* — it does not affect the manual
