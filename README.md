@@ -11,6 +11,7 @@ GoAl is a lightweight, single-binary manager for local AI runtimes and models. O
 - **Runtime CRUD** — configure Ollama, llama.cpp, vLLM, or custom inference servers
 - **Model CRUD** — configured launch definitions (runtime + args + environment)
 - **Instance lifecycle** — start, stop, restart; multi-instance supervisor
+- **Pipelines** — ordered groups of models with group lifecycle and per-entry Args override; the same Model may appear multiple times
 - **Launch command preview** — resolve and inspect the full command before starting
 - **Multi-instance supervisor** — run several processes concurrently with configurable concurrency limits
 - **Live logs** — SSE streaming with instance filtering and pagination
@@ -18,7 +19,7 @@ GoAl is a lightweight, single-binary manager for local AI runtimes and models. O
 - **Preview / Resolve** — see the resolved command before starting
 - **Embedded Web UI** — single-file dashboard with authentication and CSRF protection
 - **Atomic JSON persistence** — tmp + rename + backup recovery, no external database
-- **Conservative recovery** — stale instance detection on restart
+- **Conservative recovery** — stale/orphan instance detection on restart
 
 ## Quick start
 
