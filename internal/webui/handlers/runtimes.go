@@ -142,30 +142,65 @@ func (h *RuntimesHandler) Create(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, newRuntimeResponse(&entry))
 }
 
-// Update handles PUT /api/v1/runtimes/{id}
+// Update handles PUT /api/v1/runtimes/{id}. Omitted fields are preserved;
+// the environment is changed exclusively through environment_patch
+// (per-key set/delete — the same lossless-edit contract as model update).
+// The legacy whole-map `environment` field is rejected on update: it made
+// "untouched" indistinguishable from "cleared" and caused silent environment
+// wipes on ordinary edits (D4).
 func (h *RuntimesHandler) Update(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimPrefix(r.URL.Path, "/api/v1/runtimes/")
 	if id == "" {
 		writeError(w, 400, "runtime ID is required")
 		return
 	}
-	var request runtimeRequest
+	var request struct {
+		Name             *string             `json:"name"`
+		Executable       *string             `json:"executable"`
+		WorkingDirectory *string             `json:"working_directory"`
+		EnvironmentPatch []domain.EnvPatchOp `json:"environment_patch"`
+		LegacyEnv        json.RawMessage     `json:"environment"`
+	}
 	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 		writeError(w, 400, "invalid JSON")
 		return
 	}
-	entry := request.entry()
-	entry.ID = id
-	if err := h.runtimeSvc.UpdateRuntime(r.Context(), &entry); err != nil {
+	if len(request.LegacyEnv) > 0 && string(request.LegacyEnv) != "null" {
+		writeError(w, 400, "environment is not accepted on runtime update; use environment_patch")
+		return
+	}
+	if request.EnvironmentPatch != nil {
+		if err := application.ValidateEnvPatch(request.EnvironmentPatch); err != nil {
+			writeError(w, 400, err.Error())
+			return
+		}
+	}
+	patch := &storage.RuntimePatch{
+		Name:             request.Name,
+		Executable:       request.Executable,
+		WorkingDirectory: request.WorkingDirectory,
+		Environment:      request.EnvironmentPatch,
+	}
+	if err := h.runtimeSvc.PatchRuntime(r.Context(), id, patch); err != nil {
 		var apiErr *apierrors.APIError
 		if errors.As(err, &apiErr) {
-			writeError(w, 409, apiErr.Message)
+			switch apiErr.Code {
+			case apierrors.CodeConflict:
+				writeError(w, 409, apiErr.Message)
+			default:
+				writeError(w, 400, apiErr.Message)
+			}
 			return
 		}
 		writeError(w, 500, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, newRuntimeResponse(&entry))
+	entry, err := h.runtimeSvc.GetRuntime(r.Context(), id)
+	if err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, newRuntimeResponse(entry))
 }
 
 // Delete handles DELETE /api/v1/runtimes/{id}

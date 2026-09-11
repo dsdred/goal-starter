@@ -7,8 +7,9 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"runtime"
+	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/dsdred/goal/internal/domain"
@@ -47,6 +48,7 @@ type Repository interface {
 	CreateRuntime(e *RuntimeEntry) error
 	GetRuntime(id string) (*RuntimeEntry, error)
 	UpdateRuntime(e *RuntimeEntry) error
+	PatchRuntime(id string, p *RuntimePatch) error
 	DeleteRuntime(id string) error
 	ListRuntimes() ([]*RuntimeEntry, error)
 	ReplaceRuntimeAndDelete(oldID, newID string) (int, error)
@@ -56,6 +58,7 @@ type Repository interface {
 	CreateModel(e *ModelEntry) error
 	GetModel(id string) (*ModelEntry, error)
 	UpdateModel(e *ModelEntry) error
+	PatchModel(id string, p *ModelPatch) error
 	DeleteModel(id string) error
 	ListModels() ([]*ModelEntry, error)
 
@@ -249,8 +252,24 @@ func (r *JSONRepository) load() error {
 	if r.pipelines == nil {
 		r.pipelines = make([]*PipelineEntry, 0)
 	}
+	r.backfillPipelineEntryIDs()
 
 	return nil
+}
+
+// backfillPipelineEntryIDs assigns deterministic ids to legacy pipeline
+// entries (files predating ADR 013 D1, entries without an id). The id
+// follows the entry's position in the original list and is stable once
+// persisted: a reload of a saved file never reassigns ids, and reordering
+// entries after persistence never changes their ids (ADR 013 D6 stability).
+func (r *JSONRepository) backfillPipelineEntryIDs() {
+	for _, p := range r.pipelines {
+		for i := range p.Models {
+			if p.Models[i].ID == "" {
+				p.Models[i].ID = p.ID + "-e" + strconv.Itoa(i+1)
+			}
+		}
+	}
 }
 
 // migrateV5 converts a v5 repository file to v7 in memory.
@@ -562,6 +581,47 @@ func (r *JSONRepository) UpdateRuntime(e *RuntimeEntry) error {
 	return fmt.Errorf("runtime not found: %s", e.ID)
 }
 
+// PatchRuntime applies a partial update to a runtime. Fields that are nil in
+// the patch are preserved from the existing entry. Environment is patched
+// per-key via the envPatch argument (nil = preserve existing env entirely).
+type RuntimePatch struct {
+	Name             *string
+	Executable       *string
+	WorkingDirectory *string
+	Environment      []domain.EnvPatchOp
+}
+
+func (r *JSONRepository) PatchRuntime(id string, p *RuntimePatch) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i, x := range r.runtimes {
+		if x.ID == id {
+			updated := *x
+			if p.Name != nil {
+				updated.Name = *p.Name
+			}
+			if p.Executable != nil {
+				updated.Executable = *p.Executable
+			}
+			if p.WorkingDirectory != nil {
+				updated.WorkingDirectory = *p.WorkingDirectory
+			}
+			if p.Environment != nil {
+				updated.Environment = domain.ApplyEnvPatch(x.Environment, p.Environment)
+			}
+			updated.UpdatedAt = time.Now()
+			previous := r.runtimes[i]
+			r.runtimes[i] = &updated
+			if err := r.saveLocked(); err != nil {
+				r.runtimes[i] = previous
+				return err
+			}
+			return nil
+		}
+	}
+	return fmt.Errorf("runtime not found: %s", id)
+}
+
 func (r *JSONRepository) DeleteRuntime(id string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -810,6 +870,55 @@ func (r *JSONRepository) UpdateModel(e *ModelEntry) error {
 	return fmt.Errorf("model not found: %s", e.ID)
 }
 
+// PatchModel applies a partial update to a model. Fields that are nil in the
+// patch are preserved from the existing entry. Environment is patched per-key
+// via the envPatch argument (nil = preserve existing env entirely).
+type ModelPatch struct {
+	Name           *string
+	RuntimeID      *string
+	Args           *[]string
+	Active         *bool
+	AutostartDelay *int
+	Environment    []domain.EnvPatchOp
+}
+
+func (r *JSONRepository) PatchModel(id string, p *ModelPatch) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i, x := range r.models {
+		if x.ID == id {
+			updated := *x
+			if p.Name != nil {
+				updated.Name = *p.Name
+			}
+			if p.RuntimeID != nil {
+				updated.RuntimeID = *p.RuntimeID
+			}
+			if p.Args != nil {
+				updated.Args = *p.Args
+			}
+			if p.Active != nil {
+				updated.Active = *p.Active
+			}
+			if p.AutostartDelay != nil {
+				updated.AutostartDelay = *p.AutostartDelay
+			}
+			if p.Environment != nil {
+				updated.Environment = domain.ApplyEnvPatch(x.Environment, p.Environment)
+			}
+			updated.UpdatedAt = time.Now()
+			previous := r.models[i]
+			r.models[i] = &updated
+			if err := r.saveLocked(); err != nil {
+				r.models[i] = previous
+				return err
+			}
+			return nil
+		}
+	}
+	return fmt.Errorf("model not found: %s", id)
+}
+
 func (r *JSONRepository) DeleteModel(id string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -859,6 +968,11 @@ func (r *JSONRepository) CreatePipeline(e *PipelineEntry) error {
 	if e.Models == nil {
 		cp.Models = make([]PipelineModel, 0)
 	}
+	for i := range cp.Models {
+		if cp.Models[i].ID == "" {
+			cp.Models[i].ID = r.idGenerator()
+		}
+	}
 	previous := r.pipelines
 	r.pipelines = append(r.pipelines, &cp)
 	if err := r.saveLocked(); err != nil {
@@ -889,6 +1003,11 @@ func (r *JSONRepository) UpdatePipeline(e *PipelineEntry) error {
 			cp := *e
 			if e.Models == nil {
 				cp.Models = make([]PipelineModel, 0)
+			}
+			for j := range cp.Models {
+				if cp.Models[j].ID == "" {
+					cp.Models[j].ID = r.idGenerator()
+				}
 			}
 			previous := r.pipelines[i]
 			r.pipelines[i] = &cp
@@ -1131,9 +1250,12 @@ func (r *JSONRepository) CountActiveInstances() int {
 
 // ─── ID generation ───
 
+// idSeq makes generated ids unique even when several are minted within the
+// same time.Now() tick (ADR 013 D1 mints one entry id per pipeline entry in a
+// tight loop). The ent_ prefix is preserved.
+var idSeq uint64
+
 func generateID() string {
-	if runtime.GOOS == "windows" {
-		return fmt.Sprintf("ent_%d", time.Now().UnixNano())
-	}
-	return fmt.Sprintf("ent_%d", time.Now().UnixNano())
+	n := atomic.AddUint64(&idSeq, 1)
+	return fmt.Sprintf("ent_%d_%d", time.Now().UnixNano(), n)
 }

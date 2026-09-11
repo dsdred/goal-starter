@@ -438,3 +438,108 @@ func TestPipeline_IDGeneration(t *testing.T) {
 		t.Fatalf("pipeline ID = %q, want ent_ prefix", e.ID)
 	}
 }
+
+// ADR 013 D6 (owner-mandated, D10 item 11): a legacy v8 file whose entries
+// carry no id loads with deterministic backfilled ids (<pipelineID>-e<n>); the
+// ids are stable across persist/reload and follow the ENTRY (not its position)
+// across reorder. The old instance file (no pipeline_entry_id) loads. No schema
+// bump (stays v8).
+func TestPipeline_EntryIDBackfillStability(t *testing.T) {
+	dir := t.TempDir()
+	fixture := map[string]interface{}{
+		"schema_version": 8,
+		"runtimes":       []interface{}{},
+		"models":         []interface{}{},
+		"instances": []map[string]interface{}{{
+			// A pre-ADR 013 pipeline-owned instance WITHOUT pipeline_entry_id.
+			"id":          "inst-legacy",
+			"model_id":    "m1",
+			"runtime_id":  "rt1",
+			"pipeline_id": "pipe-1",
+			"state":       "running",
+			"created_at":  "2025-06-03T00:00:00Z",
+			"updated_at":  "2025-06-03T01:00:00Z",
+		}},
+		"pipelines": []map[string]interface{}{{
+			"id":     "pipe-1",
+			"name":   "Legacy",
+			"active": true,
+			"models": []map[string]interface{}{
+				{"model_id": "m1", "auto_start": true},
+				{"model_id": "m2"},
+				{"model_id": "m3"},
+			},
+			"created_at": "2025-06-04T00:00:00Z",
+			"updated_at": "2025-06-05T00:00:00Z",
+		}},
+	}
+	data, err := json.MarshalIndent(fixture, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "goal_repo.json")
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	repo, err := NewJSONRepository(path)
+	if err != nil {
+		t.Fatalf("NewJSONRepository: %v", err)
+	}
+	p, err := repo.GetPipeline("pipe-1")
+	if err != nil {
+		t.Fatalf("GetPipeline: %v", err)
+	}
+	want := []string{"pipe-1-e1", "pipe-1-e2", "pipe-1-e3"}
+	for i, m := range p.Models {
+		if m.ID != want[i] {
+			t.Fatalf("backfilled id[%d] = %q, want %q: %+v", i, m.ID, want[i], p.Models)
+		}
+	}
+	inst, err := repo.GetInstance("inst-legacy")
+	if err != nil {
+		t.Fatalf("GetInstance: %v", err)
+	}
+	if inst.PipelineEntryID != "" || inst.PipelineID != "pipe-1" {
+		t.Fatalf("legacy instance attribution wrong: %+v", inst)
+	}
+
+	// Persist the backfilled ids, then reload: the same ids come back.
+	if err := repo.UpdatePipeline(p); err != nil {
+		t.Fatalf("UpdatePipeline: %v", err)
+	}
+	repo2, err := NewJSONRepository(path)
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	p2, err := repo2.GetPipeline("pipe-1")
+	if err != nil {
+		t.Fatalf("reloaded GetPipeline: %v", err)
+	}
+	if !reflect.DeepEqual(p2.Models, p.Models) {
+		t.Fatalf("backfilled ids must be stable across persist/reload: %+v vs %+v", p2.Models, p.Models)
+	}
+	if repo2.SchemaVersion() != 8 {
+		t.Fatalf("schema_version = %d, want 8 (no bump)", repo2.SchemaVersion())
+	}
+
+	// Reorder: swap entries 0 and 1. The ids follow the entries, not positions.
+	p2.Models[0], p2.Models[1] = p2.Models[1], p2.Models[0]
+	if err := repo2.UpdatePipeline(p2); err != nil {
+		t.Fatalf("UpdatePipeline (reorder): %v", err)
+	}
+	repo3, err := NewJSONRepository(path)
+	if err != nil {
+		t.Fatalf("reload2: %v", err)
+	}
+	p3, err := repo3.GetPipeline("pipe-1")
+	if err != nil {
+		t.Fatalf("reloaded2 GetPipeline: %v", err)
+	}
+	if p3.Models[0].ModelID != "m2" || p3.Models[0].ID != "pipe-1-e2" {
+		t.Fatalf("reordered entry 0 = %+v, want model m2 id pipe-1-e2", p3.Models[0])
+	}
+	if p3.Models[1].ModelID != "m1" || p3.Models[1].ID != "pipe-1-e1" {
+		t.Fatalf("reordered entry 1 = %+v, want model m1 id pipe-1-e1", p3.Models[1])
+	}
+}

@@ -1,14 +1,95 @@
 package webui
 
 import (
+	"encoding/json"
 	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"testing"
 )
+
+func loadI18nDict(t *testing.T, lang string) map[string]string {
+	t.Helper()
+	raw, err := fs.ReadFile(staticFS, "static/i18n/"+lang+".json")
+	if err != nil {
+		t.Fatalf("read embedded i18n %s.json: %v", lang, err)
+	}
+	var dict map[string]string
+	if err := json.Unmarshal(raw, &dict); err != nil {
+		t.Fatalf("parse embedded i18n %s.json: %v", lang, err)
+	}
+	return dict
+}
+
+// TestI18nDictionariesParity enforces the hard i18n rule at build time: a raw
+// key reaching the UI means a missing translation, so every key referenced by
+// the template (data-i18n / data-i18n-placeholder / data-i18n-tooltip) or by a
+// literal t('...') call in app.js must exist in BOTH dictionaries, and the
+// RU/EN key sets must be identical.
+func TestI18nDictionariesParity(t *testing.T) {
+	ru := loadI18nDict(t, "ru")
+	en := loadI18nDict(t, "en")
+
+	ruKeys := make([]string, 0, len(ru))
+	for k := range ru {
+		ruKeys = append(ruKeys, k)
+	}
+	enKeys := make([]string, 0, len(en))
+	for k := range en {
+		enKeys = append(enKeys, k)
+	}
+	sort.Strings(ruKeys)
+	sort.Strings(enKeys)
+
+	for _, k := range ruKeys {
+		if _, ok := en[k]; !ok {
+			t.Errorf("key %q exists in ru.json but not in en.json", k)
+		}
+	}
+	for _, k := range enKeys {
+		if _, ok := ru[k]; !ok {
+			t.Errorf("key %q exists in en.json but not in ru.json", k)
+		}
+	}
+
+	htmlSrc, err := fs.ReadFile(templateFS, "templates/index.html")
+	if err != nil {
+		t.Fatalf("read embedded index.html: %v", err)
+	}
+	jsSrc, err := fs.ReadFile(staticFS, "static/app.js")
+	if err != nil {
+		t.Fatalf("read embedded app.js: %v", err)
+	}
+
+	used := map[string]bool{}
+	attrRe := regexp.MustCompile(`data-i18n(?:-placeholder|-tooltip)?="([a-z0-9_.]+)"`)
+	for _, m := range attrRe.FindAllStringSubmatch(string(htmlSrc), -1) {
+		used[m[1]] = true
+	}
+	tCallRe := regexp.MustCompile(`(^|[^A-Za-z0-9_$])t\('([a-z0-9_.]+)'\)`)
+	for _, m := range tCallRe.FindAllStringSubmatch(string(jsSrc), -1) {
+		used[m[2]] = true
+	}
+	for _, k := range func() []string {
+		out := make([]string, 0, len(used))
+		for k := range used {
+			out = append(out, k)
+		}
+		sort.Strings(out)
+		return out
+	}() {
+		if ru[k] == "" {
+			t.Errorf("referenced i18n key %q is missing in ru.json", k)
+		}
+		if en[k] == "" {
+			t.Errorf("referenced i18n key %q is missing in en.json", k)
+		}
+	}
+}
 
 func TestEmbeddedJavaScriptParses(t *testing.T) {
 	node, err := exec.LookPath("node")
@@ -112,6 +193,79 @@ func TestEmbeddedJavaScriptWindowExportsResolve(t *testing.T) {
 		if !defined[val] {
 			t.Errorf("window.%s export references undefined symbol %q — would cause ReferenceError at init", prop, val)
 		}
+	}
+}
+
+// TestEmbeddedAssetsNoRejectedUIMarkers guards the Owner-accepted contract at
+// the embed level: the rejected old UI markers (old primary-action labels with
+// "+", the old wizard runtime keys, the pipeline "↯" marker, horizontal table
+// scrolling) must not exist anywhere in the packaged assets.
+func TestEmbeddedAssetsNoRejectedUIMarkers(t *testing.T) {
+	jsSrc, err := fs.ReadFile(staticFS, "static/app.js")
+	if err != nil {
+		t.Fatalf("read embedded app.js: %v", err)
+	}
+	cssSrc, err := fs.ReadFile(staticFS, "static/style.css")
+	if err != nil {
+		t.Fatalf("read embedded style.css: %v", err)
+	}
+	htmlSrc, err := fs.ReadFile(templateFS, "templates/index.html")
+	if err != nil {
+		t.Fatalf("read embedded index.html: %v", err)
+	}
+	assets := map[string]string{
+		"app.js":     string(jsSrc),
+		"style.css":  string(cssSrc),
+		"index.html": string(htmlSrc),
+	}
+	rejected := []string{
+		"+ Добавить модель",
+		"+ Создать пайплайн",
+		"+ Добавить Runtime",
+		"+ Add model",
+		"+ Create pipeline",
+		"+ Add Runtime",
+		"wizard.rt.existing",
+		"wizard.rt.new'",
+		"wizard.rt.select'",
+		"wizard.rt.select\"",
+		"Использовать существующий",
+		"Создать новый Runtime",
+		"↯",
+	}
+	for file, src := range assets {
+		for _, marker := range rejected {
+			if strings.Contains(src, marker) {
+				t.Errorf("%s still contains rejected UI marker %q", file, marker)
+			}
+		}
+	}
+	if strings.Contains(string(cssSrc), "overflow-x: auto") {
+		t.Error("style.css still uses overflow-x:auto (horizontal table scrolling is a forbidden state)")
+	}
+
+	required := map[string][]string{
+		"app.js": {
+			`data-tooltip="' + esc(label) + '"`,
+			"getElementById('goaltip')",
+			"scrollWidth <= wrap.clientWidth + 1",
+			"bindFitObservers()",
+			"ResizeObserver",
+			"if (isPipelineModalOpen()) renderPlBuilder()",
+			"if (isWizardOpen()) {",
+		},
+		"index.html": {"id=\"goaltip\"", "data-i18n=\"models.add\">Добавить<", "data-i18n=\"pipelines.add\">Добавить<", "data-i18n=\"runtimes.add\">Добавить<", "filter-bar-end", `class="table-fit"`},
+		"style.css":  {".goal-tooltip", ".table-fit", ".filter-bar-end"},
+	}
+	for file, fragments := range required {
+		for _, frag := range fragments {
+			if !strings.Contains(assets[file], frag) {
+				t.Errorf("%s is missing required fragment %q", file, frag)
+			}
+		}
+	}
+	if strings.Contains(string(jsSrc), `icon-btn-`+`' + color + '" title=`) {
+		t.Error("iconBtn still sets a native title attribute (double tooltip with the custom tooltip)")
 	}
 }
 

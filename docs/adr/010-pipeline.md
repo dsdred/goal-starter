@@ -4,6 +4,8 @@
 **Date:** 2026-08-29
 **Related:** ROADMAP P1 "Pipeline MVP" and "Pipeline contract (design note)", ADR 002 (Supervisor and Instance Model), ADR 004 (Config vs Repository ownership), ADR 005 (Recovery — Orphan Detection), ADR 007 (Audit Logging — event taxonomy), ADR 008 (Kill of an Orphan — post-kill lifecycle)
 
+> **Superseded in part by [ADR 013](013-pipeline-repeat-models-ux-polish.md) (Accepted 2026-09-06; owner-UI reconciliation 2026-09-09).** ADR 013 replaces four decisions while keeping the rest of this ADR as documented: (1) **D1.3 uniqueness** — a Pipeline may now contain the **same Model multiple times**; the *entry* is unique via an additive `PipelineModel.id` (the "cannot contain the same model twice → 400" rule is retired); (2) **D3 launch gate** — the "never a second copy" global gate is replaced by a **per-entry launch gate + model-owner rule** (within-pipeline independence; cross-pipeline/manual owner priority, no adoption); (3) **D4 startup matrix** — extended to **per-entry** counts, then **further simplified** (2026-09-09 reconciliation): `Active = true` → launch **all** entries (the per-entry `AutoStart` field is now "written but ignored" — it round-trips for backward compatibility but no longer gates any launch; the per-entry autostart UI control and ⚡ chip are removed); (4) **D11 / D7 per-entry autostart UI** — the per-entry "Model autostart" toggle is removed; the single pipeline-level `Active` toggle is the only autostart control. Unchanged: the 8-endpoint surface, the all-or-nothing Args semantics (D2), and the v8 storage model. See ADR 013 D11 reconciliation for the full contract.
+
 ## Context
 
 ROADMAP P1 carries the item "Pipeline MVP (see Pipeline contract below)" plus a design note that fixes the Args semantics in advance ("requires an architecture/ADR before implementation"). Pre-implementation forensic (2026-08-29) establishes the current state:
@@ -11,7 +13,7 @@ ROADMAP P1 carries the item "Pipeline MVP (see Pipeline contract below)" plus a 
 1. **All launch parameters live in `Model.Args`.** `domain.Model` (`internal/domain/model.go:20-31`, persisted as `ModelEntry`, `internal/domain/model_entry.go:5-17`, schema v7) carries `Args []string`; `Runtime` deliberately has no launch arguments (`internal/domain/runtime.go:9` — "Launch arguments belong to Model.Args, not here").
 2. **The launch path is single and already parameterized.** `InstanceService.StartModel` (`internal/application/instance_service.go:27-45`) calls `Supervisor.Start(ctx, model, runtime, nil, nil)` (`internal/process/supervisor.go:230-295`); `LaunchResolver.Resolve` appends `customArgs` after `Model.Args` (`internal/domain/command.go:56-58`) — an **additive** contract, currently nil at every production call site. Environment merges parent → runtime → model → custom (`command.go:60-77`).
 3. **An instance is a self-contained denormalized snapshot** (`internal/domain/instance.go:38-65`, resolved fields written at `command.go:219-222`), keyed by `model_id` (`Repository.ListByModelID`, `internal/storage/repository.go:930-941`). There is **no group/pipeline concept anywhere** in code or UI (repo-wide case-insensitive search matches only CI/release "pipeline" in docs).
-4. **One model can already have multiple instances.** `POST /api/v1/models/{id}/start` has no active-instance guard and always creates a new instance (`internal/webui/handlers/models.go:158-171`, ID = `modelID-unixnano` at `command.go:211`); model `stop`/`restart` loop over *all* active instances of the model (`models.go:173-207`).
+4. **One model can already have multiple instances.** `POST /api/v1/models/{id}/start` has no active-instance guard and always creates a new instance (`internal/webui/handlers/models.go:158-171`, ID = `modelID-unixnano-seq` at `command.go:214`); model `stop`/`restart` loop over *all* active instances of the model (`models.go:173-207`).
 5. **The only existing batch primitive is startup autostart** (`cmd/goal/main.go:151-194`): sequential in repository order after `Supervisor.Recover` (`main.go:99` → `main.go:105`), driven by the per-model `Active` flag, honoring the per-model `AutostartDelay`, no user trigger, no group stop. Model `activate`/`deactivate` only flip that flag (`models.go:223-259`).
 6. **Recovery and orphan semantics are settled (ADR 005/008).** Transitional instances reclassify to `stale`/`orphan` on startup (`supervisor.go:533-600`); the UI contract established 2026-08-28 (shipped `cb178ec`) is that a model whose instance is `orphan` gets **no Start action** — a second copy of a process running outside GoAl must not be launched by mistake.
 7. **Storage is `goal_repo.json` at schema v7** (`internal/storage/repository.go:447-461`, version branch in `load()` at `repository.go:203-224`), with durable writes (`internal/fsutil/fsutil.go:86-114`) and the P0 rollback-on-save-failure contract (shipped `f8e73b3`) at every mutating CRUD site.
@@ -53,7 +55,7 @@ Consequence: the MVP is (a) a **new first-class repository entity** (`Pipeline`,
 
    (Entry 1: empty `args` → `Model.Args` at launch, autostarted. Entry 2: non-empty `args` → full replacement, not autostarted. `instances` entries launched via this pipeline carry `"pipeline_id": "ent_1785400000000000000"`, all others omit it.)
 2. **Schema v7 → v8 is purely additive**: a v7 file simply lacks the `pipelines` key and loads as an empty list; no data transformation of runtimes/models/instances. `saveLocked`/`SaveUnified` write `schema_version: 8` (mirrors the v6→v7 branch at `repository.go:203-224`). `LaunchInstance`/`LaunchInstanceEntry` gain `pipeline_id` (`json:"pipeline_id,omitempty"`) — likewise additive (absent = not pipeline-launched). Absent `active`/`auto_start` values load as `false` (a pipeline never autostarts by accident).
-3. **Reference semantics.** A pipeline references models by ID only; a model may belong to **multiple** pipelines. A pipeline **cannot** contain the same model twice (400 at create/update) — order is the launch order and a duplicate would make start/stop ambiguous.
+3. **Reference semantics.** A pipeline references models by ID only; a model may belong to **multiple** pipelines. ~~A pipeline cannot contain the same model twice (400 at create/update) — order is the launch order and a duplicate would make start/stop ambiguous.~~ **Superseded by ADR 013 D1:** a Pipeline **may** contain the same Model multiple times (distinct entries, each with its own `PipelineModel.id`); order is still the launch order, and per-entry identity (not model uniqueness) makes start/stop unambiguous.
 4. **Instance attribution.** Instances launched through pipeline endpoints or pipeline autostart carry `pipeline_id = <pipeline id>`; instances launched manually, via model endpoints, or by model-level autostart have an empty `pipeline_id`. Pipeline stop/restart act **only** on instances with a matching `pipeline_id` in an active state — a model shared between a pipeline and manual starts is never double-stopped.
 5. **Integrity rules (explicit, no implicit cascade):**
    - `DELETE /api/v1/models/{id}` while one or more pipelines reference the model → `409 conflict` (consistent with the explicit `cascade-delete` philosophy for runtimes; the user edits/deletes the pipeline first).
@@ -71,6 +73,8 @@ Consequence: the MVP is (a) a **new first-class repository entity** (`Pipeline`,
 - The existing `POST /api/v1/models/{id}/resolve` preview endpoint keeps model-level semantics (it previews `Model.Args`; pipeline overrides are visible in the per-entry editor and in instance history, not in the model resolve preview).
 
 ### D3 — Group lifecycle (ordered, sequential, best-effort, per-model outcomes)
+
+> **Superseded in part by ADR 013 D3:** the per-model `already-running` gate ("any active instance → never a second copy") is replaced by a **per-entry launch gate + model-owner rule**: an entry launches when no instance of the model is attributed to it **and** every active instance of the model is owned by this pipeline (within-pipeline independence — two entries of one model launch two instances; cross-pipeline/manual owner priority, no adoption). The outcome vocabulary below is retained, now evaluated **per entry**.
 
 `POST /api/v1/pipelines/{id}/start` processes entries **sequentially in pipeline order** (deterministic; never parallel; respects the per-instance `maxConcurrent` CAS in `Supervisor.Start` at `supervisor.go:247` unchanged). A per-pipeline in-service mutex serializes concurrent lifecycle requests for the same pipeline (start idempotency; no double-launch race). **Best-effort is explicit: an error in one entry neither cancels nor blocks the following entries, and does not roll back already-started entries.** Per-entry outcome vocabulary (bounded strings in the response):
 
@@ -113,6 +117,8 @@ Owner question 11 (interaction of model-level `Active` autostart and pipeline au
 
 Interaction matrix (exhaustive, first scope):
 
+> **Extended by ADR 013 D3:** with repeatable entries the matrix generalizes to per-entry counts — `n` `AutoStart=true` entries of an owning `Active` pipeline launch **n** pipeline-owned instances (distinct `pipeline_entry_id`); the earlier-pipeline-owns / model-level-skip rules are preserved. See the ADR 013 D3 matrix.
+
 | model `Active` | pipeline `Active` + entry `AutoStart` | Result at startup |
 |---|---|---|
 | false | false / (any) | no launch |
@@ -130,8 +136,8 @@ Interaction matrix (exhaustive, first scope):
 |---|---|---|---|---|
 | `GET` | `/api/v1/pipelines` | yes | no | list: id, name, `active`, ordered model ids/names with `auto_start`, created/updated |
 | `GET` | `/api/v1/pipelines/{id}` | yes | no | pipeline (incl. `active`, per-entry `auto_start`) + per-model live status (state, instance id, pid, uptime) |
-| `POST` | `/api/v1/pipelines` | yes | yes | create `{name, active?, models:[{model_id, args?, auto_start?}]}` (`active`/`auto_start` default `false`); 400 on empty name, empty model list, duplicate model id, unknown model id |
-| `PUT` | `/api/v1/pipelines/{id}` | yes | yes | update per D1.5 (name/args/`active`/`auto_start` always; structural → 409 with active owned instances) |
+| `POST` | `/api/v1/pipelines` | yes | yes | create `{name, active?, models:[{model_id, args?, auto_start?}]}` (`active`/`auto_start` default `false`); 400 on empty name, empty model list, ~~duplicate model id,~~ unknown model id. **ADR 013 D5:** duplicate `model_id` is **accepted** (distinct generated entry `id`s); start/stop/detail rows gain `entry_id`/`index` |
+| `PUT` | `/api/v1/pipelines/{id}` | yes | yes | update per D1.5 (name/args/`active`/`auto_start` always; structural → 409 with active owned instances). **ADR 013 D1/D5:** structural now keyed on the **entry-ID sequence**; entries carry `id`s |
 | `DELETE` | `/api/v1/pipelines/{id}` | yes | yes | 409 on active owned instances; 404 on unknown id |
 | `POST` | `/api/v1/pipelines/{id}/start` | yes | yes | D3 contract |
 | `POST` | `/api/v1/pipelines/{id}/stop` | yes | yes | D3 contract (reverse order) |
@@ -182,7 +188,7 @@ Error shapes use the flat `error` / `code` / `details` contract (API.md); codes:
 ## Acceptance contract (must hold before this is considered done)
 
 1. `goal_repo.json` v7 loads unchanged (all existing runtimes/models/instances intact) and saves as v8 with an empty `pipelines` list; v8 round-trips, including a pipeline persisted with `active` and per-entry `auto_start` values (absent fields load as `false`).
-2. Create pipeline with: empty name, empty model list, duplicate model id, unknown model id → `400 bad_request`; valid create → `201` (per the runtime-create / instance-start convention, not the model-create 200), persisted durably (`.bak` present after write), defaults `active=false`, `auto_start=false`.
+2. Create pipeline with: empty name, empty model list, ~~duplicate model id,~~ unknown model id → `400 bad_request`; valid create → `201` (per the runtime-create / instance-start convention, not the model-create 200), persisted durably (`.bak` present after write), defaults `active=false`, `auto_start=false`. **ADR 013 D1/D5:** the duplicate-model-id `400` is retired — a duplicate `model_id` now creates distinct entries (accepted `201`).
 3. Start of a 2-model pipeline launches both in order; both instances carry `pipeline_id`; instance snapshots show the overridden args where set and `Model.Args` where the override is empty; the persisted `Model.Args` in the repository is **byte-identical** before/after.
 4. Args override is all-or-nothing: a non-empty override replaces `Model.Args` entirely (no append/merge observable in the instance snapshot or the launched process).
 5. Entry 2 of 4 fails (missing executable) → entries 3 and 4 are still processed; entry 1 stays running; the response lists all four in pipeline order with entry 2 `failed` (bounded reason).

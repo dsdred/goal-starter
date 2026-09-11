@@ -783,9 +783,11 @@ func TestModelDelete_PipelineReference(t *testing.T) {
 	}
 }
 
-// ADR 010 D4: autostart processes only AutoStart=true entries; manual start
-// processes all entries.
-func TestPipelineAutostart_OnlyAutoStartEntries(t *testing.T) {
+// ADR 013 reconciliation (canonical autostart semantics): autostart launches
+// ALL entries of an Active pipeline — the legacy per-entry PipelineModel.
+// AutoStart is retained for backward compatibility but no longer gates launch.
+// Manual start also processes all entries.
+func TestPipelineAutostart_AllEntries(t *testing.T) {
 	e := newPipelineEnv(t)
 	ctx := context.Background()
 
@@ -793,7 +795,7 @@ func TestPipelineAutostart_OnlyAutoStartEntries(t *testing.T) {
 	m2 := e.addModel(t, "m2", "b", "graceful")
 	pipe := e.addPipeline(t, "autostart",
 		storage.PipelineModel{ModelID: m1, AutoStart: true},
-		storage.PipelineModel{ModelID: m2},
+		storage.PipelineModel{ModelID: m2}, // legacy AutoStart=false: still launched now
 	)
 	t.Cleanup(func() { e.stopPipeline(t, pipe) })
 
@@ -801,26 +803,24 @@ func TestPipelineAutostart_OnlyAutoStartEntries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Autostart: %v", err)
 	}
-	if len(res.Results) != 1 || res.Results[0].ModelID != m1 || res.Results[0].Status != OutcomeStarted {
-		t.Fatalf("autostart results = %+v, want only m1 started", res.Results)
+	if len(res.Results) != 2 {
+		t.Fatalf("autostart must launch ALL entries: %+v", res.Results)
 	}
-	if len(e.instancesFor(t, m2)) != 0 {
-		t.Fatal("AutoStart=false entry must not be launched by autostart")
+	if res.Results[0].ModelID != m1 || res.Results[0].Status != OutcomeStarted {
+		t.Fatalf("m1 = %q, want started", res.Results[0].Status)
+	}
+	// The legacy AutoStart=false entry is now launched too (canonical semantics).
+	if res.Results[1].ModelID != m2 || res.Results[1].Status != OutcomeStarted {
+		t.Fatalf("m2 (legacy AutoStart=false) = %q, want started (all-entries semantics)", res.Results[1].Status)
 	}
 
-	// Manual start still processes all entries.
+	// Manual start: both already running.
 	res, err = e.svc.Start(ctx, pipe)
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	if len(res.Results) != 2 {
-		t.Fatalf("manual start must process all entries: %+v", res.Results)
-	}
-	if res.Results[0].Status != OutcomeAlreadyRunning {
-		t.Fatalf("m1 = %q, want already-running (autostarted)", res.Results[0].Status)
-	}
-	if res.Results[1].Status != OutcomeStarted {
-		t.Fatalf("m2 = %q, want started", res.Results[1].Status)
+	if len(res.Results) != 2 || res.Results[0].Status != OutcomeAlreadyRunning || res.Results[1].Status != OutcomeAlreadyRunning {
+		t.Fatalf("manual start of an already-autostarted pipeline must be all already-running: %+v", res.Results)
 	}
 }
 
@@ -838,7 +838,6 @@ func TestPipelineCreate_Validation(t *testing.T) {
 		{"nil entry", nil},
 		{"empty name", &storage.PipelineEntry{Name: "  ", Models: []storage.PipelineModel{{ModelID: m1}}}},
 		{"empty model list", &storage.PipelineEntry{Name: "p", Models: nil}},
-		{"duplicate model", &storage.PipelineEntry{Name: "p", Models: []storage.PipelineModel{{ModelID: m1}, {ModelID: m1}}}},
 		{"unknown model", &storage.PipelineEntry{Name: "p", Models: []storage.PipelineModel{{ModelID: "ghost"}}}},
 		{"empty model id", &storage.PipelineEntry{Name: "p", Models: []storage.PipelineModel{{ModelID: ""}}}},
 	}

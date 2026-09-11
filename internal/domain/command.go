@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -24,6 +25,11 @@ type LaunchResolver struct {
 
 // timeNow is a variable for testing.
 var timeNow = time.Now
+
+// instanceIDSeq makes resolved instance ids unique even when several are
+// minted within the same time.Now() tick (same process-local atomic
+// approach as storage.generateID). The ID stays an opaque string.
+var instanceIDSeq uint64
 
 // NewLaunchResolver creates a new resolver.
 func NewLaunchResolver() *LaunchResolver {
@@ -205,7 +211,7 @@ func (r *LaunchResolver) ResolveToInstance(
 		}
 	}
 
-	id := InstanceID(fmt.Sprintf("%s-%d", model.ID, timeNow().UnixNano()))
+	id := InstanceID(fmt.Sprintf("%s-%d-%d", model.ID, timeNow().UnixNano(), atomic.AddUint64(&instanceIDSeq, 1)))
 
 	return &LaunchInstance{
 		ID:               id,
@@ -213,6 +219,7 @@ func (r *LaunchResolver) ResolveToInstance(
 		ModelName:        model.Name,
 		RuntimeID:        runtime.ID,
 		PipelineID:       model.PipelineID,
+		PipelineEntryID:  model.PipelineEntryID,
 		State:            InstanceStatePending,
 		Executable:       spec.Executable,
 		Args:             spec.Args,

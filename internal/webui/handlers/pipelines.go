@@ -33,6 +33,7 @@ type pipelineResponse struct {
 }
 
 type pipelineModelResponse struct {
+	ID        string   `json:"id,omitempty"`
 	ModelID   string   `json:"model_id"`
 	ModelName string   `json:"model_name"`
 	Args      []string `json:"args,omitempty"`
@@ -43,6 +44,7 @@ func newPipelineResponse(e *storage.PipelineEntry, modelName func(id string) str
 	models := make([]pipelineModelResponse, len(e.Models))
 	for i, m := range e.Models {
 		models[i] = pipelineModelResponse{
+			ID:        m.ID,
 			ModelID:   m.ModelID,
 			ModelName: modelName(m.ModelID),
 			Args:      m.Args,
@@ -59,9 +61,14 @@ func newPipelineResponse(e *storage.PipelineEntry, modelName func(id string) str
 	}
 }
 
-// pipelineModelStatus is the per-model live status in the detail endpoint.
+// pipelineModelStatus is the per-entry live status in the detail endpoint
+// (ADR 013 D5). Resolved by (pipeline_id, pipeline_entry_id) with the D4
+// legacy fallback: a pipeline-owned instance without an entry attribution
+// (pre-upgrade) belongs to the first entry of that model in list order.
 type pipelineModelStatus struct {
 	ModelID     string `json:"model_id"`
+	EntryID     string `json:"entry_id,omitempty"`
+	Index       int    `json:"index"`
 	State       string `json:"state"`
 	InstanceID  string `json:"instance_id,omitempty"`
 	PID         int    `json:"pid,omitempty"`
@@ -138,21 +145,43 @@ func (h *PipelineHandler) Get(w http.ResponseWriter, r *http.Request) {
 	}
 
 	instances, _ := h.instance.ListInstances(r.Context())
-	byModel := make(map[string][]*domain.LaunchInstance)
+	byEntry := make(map[string][]*domain.LaunchInstance)
+	byLegacyModel := make(map[string][]*domain.LaunchInstance)
 	for _, inst := range instances {
-		byModel[inst.ModelID] = append(byModel[inst.ModelID], inst)
+		if inst.PipelineID != entry.ID {
+			continue
+		}
+		if inst.PipelineEntryID != "" {
+			byEntry[inst.PipelineEntryID] = append(byEntry[inst.PipelineEntryID], inst)
+		} else {
+			byLegacyModel[inst.ModelID] = append(byLegacyModel[inst.ModelID], inst)
+		}
+	}
+	firstOfModel := make(map[string]int, len(entry.Models))
+	for i, m := range entry.Models {
+		if _, ok := firstOfModel[m.ModelID]; !ok {
+			firstOfModel[m.ModelID] = i
+		}
 	}
 
 	resp := newPipelineResponse(entry, h.modelName)
 	statuses := make([]pipelineModelStatus, 0, len(entry.Models))
-	for _, m := range entry.Models {
+	consumedLegacy := make(map[string]bool)
+	for i, m := range entry.Models {
 		st := pipelineModelStatus{
 			ModelID:     m.ModelID,
+			EntryID:     m.ID,
+			Index:       i,
 			State:       "stopped",
 			AutoStart:   m.AutoStart,
 			HasOverride: len(m.Args) > 0,
 		}
-		for _, inst := range byModel[m.ModelID] {
+		list := byEntry[m.ID]
+		if len(list) == 0 && firstOfModel[m.ModelID] == i && !consumedLegacy[m.ModelID] {
+			list = byLegacyModel[m.ModelID]
+			consumedLegacy[m.ModelID] = true
+		}
+		for _, inst := range list {
 			if inst.IsActive() {
 				st.State = string(inst.State)
 				st.InstanceID = string(inst.ID)
@@ -164,7 +193,7 @@ func (h *PipelineHandler) Get(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if st.State == "stopped" {
-			for _, inst := range byModel[m.ModelID] {
+			for _, inst := range list {
 				if inst.State == domain.InstanceStateOrphan {
 					st.State = string(domain.InstanceStateOrphan)
 					st.InstanceID = string(inst.ID)

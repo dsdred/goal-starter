@@ -45,6 +45,12 @@ type LaunchInstance struct {
 	// Empty for manual / model-endpoint / model-autostart launches.
 	PipelineID string `json:"pipeline_id,omitempty"`
 
+	// PipelineEntryID attributes the instance to a specific pipeline entry
+	// (ADR 013 D1/D3), enabling per-entry lifecycle for repeatable models.
+	// Empty for pre-upgrade (legacy) pipeline instances and all manual
+	// launches; legacy instances resolve through the model-level fallback.
+	PipelineEntryID string `json:"pipeline_entry_id,omitempty"`
+
 	// Process info populated at launch time.
 	PID       int           `json:"pid,omitempty"`
 	State     InstanceState `json:"state"`
@@ -140,6 +146,10 @@ func (i *LaunchInstance) EnvironmentToList() []string {
 }
 
 // ToStorageEntry converts domain.LaunchInstance to domain.LaunchInstanceEntry.
+// Environment is intentionally NOT persisted (D2): the resolved environment
+// includes the parent process environment and would multiply the plaintext
+// secret surface on every instance record. Relaunch paths that need the
+// environment re-resolve from model + runtime at launch time.
 func ToStorageEntry(i *LaunchInstance) *LaunchInstanceEntry {
 	exitCode := 0
 	if i.ExitCode != nil {
@@ -151,10 +161,11 @@ func ToStorageEntry(i *LaunchInstance) *LaunchInstanceEntry {
 		ModelName:        i.ModelName,
 		RuntimeID:        i.RuntimeID,
 		PipelineID:       i.PipelineID,
+		PipelineEntryID:  i.PipelineEntryID,
 		Executable:       i.Executable,
 		Args:             i.Args,
 		WorkingDirectory: i.WorkingDirectory,
-		Environment:      i.Environment,
+		Environment:      nil,
 		State:            string(i.State),
 		PID:              i.PID,
 		ExitCode:         exitCode,
@@ -181,6 +192,7 @@ func ToDomain(e *LaunchInstanceEntry) *LaunchInstance {
 		ModelName:        e.ModelName,
 		RuntimeID:        e.RuntimeID,
 		PipelineID:       e.PipelineID,
+		PipelineEntryID:  e.PipelineEntryID,
 		PID:              e.PID,
 		State:            InstanceState(e.State),
 		StartedAt:        e.StartedAt,

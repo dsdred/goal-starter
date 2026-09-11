@@ -72,7 +72,7 @@ async function main() {
     suite.log('1.2 Empty state message visible', await page.locator('#models-empty').isVisible());
 
     // ═══ SECTION 2: Wizard → model with existing runtime ═══
-    await page.click('#view-models button:has-text("Добавить модель")');
+    await page.click('#view-models button:has-text("Добавить")');
     await page.waitForTimeout(300);
     await page.fill('#wiz-name', 'Test Model 27B');
     await page.click('#wiz-next');
@@ -106,7 +106,7 @@ async function main() {
     }
 
     // ═══ SECTION 3: Wizard → model with new runtime ═══
-    await page.click('#view-models button:has-text("Добавить модель")');
+    await page.click('#view-models button:has-text("Добавить")');
     await page.waitForTimeout(300);
     await page.fill('#wiz-name', 'New RT Model');
     await page.click('#wiz-next');

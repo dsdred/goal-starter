@@ -31,6 +31,11 @@ type Model struct {
 	// created instance. Never persisted on ModelEntry.
 	PipelineID string
 
+	// PipelineEntryID is set on the in-memory effective model copy for a
+	// specific pipeline entry (ADR 013 D1/D3) and propagated into the created
+	// instance. Never persisted on ModelEntry.
+	PipelineEntryID string
+
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }

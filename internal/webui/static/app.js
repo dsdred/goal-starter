@@ -29,10 +29,19 @@ let currentLang = localStorage.getItem('goal_lang') || 'ru';
 let currentTheme = localStorage.getItem('goal_theme') || 'system';
 let versionInfo = {};
 
+// i18nMissing tracks every key looked up while absent from the current
+// dictionary. A raw key reaching the UI means a missing translation; the
+// browser regression suites fail on a non-empty set.
+let i18nMissing = {};
+
 // ─── i18n ───────────────────────────────────────────────────────────────────
 
 function t(key, params) {
-    let s = i18nDict[key] || key;
+    let s = i18nDict[key];
+    if (s === undefined) {
+        i18nMissing[key] = true;
+        s = key;
+    }
     if (params) {
         Object.keys(params).forEach(function (k) {
             s = s.split('{' + k + '}').join(String(params[k]));
@@ -48,8 +57,8 @@ function applyI18n() {
     document.querySelectorAll('[data-i18n-placeholder]').forEach(function (el) {
         el.placeholder = t(el.dataset.i18nPlaceholder);
     });
-    document.querySelectorAll('[data-i18n-title]').forEach(function (el) {
-        el.title = t(el.dataset.i18nTitle);
+    document.querySelectorAll('[data-i18n-tooltip]').forEach(function (el) {
+        el.setAttribute('data-tooltip', t(el.dataset.i18nTooltip));
     });
     document.title = t('app.title');
 }
@@ -64,12 +73,31 @@ async function loadI18n(lang) {
     } catch {}
 }
 
-function setLanguage(lang) {
+async function setLanguage(lang) {
     currentLang = lang;
     localStorage.setItem('goal_lang', lang);
     const setLang = document.getElementById('set-lang');
     if (setLang) setLang.value = lang;
-    loadI18n(lang);
+    await loadI18n(lang);
+    // Re-render the JS-generated views (lists, menus, chips, badges) so they
+    // follow the new language too; applyI18n above only refreshes static
+    // [data-i18n] labels, which would otherwise leave dynamic content in the
+    // previous language after a switch.
+    renderAll();
+    // Dynamic DOM created after the initial applyI18n must be re-localized for
+    // the NEW locale immediately, otherwise it keeps the previous language's
+    // text (or, if a key was unknown at creation time, the raw key itself).
+    // This covers: the pipeline builder (plEntries render), the wizard runtime
+    // dropdown + step button label, and every open tooltip surface.
+    if (isWizardOpen()) {
+        renderRtDropdown();
+        updateWizardStep();
+    }
+    if (isPipelineModalOpen()) renderPlBuilder();
+    if (document.getElementById('pipeline-modal').style.display === 'flex') {
+        document.getElementById('pipeline-modal-title').textContent =
+            document.getElementById('pipeline-form').id.value ? t('pipelines.edit.title') : t('pipelines.create.title');
+    }
 }
 
 // ─── Theme ──────────────────────────────────────────────────────────────────
@@ -100,6 +128,8 @@ async function init() {
     if (setLangEl) setLangEl.value = currentLang;
     await loadI18n(currentLang);
     startHealthMonitor();
+    bindTooltipSystem();
+    bindFitObservers();
     document.getElementById('wizard-form').addEventListener('submit', handleWizardSubmit);
     document.getElementById('wiz-autostart').addEventListener('change', function () {
         document.getElementById('wiz-delay-group').style.display = this.checked ? '' : 'none';
@@ -366,12 +396,29 @@ function esc(s) {
     return d.innerHTML;
 }
 
+// Compact instance ID for display. The differentiating part of an instance
+// id is its per-launch suffix (timestamp-seq), while the head is the model id
+// prefix shared by every instance of the same model — so the tail is kept and
+// the head elided. Display-only: routing, option values and API identity
+// always use the full id. The full id stays reachable via title attributes.
+// The optional `short` form keeps an 8-char tail for dense per-line contexts
+// (log-line badges); it derives from the same suffix logic and stays
+// distinguishing for same-model instances (the seq suffix is unique
+// process-locally).
+function compactInstanceId(id, short) {
+    return id ? '…' + String(id).slice(-(short ? 8 : 16)) : '';
+}
+
 function safeId(id) {
     return String(id).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
+// iconBtn renders the canonical action icon button. Help text is carried by
+// data-tooltip (the single canonical tooltip system) + aria-label; a native
+// title attribute is never set, so no native browser tooltip can appear
+// alongside the custom one.
 function iconBtn(icon, label, color, action, id) {
-    return '<button class="icon-btn icon-btn-' + color + '" title="' + esc(label) + '" aria-label="' + esc(label) + '" onclick="' + action + '(\'' + safeId(id) + '\')">' + icon + '</button>';
+    return '<button class="icon-btn icon-btn-' + color + '" data-tooltip="' + esc(label) + '" aria-label="' + esc(label) + '" onclick="' + action + '(\'' + safeId(id) + '\')">' + icon + '</button>';
 }
 
 var ICONS = {
@@ -381,12 +428,75 @@ var ICONS = {
     logs: '<svg viewBox="0 0 24 24"><path d="M3 18h12v-2H3v2zM3 6v2h18V6H3zm0 7h18v-2H3v2z"/></svg>',
     edit: '<svg viewBox="0 0 24 24"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1 1 0 000-1.41l-2.34-2.34a1 1 0 00-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>',
     del: '<svg viewBox="0 0 24 24"><path d="M6 19c0 1.1.9 2 2 2h8a2 2 0 002-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>',
-    kill: '<svg viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>'
+    kill: '<svg viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>',
+    drag: '<svg viewBox="0 0 24 24"><path d="M11 18c0 1.1-.9 2-2 2s-2-.9-2-2 .9-2 2-2 2 .9 2 2zm-2-8c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0-6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm6 4c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 6c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 6c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2z"/></svg>'
 };
 
+// parseArgs splits a launch-args string into argv tokens (ADR 013 D7). Shared by
+// the pipeline editor (Custom mode) and the model wizard, so both always agree.
+//
+// The textarea is a command-line representation: parseArgs turns it into the
+// exact []string argv tokens passed to exec.Command (Go re-escapes each token
+// for the OS, so tokens must hold the real value, with no quoting). Rules:
+//   • tokens are separated by UNQUOTED whitespace (space/tab/newline);
+//   • a double-quoted section "..." keeps its inner whitespace in one token and
+//     the quotes themselves are removed (e.g. -m "E:\models\my model.gguf" stays
+//     one argument);
+//   • INSIDE double quotes a backslash escapes the next character: \" → " and
+//     \\ → \; any other backslash is kept literally, so Windows paths and JSON
+//     survive ({"a\":\"b\"} inside quotes → {"a":"b"});
+//   • OUTSIDE quotes a backslash is a literal character (Windows paths);
+//   • an empty quoted section "" yields an empty token;
+//   • all other characters, including Unicode, pass through verbatim.
+// Example: --chat-template-kwargs "{\"reasoning_effort\":\"medium\"}" →
+//   ["--chat-template-kwargs", "{\"reasoning_effort\":\"medium\"}"]
+//   (second token value is {"reasoning_effort":"medium"}).
 function parseArgs(raw) {
     if (!raw) return [];
-    return raw.trim().split(/\s+/).filter(Boolean);
+    const s = String(raw);
+    const out = [];
+    let cur = '';
+    let inQ = false;
+    let tok = false;
+    for (let i = 0; i < s.length; i++) {
+        const c = s[i];
+        if (inQ) {
+            if (c === '\\' && i + 1 < s.length) {
+                const n = s[i + 1];
+                if (n === '"' || n === '\\') { cur += n; i++; } else { cur += c; }
+            } else if (c === '"') {
+                inQ = false;
+            } else {
+                cur += c;
+            }
+            tok = true;
+        } else if (c === '"') {
+            inQ = true;
+            tok = true;
+        } else if (/\s/.test(c)) {
+            if (tok) { out.push(cur); cur = ''; tok = false; }
+        } else {
+            cur += c;
+            tok = true;
+        }
+    }
+    if (tok) out.push(cur);
+    return out;
+}
+
+// renderArgs serializes argv []string back to a command-line text representation
+// for the textarea. Guarantee: parseArgs(renderArgs(args)) deep-equals args.
+// Tokens that contain whitespace, double quotes, or are empty get quoted with
+// inner quotes/backslashes escaped. All other tokens pass through unquoted.
+function renderArgs(args) {
+    if (!args || args.length === 0) return '';
+    return args.map(function (tok) {
+        if (tok === '') return '""';
+        if (/[ "\t\n]/.test(tok)) {
+            return '"' + tok.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
+        }
+        return tok;
+    }).join(' ');
 }
 
 // ─── Rendering ──────────────────────────────────────────────────────────────
@@ -398,6 +508,9 @@ function renderAll() {
     renderAdvInstances();
     renderHistory();
     updateLogInstanceSelect();
+    // Table labels change width with language/data: re-evaluate the shared
+    // TABLE-iff-fits contract after the whole render pass.
+    syncAllFit();
 }
 
 // ─── My Models (compact list) ──────────────────────────────────────────────
@@ -537,26 +650,87 @@ async function toggleAutostart(id) {
 
 // ─── Pipelines (ADR 010) ───────────────────────────────────────────────────
 
-function statusForModel(modelId) {
-    const active = getActiveInstances(modelId);
+// plEntries is the single source of truth for the linear pipeline builder (the
+// Scratch-inspired block list). Each entry maps to one PipelineModel: id (stable
+// on edit), model_id, argsMode ('model' | 'custom'), argsText (the raw custom
+// args string), and autoStart (per-entry autostart). The builder re-renders from
+// this array on every structural change so connectors and order stay consistent.
+let plEntries = [];
+
+function plNewEntry(modelId, mode, argsText, autoStart, entryId) {
+    return { id: entryId || '', model_id: modelId || '', argsMode: mode || 'model', argsText: argsText || '', autoStart: !!autoStart };
+}
+
+// pipelineEntryStatus is the client-side mirror of the detail endpoint
+// (ADR 013 D5): an entry's state is resolved by (pipeline_id, pipeline_entry_id)
+// with the D4 legacy fallback (an owned instance without entry attribution
+// resolves to the first entry of its model in list order).
+function pipelineEntryStatus(p, entry, idx) {
+    const owned = instancesData.filter(function (i) { return i.pipeline_id === p.id; });
+    let list = owned.filter(function (i) { return i.pipeline_entry_id && i.pipeline_entry_id === entry.id; });
+    if (list.length === 0) {
+        const firstOfModel = p.models.findIndex(function (m) { return m.model_id === entry.model_id; });
+        if (firstOfModel === idx) {
+            const consumed = {};
+            for (let k = 0; k < idx; k++) consumed[p.models[k].model_id] = true;
+            if (!consumed[entry.model_id]) {
+                list = owned.filter(function (i) { return !i.pipeline_entry_id && i.model_id === entry.model_id; });
+            }
+        }
+    }
+    const active = list.filter(function (i) { return isActive(i.state); });
+    let st = 'stopped';
     if (active.length > 0) {
         const states = active.map(function (i) { return i.state; });
-        if (states.indexOf('running') !== -1) return 'running';
-        if (states.indexOf('starting') !== -1) return 'starting';
-        if (states.indexOf('stopping') !== -1) return 'stopping';
+        if (states.indexOf('running') !== -1) st = 'running';
+        else if (states.indexOf('starting') !== -1) st = 'starting';
+        else if (states.indexOf('stopping') !== -1) st = 'stopping';
+        else st = active[0].state;
+    } else if (list.some(function (i) { return i.state === 'failed'; })) {
+        st = 'failed';
+    } else if (list.some(function (i) { return i.state === 'orphan'; })) {
+        st = 'orphan';
     }
-    if (getOrphanInstances(modelId).length > 0) return 'orphan';
+    return st;
+}
+
+// pipelineChips renders one chip per entry (ADR 013 D7): a repeated model
+// appears once per entry and carries a shared occurrence badge (×n); chips
+// beyond a display budget collapse to +N with a tooltip.
+function pipelineChips(p) {
+    const shown = p.models.slice(0, 6);
+    const rest = p.models.slice(6);
+    let html = shown.map(function (m, i) {
+        const st = pipelineEntryStatus(p, m, i);
+        const name = getModelName(m.model_id);
+        return '<span class="status-badge ' + st + '" title="' + esc(name) + '">' + esc(name) + '</span>';
+    }).join(' ');
+    if (rest.length > 0) {
+        const names = rest.map(function (m) { return getModelName(m.model_id); }).join(', ');
+        html += ' <span class="pl-chip-more" title="' + esc(t('pipelines.chip.more_title', { names: names })) + '">' + esc(t('pipelines.chip.more', { count: rest.length })) + '</span>';
+    }
+    return html;
+}
+
+// pipelineAggregateStatus is a pure projection of per-entry states (ADR 013 D7):
+// any active → the dominant active state; else any failed/orphan; else stopped.
+// No new backend state is introduced.
+function pipelineAggregateStatus(p) {
+    const sts = p.models.map(function (m, i) { return pipelineEntryStatus(p, m, i); });
+    if (sts.indexOf('running') !== -1) return 'running';
+    if (sts.indexOf('starting') !== -1) return 'starting';
+    if (sts.indexOf('stopping') !== -1) return 'stopping';
+    if (sts.indexOf('failed') !== -1) return 'failed';
+    if (sts.indexOf('orphan') !== -1) return 'orphan';
     return 'stopped';
 }
 
-function pipelineModelChips(p) {
-    return p.models.map(function (m) {
-        const st = statusForModel(m.model_id);
-        const name = getModelName(m.model_id);
-        const auto = m.auto_start ? ' A' : '';
-        const ov = m.args && m.args.length ? ' ↯' : '';
-        return '<span class="status-badge ' + st + '" title="' + esc(name) + (ov ? ' — ' + esc(t('pipelines.chip.override')) : '') + '">' + esc(name) + esc(auto + ov) + '</span>';
-    }).join(' ');
+function pipelineStateBadge(st) {
+    return '<span class="status-badge ' + st + '">' + t('models.status.' + st) + '</span>';
+}
+
+function pipelineHasOwnedActive(p) {
+    return instancesData.some(function (i) { return i.pipeline_id === p.id && isActive(i.state); });
 }
 
 function pipelineActiveToggle(p) {
@@ -565,49 +739,64 @@ function pipelineActiveToggle(p) {
         ' onchange="togglePipelineActive(\'' + safeId(p.id) + '\', this.checked)"><span class="toggle-slider"></span></span></label>';
 }
 
+// pipelineActionStrip is the Models-style inline action strip (ADR 013 UX):
+// state-driven Start (stopped) or Restart + Stop (running), plus the
+// always-available Edit and Delete. No overflow "…" menu — every action is a
+// direct icon button on desktop and mobile alike, matching the "My Models"
+// action pattern the Owner asked the pipeline list to adopt.
+function pipelineActionStrip(p) {
+    let s = '';
+    if (pipelineHasOwnedActive(p)) {
+        s += iconBtn(ICONS.restart, t('pipelines.actions.restart'), 'warning', 'restartPipeline', p.id);
+        s += iconBtn(ICONS.stop, t('pipelines.actions.stop'), 'danger', 'stopPipeline', p.id);
+    } else {
+        s += iconBtn(ICONS.start, t('pipelines.actions.start'), 'success', 'startPipeline', p.id);
+    }
+    s += iconBtn(ICONS.edit, t('pipelines.actions.edit'), 'ghost', 'editPipeline', p.id);
+    s += iconBtn(ICONS.del, t('pipelines.actions.delete'), 'danger', 'deletePipeline', p.id);
+    return s;
+}
+
 function renderPipelines() {
     const empty = document.getElementById('pipelines-empty');
-    const tableWrap = document.getElementById('pipelines-table-wrap');
-    const compact = document.getElementById('pipelines-compact');
+    const filterEmpty = document.getElementById('pipelines-filter-empty');
+    const list = document.getElementById('pipeline-list');
     if (pipelinesData.length === 0) {
-        document.getElementById('pipelines-body').innerHTML = '';
+        list.innerHTML = '';
         if (empty) empty.style.display = 'block';
-        if (tableWrap) tableWrap.classList.remove('visible');
-        if (compact) compact.classList.remove('visible');
+        if (filterEmpty) filterEmpty.style.display = 'none';
         return;
     }
     if (empty) empty.style.display = 'none';
-    if (tableWrap) tableWrap.classList.add('visible');
-    if (compact) compact.classList.add('visible');
-    document.getElementById('pipelines-body').innerHTML = pipelinesData.map(function (p) {
-        const actions = iconBtn(ICONS.start, t('pipelines.actions.start'), 'primary', 'startPipeline', p.id) +
-            iconBtn(ICONS.stop, t('pipelines.actions.stop'), 'danger', 'stopPipeline', p.id) +
-            iconBtn(ICONS.restart, t('pipelines.actions.restart'), 'warning', 'restartPipeline', p.id) +
-            iconBtn(ICONS.logs, t('pipelines.actions.logs'), 'ghost', 'viewPipelineLogs', p.id) +
-            iconBtn(ICONS.edit, t('pipelines.actions.edit'), 'ghost', 'editPipeline', p.id) +
-            iconBtn(ICONS.del, t('pipelines.actions.delete'), 'danger', 'deletePipeline', p.id);
-        return '<tr><td>' + esc(p.name) + '</td><td class="pl-chips-cell">' + pipelineModelChips(p) + '</td>' +
-            '<td>' + pipelineActiveToggle(p) + '</td>' +
-            '<td class="actions-cell pl-actions-cell">' + actions + '</td></tr>';
-    }).join('');
-    compact.innerHTML = pipelinesData.map(function (p) {
-        const actions = iconBtn(ICONS.start, t('pipelines.actions.start'), 'primary', 'startPipeline', p.id) +
-            iconBtn(ICONS.stop, t('pipelines.actions.stop'), 'danger', 'stopPipeline', p.id) +
-            iconBtn(ICONS.restart, t('pipelines.actions.restart'), 'warning', 'restartPipeline', p.id) +
-            iconBtn(ICONS.edit, t('pipelines.actions.edit'), 'ghost', 'editPipeline', p.id) +
-            iconBtn(ICONS.del, t('pipelines.actions.delete'), 'danger', 'deletePipeline', p.id);
-        return '<div class="compact-row pl-row">' +
-            '<div class="compact-main">' +
-                '<div class="compact-l1">' + pipelineActiveToggle(p) + '<span class="compact-title">' + esc(p.name) + '</span></div>' +
-                '<div class="compact-l2 pl-chips-wrap">' + pipelineModelChips(p) + '</div>' +
+    const search = (document.getElementById('pf-search').value || '').toLowerCase();
+    const autoF = document.getElementById('pf-autostart').checked;
+    let filtered = pipelinesData.filter(function (p) {
+        if (search && p.name.toLowerCase().indexOf(search) === -1) return false;
+        if (autoF && !p.active) return false;
+        return true;
+    });
+    if (filtered.length === 0) {
+        list.innerHTML = '<div class="empty-state" style="padding:1.5rem;"><p style="font-size:0.85rem;">' + esc(t('pipelines.filter.no_match')) + '</p></div>';
+        return;
+    }
+    if (filterEmpty) filterEmpty.style.display = 'none';
+    list.innerHTML = filtered.map(function (p) {
+        const st = pipelineAggregateStatus(p);
+        const autoBadge = p.active ? '<span class="autostart-indicator" title="' + esc(t('pipelines.col.autostart')) + '">A</span>' : '';
+        return '<div class="model-row">' +
+            '<div class="model-row-main">' +
+                '<div class="model-row-name">' +
+                    autoBadge +
+                    '<span class="status-badge ' + st + '">' + t('models.status.' + st) + '</span>' +
+                    '<span class="model-row-title pl-name" title="' + esc(p.name) + '">' + esc(p.name) + '</span>' +
+                '</div>' +
+                '<div class="model-row-sub pl-chips-wrap">' + pipelineChips(p) + '</div>' +
             '</div>' +
-            '<div class="compact-actions">' + actions + '</div>' +
+            '<div class="model-row-actions">' +
+                pipelineActionStrip(p) +
+            '</div>' +
         '</div>';
     }).join('');
-}
-
-function viewPipelineLogs() {
-    navigate('logs');
 }
 
 async function pipelineAction(action, id, successKey) {
@@ -655,24 +844,131 @@ function plModelOptions(selectedId) {
         }).join('');
 }
 
-function addPlModelRow(modelId, args, autoStart) {
-    const container = document.getElementById('pl-models-container');
-    const row = document.createElement('div');
-    row.className = 'pl-model-row';
-    row.innerHTML =
-        '<select class="pl-model-select">' + plModelOptions(modelId) + '</select>' +
-        '<input type="text" class="pl-args-input" value="' + esc(args || '') + '" placeholder="' + esc(t('pipelines.field.args_hint')) + '">' +
-        '<label class="filter-switch" title="' + esc(t('pipelines.field.autostart_hint')) + '">' +
-            '<span class="toggle-switch toggle-pipeline"><input type="checkbox" class="pl-autostart"' + (autoStart ? ' checked' : '') + '><span class="toggle-slider"></span></span></label>' +
-        '<button type="button" class="icon-btn icon-btn-danger" title="' + esc(t('pipelines.btn.remove_model')) + '" onclick="removePlModelRow(this)">' + ICONS.kill + '</button>';
-    container.appendChild(row);
+// ─── Linear pipeline builder (ADR 013 Owner UI: Scratch-inspired blocks) ───
+//
+// renderPlBuilder renders plEntries as a vertical sequence of blocks. Each block
+// is one PipelineModel entry: an order number, a model selector, a compact
+// segmented args mode [From model | Custom] (Custom reveals a textarea whose
+// non-empty value fully replaces the model args), and explicit reorder controls
+// (move up / move down, disabled at the sequence bounds) plus a remove control.
+// No DAG/branching/drag&drop and no decorative connectors: the sequence mirrors
+// the existing ordered-launch contract; backend entry identity and args
+// semantics are unchanged. Value edits (select/textarea) mutate the array
+// without re-rendering (preserves focus); structural edits (add/remove/move)
+// re-render so the order numbers stay consistent.
+function renderPlBuilder() {
+    const c = document.getElementById('pl-models-container');
+    if (!c) return;
+    if (!plEntries || plEntries.length === 0) plEntries.push(plNewEntry('', 'model', '', false));
+    const n = plEntries.length;
+    const upTitle = t('pipelines.btn.move_up');
+    const downTitle = t('pipelines.btn.move_down');
+    const removeTitle = t('pipelines.btn.remove_model');
+    const argsLabel = t('pipelines.field.args');
+    const segModel = t('pipelines.field.args_from_model');
+    const segCustom = t('pipelines.field.args_custom');
+    const overrideNote = t('pipelines.field.args_override_note');
+    const overrideHint = t('pipelines.field.args_override_hint');
+    let html = '';
+    for (let i = 0; i < n; i++) {
+        const e = plEntries[i];
+        html += '<div class="pl-block" role="listitem" aria-label="' + esc(t('pipelines.block.step', { n: i + 1 })) + '" data-idx="' + i + '" ondragover="plDragOver(event,' + i + ')" ondragleave="plDragLeave(event)" ondrop="plDrop(event,' + i + ')">';
+        html += '<div class="pl-block-head">';
+        html += '<span class="pl-drag" draggable="true" ondragstart="plDragStart(event,' + i + ')" ondragend="plDragEnd(event)" aria-label="' + esc(t('pipelines.btn.drag')) + '">' + ICONS.drag + '</span>';
+        html += '<span class="pl-step">' + (i + 1) + '</span>';
+        html += '<select class="pl-model-select" onchange="plSetModel(' + i + ', this.value)">' + plModelOptions(e.model_id) + '</select>';
+        html += '<div class="pl-block-actions">';
+        html += '<button type="button" class="pl-act pl-act-up"' + (i > 0 ? '' : ' disabled') + ' title="' + esc(upTitle) + '" aria-label="' + esc(upTitle) + '" onclick="plMoveEntry(' + i + ',-1)"><svg viewBox="0 0 24 24"><path d="M12 8l-6 8h12z"/></svg></button>';
+        html += '<button type="button" class="pl-act pl-act-down"' + (i < n - 1 ? '' : ' disabled') + ' title="' + esc(downTitle) + '" aria-label="' + esc(downTitle) + '" onclick="plMoveEntry(' + i + ',1)"><svg viewBox="0 0 24 24"><path d="M12 16l-6-8h12z"/></svg></button>';
+        html += '<button type="button" class="pl-act pl-act-remove" title="' + esc(removeTitle) + '" aria-label="' + esc(removeTitle) + '" onclick="plRemoveEntry(' + i + ')">' + ICONS.del + '</button>';
+        html += '</div>';
+        html += '</div>';
+        html += '<div class="pl-args-row">';
+        html += '<span class="pl-args-label">' + argsLabel + '</span>';
+        html += '<div class="pl-seg" role="radiogroup" aria-label="' + esc(argsLabel) + '">';
+        html += '<label class="pl-seg-item"><input type="radio" class="pl-args-radio" name="plargs' + i + '" value="model"' + (e.argsMode !== 'custom' ? ' checked' : '') + ' onchange="plSetArgsMode(' + i + ', \'model\')"><span>' + segModel + '</span></label>';
+        html += '<label class="pl-seg-item"><input type="radio" class="pl-args-radio" name="plargs' + i + '" value="custom"' + (e.argsMode === 'custom' ? ' checked' : '') + ' onchange="plSetArgsMode(' + i + ', \'custom\')"><span class="pl-seg-help" data-tooltip="' + esc(t('pipelines.help.args_custom')) + '" tabindex="0">' + segCustom + '</span></label>';
+        html += '</div>';
+        html += '</div>';
+        if (e.argsMode === 'custom') {
+            html += '<div class="pl-args-override" data-visible="1">';
+            html += '<textarea class="pl-args-input" rows="4" placeholder="' + esc(overrideHint) + '" oninput="plEntryArgsText(' + i + ', this.value)">' + esc(e.argsText) + '</textarea>';
+            html += '</div>';
+        }
+        html += '</div>';
+    }
+    html += '<button type="button" class="btn btn-ghost pl-add" onclick="plAddEntry()">' + t('pipelines.btn.add_model') + '</button>';
+    c.innerHTML = html;
 }
 
-function removePlModelRow(btn) {
-    const container = document.getElementById('pl-models-container');
-    if (container.children.length > 1) {
-        btn.closest('.pl-model-row').remove();
-    }
+function plAddEntry() {
+    if (!plEntries) plEntries = [];
+    plEntries.push(plNewEntry('', 'model', '', false));
+    renderPlBuilder();
+}
+
+function plRemoveEntry(i) {
+    if (!plEntries || plEntries.length <= 1) return;
+    plEntries.splice(i, 1);
+    renderPlBuilder();
+}
+
+function plMoveEntry(i, dir) {
+    if (!plEntries) return;
+    const to = i + dir;
+    if (to < 0 || to >= plEntries.length) return;
+    const tmp = plEntries[i]; plEntries[i] = plEntries[to]; plEntries[to] = tmp;
+    renderPlBuilder();
+}
+
+let _plDragIdx = -1;
+function plDragStart(e, idx) {
+    _plDragIdx = idx;
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', String(idx));
+    e.target.closest('.pl-block').classList.add('pl-dragging');
+}
+function plDragEnd(e) {
+    _plDragIdx = -1;
+    document.querySelectorAll('.pl-block').forEach(function (b) { b.classList.remove('pl-dragging', 'pl-drop-above', 'pl-drop-below'); });
+}
+function plDragOver(e, idx) {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    if (idx === _plDragIdx) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const above = e.clientY < rect.top + rect.height / 2;
+    document.querySelectorAll('.pl-block').forEach(function (b) { b.classList.remove('pl-drop-above', 'pl-drop-below'); });
+    e.currentTarget.classList.add(above ? 'pl-drop-above' : 'pl-drop-below');
+}
+function plDragLeave(e) {
+    e.currentTarget.classList.remove('pl-drop-above', 'pl-drop-below');
+}
+function plDrop(e, idx) {
+    e.preventDefault();
+    if (_plDragIdx < 0 || _plDragIdx === idx) { plDragEnd(e); return; }
+    const rect = e.currentTarget.getBoundingClientRect();
+    const above = e.clientY < rect.top + rect.height / 2;
+    let to = above ? idx : idx + 1;
+    if (to > _plDragIdx) to--;
+    const item = plEntries.splice(_plDragIdx, 1)[0];
+    plEntries.splice(to, 0, item);
+    _plDragIdx = -1;
+    renderPlBuilder();
+}
+
+function plSetModel(i, value) {
+    if (plEntries && plEntries[i]) plEntries[i].model_id = value;
+}
+
+function plSetArgsMode(i, mode) {
+    if (!plEntries || !plEntries[i]) return;
+    plEntries[i].argsMode = mode;
+    renderPlBuilder();
+}
+
+function plEntryArgsText(i, text) {
+    if (plEntries && plEntries[i]) plEntries[i].argsText = text || '';
 }
 
 function openPipelineModal(p) {
@@ -687,15 +983,17 @@ function openPipelineModal(p) {
     form.id.value = p ? p.id : '';
     form.name.value = p ? p.name : '';
     form.active.checked = p ? !!p.active : false;
-    const container = document.getElementById('pl-models-container');
-    container.innerHTML = '';
+    // Build the linear builder state from the pipeline (Create: one empty
+    // block; Edit: one block per entry, preserving entry id + args mode).
+    plEntries = [];
     if (p && p.models && p.models.length) {
         p.models.forEach(function (m) {
-            addPlModelRow(m.model_id, m.args ? m.args.join(' ') : '', m.auto_start);
+            plEntries.push(plNewEntry(m.model_id, (m.args && m.args.length) ? 'custom' : 'model', renderArgs(m.args || []), m.auto_start, m.id));
         });
     } else {
-        addPlModelRow('', '', false);
+        plEntries.push(plNewEntry('', 'model', '', false));
     }
+    renderPlBuilder();
     document.getElementById('pipeline-modal').style.display = 'flex';
 }
 
@@ -710,20 +1008,22 @@ function editPipeline(id) {
 async function handlePipelineSubmit(e) {
     e.preventDefault();
     const f = e.target;
-    const rows = Array.prototype.slice.call(document.querySelectorAll('#pl-models-container .pl-model-row'));
     const models = [];
-    for (const row of rows) {
-        const modelId = row.querySelector('.pl-model-select').value;
-        if (!modelId) { showToast(t('pipelines.error.model_required'), 'error'); return false; }
-        if (models.some(function (m) { return m.model_id === modelId; })) {
-            showToast(t('pipelines.error.duplicate_model'), 'error');
-            return false;
-        }
-        const args = parseArgs(row.querySelector('.pl-args-input').value);
+    for (let i = 0; i < plEntries.length; i++) {
+        const entry = plEntries[i];
+        if (!entry.model_id) { showToast(t('pipelines.error.model_required'), 'error'); return false; }
+        // Custom mode: the parsed (quote-aware) args fully replace the model's
+        // args. From-model mode: empty args → the model's args are used.
+        // auto_start is a legacy per-entry field, no longer editable in the UI
+        // (an Active pipeline launches every entry). It round-trips the stored
+        // value unchanged so existing data is preserved on edit; on create it
+        // defaults to false. The backend ignores it for launch decisions.
+        const args = (entry.argsMode === 'custom') ? parseArgs(entry.argsText) : [];
         models.push({
-            model_id: modelId,
+            id: entry.id,
+            model_id: entry.model_id,
             args: args,
-            auto_start: row.querySelector('.pl-autostart').checked
+            auto_start: !!entry.autoStart
         });
     }
     if (models.length === 0) {
@@ -770,7 +1070,7 @@ function updateLogInstanceSelect() {
     sel.innerHTML = '<option value="">' + t('logs.select.all') + '</option>' +
         allInsts.map(function (i) {
             const stateLabel = historyStateLabel(i.state);
-            const label = getModelName(i.model_id) + ' | ' + i.id.slice(0, 12) + '… | ' + stateLabel;
+            const label = getModelName(i.model_id) + ' | ' + compactInstanceId(i.id) + ' | ' + stateLabel;
             return '<option value="' + esc(i.id) + '">' + esc(label) + '</option>';
         }).join('');
     sel.value = cur;
@@ -791,7 +1091,7 @@ function updateLogInstanceBar(instId) {
     const started = fmtTime(inst.started_at);
     const stateLabel = historyStateLabel(inst.state);
     bar.innerHTML = '<span class="log-bar-model" title="' + esc(getModelName(inst.model_id)) + '">' + esc(getModelName(inst.model_id)) + '</span>' +
-        ' <span class="log-sep">|</span> <code>' + esc(inst.id.slice(0, 16)) + '</code>' +
+        ' <span class="log-sep">|</span> <code title="' + esc(inst.id) + '">' + esc(compactInstanceId(inst.id)) + '</code>' +
         ' <span class="log-sep">|</span> ' + t('logs.bar.pid') + ': ' + (inst.pid || '—') +
         ' <span class="log-sep">|</span> <span class="status-badge ' + esc(inst.state) + '">' + esc(stateLabel) + '</span>' +
         ' <span class="log-sep">|</span> ' + t('logs.bar.started') + ': ' + started;
@@ -844,7 +1144,7 @@ function appendLogLine(d) {
     const div = document.createElement('div');
     div.className = 'log-line ' + stream;
     const ts = d.time ? new Date(d.time).toLocaleTimeString() : '';
-    const instLabel = d.instance_id ? '<span class="log-inst">' + esc(d.instance_id.substring(0, 8)) + '</span>' : '';
+    const instLabel = d.instance_id ? '<span class="log-inst" title="' + esc(d.instance_id) + '">' + esc(compactInstanceId(d.instance_id, true)) + '</span>' : '';
     div.innerHTML = '<span class="log-time">' + ts + '</span>' + instLabel + '<span class="log-source">[' + esc(stream) + ']</span>' + esc(d.message);
     view.appendChild(div);
 
@@ -932,6 +1232,7 @@ function openWizard(modelId) {
     form.reset();
     document.getElementById('wizard-error').style.display = 'none';
     document.getElementById('wiz-env-container').innerHTML = '';
+    document.getElementById('wiz-env-container').setAttribute('data-original-keys', '[]');
     document.querySelector('input[name=wiz-rt-mode][value=existing]').checked = true;
     onWizRtModeChange();
     loadWizardRuntimeCards();
@@ -943,13 +1244,32 @@ function openWizard(modelId) {
         const m = modelsData.find(function (x) { return x.id === wizEditId; });
         if (m) {
             document.getElementById('wiz-name').value = m.name || '';
-            document.getElementById('wiz-args').value = (m.args || []).join('\n');
+            document.getElementById('wiz-args').value = renderArgs(m.args || []);
             document.getElementById('wiz-autostart').checked = !!m.active;
             document.getElementById('wiz-delay-group').style.display = m.active ? '' : 'none';
             document.getElementById('wiz-autostart-delay').value = m.autostart_delay || 0;
             if (m.runtime_id) {
                 rtSelectedId = m.runtime_id;
                 renderRtDropdown();
+            }
+            // Pre-fill existing environment keys (write-only: keys visible, values hidden)
+            if (m.environment_keys && m.environment_keys.length) {
+                var envContainer = document.getElementById('wiz-env-container');
+                envContainer.setAttribute('data-original-keys', JSON.stringify(m.environment_keys));
+                m.environment_keys.forEach(function (key) {
+                    var div = document.createElement('div');
+                    div.className = 'env-row';
+                    div.style.display = 'flex';
+                    div.style.gap = '6px';
+                    div.style.marginBottom = '6px';
+                    div.setAttribute('data-existing', 'true');
+                    div.innerHTML = '<input type="text" value="' + esc(key) + '" readonly style="flex:1;padding:6px;border:1px solid var(--border);border-radius:4px;background:var(--bg-input);color:var(--text-primary);opacity:0.7;">' +
+                        '<input type="text" placeholder="write-only" style="flex:2;padding:6px;border:1px solid var(--border);border-radius:4px;background:var(--bg-input);color:var(--text-primary);">' +
+                        '<button type="button" class="btn btn-danger btn-sm" onclick="this.parentElement.remove()">&times;</button>';
+                    envContainer.appendChild(div);
+                });
+            } else {
+                document.getElementById('wiz-env-container').setAttribute('data-original-keys', '[]');
             }
         }
     }
@@ -1140,13 +1460,16 @@ async function handleWizardSubmit(e) {
             const delay = parseInt(document.getElementById('wiz-autostart-delay').value) || 0;
             if (delay > 0) body.autostart_delay = delay;
         }
-        const env = collectEnvRows('wiz-env-container');
-        if (Object.keys(env).length) body.environment = env;
 
         if (wizEditId) {
+            // Build environment_patch for lossless edit
+            const patch = buildEnvPatch('wiz-env-container');
+            if (patch.length) body.environment_patch = patch;
             await api('/models/' + wizEditId, { method: 'PUT', body: JSON.stringify(body) });
             showToast('"' + name + '" ' + t('common.saved'), 'success');
         } else {
+            const env = collectEnvRows('wiz-env-container');
+            if (Object.keys(env).length) body.environment = env;
             await api('/models', { method: 'POST', body: JSON.stringify(body) });
             showToast('"' + name + '" ' + t('common.created'), 'success');
         }
@@ -1193,6 +1516,45 @@ function collectEnvRows(containerId) {
     return env;
 }
 
+// buildEnvPatch constructs the environment_patch array for a lossless model edit.
+// Existing keys (pre-filled rows with data-existing="true"):
+//   - still present, value empty => KEEP (no op emitted)
+//   - still present, value filled => SET
+//   - removed from DOM => DELETE
+// New rows (no data-existing):
+//   - => SET (ADD)
+function buildEnvPatch(containerId) {
+    const container = document.getElementById(containerId);
+    const originalKeys = JSON.parse(container.getAttribute('data-original-keys') || '[]');
+    const patch = [];
+    // Check which original keys are still present and their values
+    const presentKeys = {};
+    container.querySelectorAll('.env-row').forEach(function (row) {
+        const inputs = row.querySelectorAll('input');
+        if (!inputs[0]) return;
+        const key = inputs[0].value.trim();
+        if (!key) return;
+        const val = inputs[1] ? inputs[1].value : '';
+        const isExisting = row.getAttribute('data-existing') === 'true';
+        if (isExisting) {
+            presentKeys[key] = val;
+            if (val !== '') {
+                patch.push({ key: key, action: 'set', value: val });
+            }
+        } else {
+            // New key (ADD)
+            patch.push({ key: key, action: 'set', value: val });
+        }
+    });
+    // Deleted keys
+    originalKeys.forEach(function (key) {
+        if (!(key in presentKeys)) {
+            patch.push({ key: key, action: 'delete' });
+        }
+    });
+    return patch;
+}
+
 // ─── Advanced: Runtimes ─────────────────────────────────────────────────────
 
 function renderAdvRuntimes() {
@@ -1201,17 +1563,17 @@ function renderAdvRuntimes() {
     if (runtimesData.length === 0) {
         document.getElementById('adv-runtimes-body').innerHTML = '';
         if (empty) empty.style.display = 'block';
-        if (tableWrap) tableWrap.classList.remove('visible');
+        if (tableWrap) tableWrap.dataset.has = '0';
         const compact = document.getElementById('runtimes-compact');
         if (compact) compact.classList.remove('visible');
         return;
     }
     if (empty) empty.style.display = 'none';
-    if (tableWrap) tableWrap.classList.add('visible');
+    if (tableWrap) tableWrap.dataset.has = '1';
     document.getElementById('adv-runtimes-body').innerHTML = runtimesData.map(function (r) {
         return '<tr><td>' + esc(r.name) + '</td><td title="' + esc(r.executable || '') + '">' + esc(r.executable) + '</td><td title="' + esc(r.working_directory || '') + '">' + esc(r.working_directory || '—') + '</td>' +
-            '<td class="actions-cell"><button class="btn btn-ghost btn-sm" onclick="editRuntime(\'' + safeId(r.id) + '\')">' + t('runtimes.actions.edit') + '</button> ' +
-            '<button class="btn btn-danger btn-sm" onclick="deleteRuntime(\'' + safeId(r.id) + '\')">' + t('runtimes.actions.delete') + '</button></td></tr>';
+            '<td class="actions-cell">' + iconBtn(ICONS.edit, t('runtimes.actions.edit'), 'ghost', 'editRuntime', r.id) +
+            iconBtn(ICONS.del, t('runtimes.actions.delete'), 'danger', 'deleteRuntime', r.id) + '</td></tr>';
     }).join('');
     const compact = document.getElementById('runtimes-compact');
     if (compact) {
@@ -1231,6 +1593,7 @@ function renderAdvRuntimes() {
             '</div>';
         }).join('');
     }
+    applyFit(fitViews[0]);
 }
 
 function showCreateRuntimeModal() {
@@ -1267,10 +1630,12 @@ function editRuntime(id) {
     f.querySelector('[name=working_directory]').value = r.working_directory || '';
     const envC = document.getElementById('rt-edit-env-container');
     envC.innerHTML = '';
+    envC.setAttribute('data-original-keys', JSON.stringify(r.environment_keys || []));
     if (r.environment_keys && r.environment_keys.length) {
         r.environment_keys.forEach(function (k) {
             const row = document.createElement('div');
             row.className = 'env-row';
+            row.setAttribute('data-existing', 'true');
             row.style.display = 'flex';
             row.style.gap = '6px';
             row.style.marginBottom = '6px';
@@ -1301,8 +1666,11 @@ async function handleEditRuntime(e) {
     const f = e.target;
     const body = { name: f.name.value, executable: f.executable.value };
     if (f.working_directory.value) body.working_directory = f.working_directory.value;
-    const env = collectEnvRows('rt-edit-env-container');
-    if (Object.keys(env).length) body.environment = env;
+    // Lossless environment edit: untouched keys are KEPT (no op), typed
+    // values are SET, removed rows are DELETE, new rows are ADD. The full
+    // environment map is never sent on update (write-only values).
+    const patch = buildEnvPatch('rt-edit-env-container');
+    if (patch.length) body.environment_patch = patch;
     try {
         await api('/runtimes/' + f.querySelector('[name=id]').value, { method: 'PUT', body: JSON.stringify(body) });
         closeModal('edit-runtime-modal');
@@ -1421,31 +1789,31 @@ function renderAdvInstances() {
     if (visible.length === 0) {
         document.getElementById('adv-instances-body').innerHTML = '';
         if (empty) empty.style.display = 'block';
-        if (tableWrap) tableWrap.classList.remove('visible');
+        if (tableWrap) tableWrap.dataset.has = '0';
         const compact = document.getElementById('instances-compact');
         if (compact) compact.classList.remove('visible');
         return;
     }
     if (empty) empty.style.display = 'none';
-    if (tableWrap) tableWrap.classList.add('visible');
+    if (tableWrap) tableWrap.dataset.has = '1';
     document.getElementById('adv-instances-body').innerHTML = visible.map(function (i) {
         var isOrphan = i.state === 'orphan';
         var badge = '<span class="status-badge ' + esc(i.state) + '" title="' + esc(t(isOrphan ? 'instances.orphan.hint' : 'models.status.' + i.state) || i.state) + '">' + esc(t('models.status.' + i.state) || i.state) + '</span>';
         var actions;
         if (isOrphan) {
-            actions = '<button class="btn btn-ghost btn-sm" onclick="viewInstanceLogs(\'' + safeId(i.id) + '\')">' + t('instances.actions.logs') + '</button>' +
-                ' <button class="btn btn-danger btn-sm" onclick="killInstance(\'' + safeId(i.id) + '\')">' + t('instances.actions.kill') + '</button>' +
-                ' <button class="btn btn-warning btn-sm" onclick="dismissInstance(\'' + safeId(i.id) + '\')">' + t('instances.actions.dismiss') + '</button>';
+            actions = iconBtn(ICONS.logs, t('instances.actions.logs'), 'ghost', 'viewInstanceLogs', i.id) +
+                iconBtn(ICONS.kill, t('instances.actions.kill'), 'danger', 'killInstance', i.id) +
+                iconBtn(ICONS.stop, t('instances.actions.dismiss'), 'warning', 'dismissInstance', i.id);
         } else {
-            actions = '<button class="btn btn-ghost btn-sm" onclick="viewInstanceLogs(\'' + safeId(i.id) + '\')">' + t('instances.actions.logs') + '</button>' +
-                ' <button class="btn btn-danger btn-sm" onclick="stopInstance(\'' + safeId(i.id) + '\')">' + t('instances.actions.stop') + '</button> ' +
-                '<button class="btn btn-warning btn-sm" onclick="restartInstance(\'' + safeId(i.id) + '\')">' + t('instances.actions.restart') + '</button>';
+            actions = iconBtn(ICONS.logs, t('instances.actions.logs'), 'ghost', 'viewInstanceLogs', i.id) +
+                iconBtn(ICONS.stop, t('instances.actions.stop'), 'danger', 'stopInstance', i.id) +
+                iconBtn(ICONS.restart, t('instances.actions.restart'), 'warning', 'restartInstance', i.id);
         }
-        return '<tr><td style="font-family:var(--font-mono);font-size:0.78rem;">' + esc(i.id.slice(0, 16)) + '</td>' +
-            '<td title="' + esc(getModelName(i.model_id)) + '">' + esc(getModelName(i.model_id)) + '</td>' +
-            '<td>' + badge + '</td>' +
-            '<td>' + (i.pid || '—') + '</td><td title="' + esc(fmtTime(i.started_at)) + '">' + fmtTime(i.started_at) + '</td><td>' + fmtTime(i.stopped_at) + '</td>' +
-            '<td>' + (i.exit_code != null ? i.exit_code : '—') + '</td>' +
+        return '<tr><td class="inst-mono" title="' + esc(i.id) + '">' + esc(compactInstanceId(i.id)) + '</td>' +
+            '<td class="inst-model" title="' + esc(getModelName(i.model_id)) + '">' + esc(getModelName(i.model_id)) + '</td>' +
+            '<td class="inst-state">' + badge + '</td>' +
+            '<td class="inst-mono">' + (i.pid || '—') + '</td><td class="inst-time" title="' + esc(fmtTime(i.started_at)) + '">' + fmtTime(i.started_at) + '</td><td class="inst-time">' + fmtTime(i.stopped_at) + '</td>' +
+            '<td class="inst-mono">' + (i.exit_code != null ? i.exit_code : '—') + '</td>' +
             '<td class="actions-cell">' + actions + '</td></tr>';
     }).join('');
     const compact = document.getElementById('instances-compact');
@@ -1471,12 +1839,13 @@ function renderAdvInstances() {
                         badge +
                         '<span class="compact-title" title="' + esc(getModelName(i.model_id)) + '">' + esc(getModelName(i.model_id)) + '</span>' +
                     '</div>' +
-                    '<div class="compact-l2">' + esc(i.id.slice(0, 12)) + ' · PID ' + (i.pid || '—') + (range ? ' · ' + range : '') + '</div>' +
+                    '<div class="compact-l2" title="' + esc(i.id) + '">' + esc(compactInstanceId(i.id)) + ' · PID ' + (i.pid || '—') + (range ? ' · ' + range : '') + '</div>' +
                 '</div>' +
                 '<div class="compact-actions">' + actions + '</div>' +
             '</div>';
         }).join('');
     }
+    applyFit(fitViews[1]);
 }
 
 async function stopInstance(id) {
@@ -1546,23 +1915,23 @@ function renderHistory() {
 
     if (filtered.length === 0) {
         if (empty) empty.style.display = 'block';
-        if (tableWrap) tableWrap.classList.remove('visible');
+        if (tableWrap) tableWrap.dataset.has = '0';
         const compact = document.getElementById('history-compact');
         if (compact) compact.classList.remove('visible');
         return;
     }
     if (empty) empty.style.display = 'none';
-    if (tableWrap) tableWrap.classList.add('visible');
+    if (tableWrap) tableWrap.dataset.has = '1';
     document.getElementById('history-body').innerHTML = filtered.slice(0, 200).map(function (i) {
         const modelName = i.model_name || getModelName(i.model_id);
         const exitTitle = i.exit_code != null ? ' title="' + esc(String(i.exit_code)) + '"' : '';
-        return '<tr><td title="' + esc(modelName) + '">' + esc(modelName) + '</td>' +
-            '<td style="font-family:var(--font-mono);font-size:0.78rem;">' + esc(i.id.slice(0, 12)) + '</td>' +
-            '<td><span class="status-badge ' + esc(i.state) + '">' + esc(historyStateLabel(i.state)) + '</span></td>' +
-            '<td>' + (i.pid || '—') + '</td>' +
-            '<td title="' + esc(fmtTime(i.started_at)) + '">' + fmtTime(i.started_at) + '</td><td title="' + esc(fmtTime(i.stopped_at)) + '">' + fmtTime(i.stopped_at) + '</td>' +
-            '<td' + exitTitle + '>' + (i.exit_code != null ? i.exit_code : '—') + '</td>' +
-            '<td class="actions-cell"><button class="btn btn-ghost btn-sm" onclick="viewInstanceLogs(\'' + safeId(i.id) + '\')">' + t('instances.actions.logs') + '</button></td></tr>';
+        return '<tr><td class="inst-model" title="' + esc(modelName) + '">' + esc(modelName) + '</td>' +
+            '<td class="inst-mono" title="' + esc(i.id) + '">' + esc(compactInstanceId(i.id)) + '</td>' +
+            '<td class="inst-state"><span class="status-badge ' + esc(i.state) + '">' + esc(historyStateLabel(i.state)) + '</span></td>' +
+            '<td class="inst-mono">' + (i.pid || '—') + '</td>' +
+            '<td class="inst-time" title="' + esc(fmtTime(i.started_at)) + '">' + fmtTime(i.started_at) + '</td><td class="inst-time" title="' + esc(fmtTime(i.stopped_at)) + '">' + fmtTime(i.stopped_at) + '</td>' +
+            '<td class="inst-mono"' + exitTitle + '>' + (i.exit_code != null ? i.exit_code : '—') + '</td>' +
+            '<td class="actions-cell">' + iconBtn(ICONS.logs, t('instances.actions.logs'), 'ghost', 'viewInstanceLogs', i.id) + '</td></tr>';
     }).join('');
     const compact = document.getElementById('history-compact');
     if (compact) {
@@ -1571,7 +1940,7 @@ function renderHistory() {
             const modelName = i.model_name || getModelName(i.model_id);
             const range = fmtRange(i.started_at, i.stopped_at);
             const title = [fmtTime(i.started_at), fmtTime(i.stopped_at)].join(' → ');
-            const rangeTitle = range ? ' title="' + esc(title) + '"' : '';
+            const rangeTitle = range ? ' title="' + esc(i.id + ' · ' + title) + '"' : ' title="' + esc(i.id) + '"';
             const exitPart = i.exit_code != null ? ' · Exit ' + i.exit_code : '';
             return '<div class="compact-row chist-row">' +
                 '<div class="compact-main">' +
@@ -1579,7 +1948,7 @@ function renderHistory() {
                         '<span class="status-badge ' + esc(i.state) + '">' + esc(historyStateLabel(i.state)) + '</span>' +
                         '<span class="compact-title" title="' + esc(modelName) + '">' + esc(modelName) + '</span>' +
                     '</div>' +
-                    '<div class="compact-l2"' + rangeTitle + '>' + esc(i.id.slice(0, 12)) + ' · PID ' + (i.pid || '—') + exitPart + (range ? ' · ' + range : '') + '</div>' +
+                    '<div class="compact-l2"' + rangeTitle + '>' + esc(compactInstanceId(i.id)) + ' · PID ' + (i.pid || '—') + exitPart + (range ? ' · ' + range : '') + '</div>' +
                 '</div>' +
                 '<div class="compact-actions">' +
                     iconBtn(ICONS.logs, t('instances.actions.logs'), 'ghost', 'viewInstanceLogs', i.id) +
@@ -1587,6 +1956,7 @@ function renderHistory() {
             '</div>';
         }).join('');
     }
+    applyFit(fitViews[2]);
 }
 
 // ─── Instance Cleanup ───────────────────────────────────────────────────────
@@ -1671,9 +2041,140 @@ function friendlyError(err) {
     return translateServerMessage((err && err.message) || '');
 }
 
+// ─── Canonical tooltip (single system) ──────────────────────────────────────
+// The only user-visible tooltip mechanism: one floating #goaltip element whose
+// content comes from the data-tooltip attribute. Trigger elements must not also
+// carry a native title attribute (a double tooltip is a defect). Positioning:
+// above the target when it fits, otherwise below; horizontally clamped to the
+// viewport so the tooltip is never clipped or causes horizontal overflow.
+let tipActiveEl = null;
+
+function tipShow(target) {
+    const tipEl = document.getElementById('goaltip');
+    if (!tipEl) return;
+    const text = target.getAttribute('data-tooltip');
+    if (!text) return;
+    tipEl.textContent = text;
+    tipEl.classList.add('visible');
+    tipEl.setAttribute('aria-hidden', 'false');
+    const r = target.getBoundingClientRect();
+    const tr = tipEl.getBoundingClientRect();
+    const margin = 8;
+    let left = r.left + r.width / 2 - tr.width / 2;
+    if (left < margin) left = margin;
+    if (left + tr.width > window.innerWidth - margin) left = window.innerWidth - margin - tr.width;
+    if (left < margin) left = margin;
+    let top = r.top - tr.height - 8;
+    if (top < margin) top = r.bottom + 8;
+    tipEl.style.left = Math.round(left) + 'px';
+    tipEl.style.top = Math.round(top) + 'px';
+    target.setAttribute('aria-describedby', 'goaltip');
+    tipActiveEl = target;
+}
+
+function tipHide() {
+    const tipEl = document.getElementById('goaltip');
+    if (!tipEl) return;
+    tipEl.classList.remove('visible');
+    tipEl.setAttribute('aria-hidden', 'true');
+    if (tipActiveEl) {
+        tipActiveEl.removeAttribute('aria-describedby');
+        tipActiveEl = null;
+    }
+}
+
+function tipTargetFromEvent(e) {
+    const el = e && e.target ? e.target : null;
+    return el && el.closest ? el.closest('[data-tooltip]') : null;
+}
+
+function bindTooltipSystem() {
+    document.addEventListener('mouseover', function (e) {
+        const tEl = tipTargetFromEvent(e);
+        if (tEl && tEl !== tipActiveEl) tipShow(tEl);
+    });
+    document.addEventListener('mouseout', function (e) {
+        if (!tipActiveEl) return;
+        const related = tipTargetFromEvent({ target: e.relatedTarget });
+        if (related !== tipActiveEl) tipHide();
+    });
+    document.addEventListener('focusin', function (e) {
+        const tEl = tipTargetFromEvent(e);
+        if (tEl && tEl !== tipActiveEl) tipShow(tEl);
+    });
+    document.addEventListener('focusout', function (e) {
+        if (!tipActiveEl) return;
+        // Only hide when focus actually leaves the trigger (not on unrelated
+        // focus changes elsewhere, which would hide a hover tooltip).
+        const from = e.target;
+        if (from === tipActiveEl || (from && from.contains && from.contains(tipActiveEl))) tipHide();
+    });
+    window.addEventListener('scroll', function () { tipHide(); }, true);
+    window.addEventListener('resize', function () { tipHide(); });
+}
+
+// ─── Shared responsive contract: TABLE iff it fits, otherwise CARDS ─────────
+// One contract for every list view (Runtimes / Instances / History), driven by
+// the ACTUAL content width (the wrapper's own width, sidebar included) — never
+// by a viewport breakpoint. The table wrapper is overflow:hidden (a horizontal
+// table scrollbar is a defect, not a state) and the mode is re-evaluated after
+// every render, every language switch, and on any size change via
+// ResizeObserver. While in card mode the table stays laid out at the same
+// width but invisible (height 0), so its scrollWidth is a live measurement of
+// the width the table would require.
+const fitViews = [
+    { table: 'runtimes-table-wrap', cards: 'runtimes-compact' },
+    { table: 'instances-table-wrap', cards: 'instances-compact' },
+    { table: 'history-table-wrap', cards: 'history-compact' }
+];
+
+function applyFit(view) {
+    const wrap = document.getElementById(view.table);
+    const cards = document.getElementById(view.cards);
+    if (!wrap || !cards) return;
+    if (wrap.dataset.has !== '1') {
+        wrap.classList.remove('fit-table');
+        cards.classList.remove('visible');
+        return;
+    }
+    const fits = wrap.scrollWidth <= wrap.clientWidth + 1;
+    wrap.classList.toggle('fit-table', fits);
+    cards.classList.toggle('visible', !fits);
+}
+
+function syncAllFit() {
+    fitViews.forEach(applyFit);
+}
+
+let fitObserversBound = false;
+
+function bindFitObservers() {
+    if (fitObserversBound) return;
+    fitObserversBound = true;
+    if (typeof ResizeObserver === 'function') {
+        const ro = new ResizeObserver(function () { syncAllFit(); });
+        fitViews.forEach(function (v) {
+            const el = document.getElementById(v.table);
+            if (el) ro.observe(el);
+        });
+    } else {
+        window.addEventListener('resize', syncAllFit);
+    }
+}
+
 // ─── Modal helpers ──────────────────────────────────────────────────────────
 
 function closeModal(id) { document.getElementById(id).style.display = 'none'; }
+
+function isWizardOpen() {
+    const w = document.getElementById('wizard-modal');
+    return !!w && w.style.display === 'flex';
+}
+
+function isPipelineModalOpen() {
+    const m = document.getElementById('pipeline-modal');
+    return !!m && m.style.display === 'flex';
+}
 
 function showConfirm(msg, onYes) {
     const el = document.getElementById('confirm-message');
@@ -1934,6 +2435,8 @@ window.setTheme = setTheme;
 window.setLanguage = setLanguage;
 window.friendlyError = friendlyError;
 window.translateServerMessage = translateServerMessage;
+window.t = t;
+window.parseArgs = parseArgs;
 window.renderModels = renderModels;
 window.renderHistory = renderHistory;
 window.closeRTDelete = closeRTDelete;
@@ -1958,12 +2461,22 @@ window.stopPipeline = stopPipeline;
 window.restartPipeline = restartPipeline;
 window.deletePipeline = deletePipeline;
 window.togglePipelineActive = togglePipelineActive;
-window.viewPipelineLogs = viewPipelineLogs;
 window.openCreatePipelineModal = openCreatePipelineModal;
 window.editPipeline = editPipeline;
 window.handlePipelineSubmit = handlePipelineSubmit;
-window.addPlModelRow = addPlModelRow;
-window.removePlModelRow = removePlModelRow;
+window.renderPlBuilder = renderPlBuilder;
+window.plAddEntry = plAddEntry;
+window.plRemoveEntry = plRemoveEntry;
+window.plMoveEntry = plMoveEntry;
+window.plSetModel = plSetModel;
+window.plSetArgsMode = plSetArgsMode;
+window.plEntryArgsText = plEntryArgsText;
+window.plDragStart = plDragStart;
+window.plDragEnd = plDragEnd;
+window.plDragOver = plDragOver;
+window.plDragLeave = plDragLeave;
+window.plDrop = plDrop;
+window.i18nMissing = i18nMissing;
 
 // ─── Boot ───────────────────────────────────────────────────────────────────
 

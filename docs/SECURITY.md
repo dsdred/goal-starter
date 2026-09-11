@@ -87,18 +87,17 @@ and must be protected through filesystem permissions. They are write-only over
 the HTTP API: responses expose sorted environment variable names, never values.
 GoAl is not a secret vault.
 
-For runtime and model updates, omitting `environment` preserves stored values,
-an explicit empty object clears them, and an explicit map replaces them. The
-Admin credentials remain configured separately through `goal.json` (`adminPasswordHash`) or the Web UI.
+For runtime and model updates, environment changes use `environment_patch`
+(per-key `set`/`delete` operations); omitting it preserves all stored values.
+The legacy whole-map `environment` field is rejected on Runtime updates (400)
+and ignored on Model updates. The Admin credentials remain configured
+separately through `goal.json` (`adminPasswordHash`) or the Web UI.
 
-Model environment values are treated as write-only API data. They remain in
-the authoritative local repository so the runtime can receive them, but model
-responses and browser previews expose only environment variable names. An
-unrelated model update preserves existing values when `environment` is
-omitted; callers must send an explicit map to replace or clear them.
-
-Runtime environment values follow the same write-only response contract and
-remain available internally for process launch.
+Model and Runtime environment values are treated as write-only API data. They
+remain in the authoritative local repository so the runtime can receive them,
+but responses expose only environment variable names (`environment_keys`).
+An unrelated update preserves existing values when `environment_patch` is
+omitted.
 
 ## Network security
 

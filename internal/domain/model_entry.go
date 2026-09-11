@@ -16,6 +16,50 @@ type ModelEntry struct {
 	UpdatedAt      time.Time         `json:"updated_at"`
 }
 
+// EnvPatchOp represents a single environment variable mutation during a model update.
+// Action "set": Value is non-nil (may point to empty string).
+// Action "delete": Value is nil.
+type EnvPatchOp struct {
+	Key    string  `json:"key"`
+	Action string  `json:"action"` // "set" or "delete"
+	Value  *string `json:"value,omitempty"`
+}
+
+// ApplyEnvPatch applies patch operations to an existing environment map.
+// Returns a new map; does not mutate the input.
+func ApplyEnvPatch(existing map[string]string, ops []EnvPatchOp) map[string]string {
+	if len(ops) == 0 {
+		if existing == nil {
+			return nil
+		}
+		result := make(map[string]string, len(existing))
+		for k, v := range existing {
+			result[k] = v
+		}
+		return result
+	}
+	result := make(map[string]string, len(existing)+len(ops))
+	for k, v := range existing {
+		result[k] = v
+	}
+	for _, op := range ops {
+		switch op.Action {
+		case "set":
+			if op.Value == nil {
+				result[op.Key] = ""
+			} else {
+				result[op.Key] = *op.Value
+			}
+		case "delete":
+			delete(result, op.Key)
+		}
+	}
+	if len(result) == 0 {
+		return nil
+	}
+	return result
+}
+
 // RuntimeEntry represents a persisted runtime definition DTO.
 type RuntimeEntry struct {
 	ID               string            `json:"id"`

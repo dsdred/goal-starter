@@ -115,17 +115,52 @@ func (h *ModelsHandler) Update(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "model ID is required")
 		return
 	}
-	var entry storage.ModelEntry
-	if err := json.NewDecoder(r.Body).Decode(&entry); err != nil {
+	var req struct {
+		Name             *string             `json:"name"`
+		RuntimeID        *string             `json:"runtime_id"`
+		Args             *[]string           `json:"args"`
+		Active           *bool               `json:"active"`
+		AutostartDelay   *int                `json:"autostart_delay"`
+		EnvironmentPatch []domain.EnvPatchOp `json:"environment_patch"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, 400, "invalid JSON")
 		return
 	}
-	entry.ID = id
-	if err := h.modelSvc.UpdateModel(r.Context(), &entry); err != nil {
+	if req.EnvironmentPatch != nil {
+		if err := application.ValidateEnvPatch(req.EnvironmentPatch); err != nil {
+			var apiErr *apierrors.APIError
+			if errors.As(err, &apiErr) {
+				writeError(w, 400, apiErr.Message)
+				return
+			}
+			writeError(w, 400, err.Error())
+			return
+		}
+	}
+	patch := &storage.ModelPatch{
+		Name:           req.Name,
+		RuntimeID:      req.RuntimeID,
+		Args:           req.Args,
+		Active:         req.Active,
+		AutostartDelay: req.AutostartDelay,
+		Environment:    req.EnvironmentPatch,
+	}
+	if err := h.modelSvc.PatchModel(r.Context(), id, patch); err != nil {
+		var apiErr *apierrors.APIError
+		if errors.As(err, &apiErr) {
+			writeError(w, 400, apiErr.Message)
+			return
+		}
 		writeError(w, 500, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, newModelResponse(&entry))
+	entry, err := h.modelSvc.GetModel(r.Context(), id)
+	if err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, newModelResponse(entry))
 }
 
 func (h *ModelsHandler) Delete(w http.ResponseWriter, r *http.Request) {

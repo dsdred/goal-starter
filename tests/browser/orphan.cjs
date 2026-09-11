@@ -119,9 +119,9 @@ async function main() {
       suite.log('UI: tooltip/hint (RU)', tip !== null && tip.includes('вне GoAl'), `title="${tip}"`);
     }
 
-    const dismissRU = pageRU.locator('#instances-table-wrap button:has-text("Отклонить")').first();
+    const dismissRU = pageRU.locator('#instances-table-wrap button[aria-label="Отклонить"]').first();
     suite.log('UI: Dismiss button (RU)', await dismissRU.isVisible().catch(() => false));
-    const killRU = pageRU.locator('#instances-table-wrap button:has-text("Завершить")').first();
+    const killRU = pageRU.locator('#instances-table-wrap button[aria-label="Завершить"]').first();
     suite.log('UI: Kill button (RU)', await killRU.isVisible().catch(() => false));
     await H.screenshot(pageRU, ws, 'orphan_ru_desktop');
 
@@ -164,9 +164,9 @@ async function main() {
       suite.log('UI: tooltip/hint (EN)', tipEn !== null && tipEn.includes('outside GoAl'), `title="${tipEn}"`);
     }
 
-    const dismissEN = pageRU.locator('#instances-table-wrap button:has-text("Dismiss")').first();
+    const dismissEN = pageRU.locator('#instances-table-wrap button[aria-label="Dismiss"]').first();
     suite.log('UI: Dismiss button (EN)', await dismissEN.isVisible().catch(() => false));
-    const killEN = pageRU.locator('#instances-table-wrap button:has-text("Kill")').first();
+    const killEN = pageRU.locator('#instances-table-wrap button[aria-label="Kill"]').first();
     suite.log('UI: Kill button (EN)', await killEN.isVisible().catch(() => false));
     await H.screenshot(pageRU, ws, 'orphan_en_desktop');
 
@@ -199,7 +199,7 @@ async function main() {
     // Click Dismiss
     await pageRU.evaluate(() => window.navigate('adv-instances'));
     await pageRU.waitForTimeout(1000);
-    const dBtn = pageRU.locator('#instances-table-wrap button:has-text("Dismiss")').first();
+    const dBtn = pageRU.locator('#instances-table-wrap button[aria-label="Dismiss"]').first();
     const dVis = await dBtn.isVisible().catch(() => false);
     suite.log('Dismiss visible (pre-click)', dVis);
     if (dVis) {

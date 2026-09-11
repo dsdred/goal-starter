@@ -102,26 +102,43 @@ func TestRuntimeResponsesTreatEnvironmentValuesAsWriteOnly(t *testing.T) {
 	}
 }
 
-func TestRuntimeUpdatePreservesClearsOrReplacesWriteOnlyEnvironment(t *testing.T) {
+const v23CanaryValue = "never-show-this"
+
+// D4 regression matrix: runtime environment has the same lossless-edit
+// contract as model D1 (KEEP/SET/DELETE/ADD, empty-string SET). Values are
+// write-only at every step.
+func TestRuntimeUpdateEnvironmentPatchLosslessEditMatrix(t *testing.T) {
 	repo, handler := newV23RuntimeHandler(t)
-	runtime := &storage.RuntimeEntry{
-		ID: "runtime-v23", Name: "before", Executable: "runtime.exe",
-		Environment: map[string]string{"GOAL_RUNTIME_SECRET_V23": v23RuntimeSecret, "OTHER": "other-value-v23"},
-	}
-	if err := repo.CreateRuntime(runtime); err != nil {
+	if err := repo.CreateRuntime(&storage.RuntimeEntry{ID: "runtime-v23", Name: "before", Executable: "runtime.exe"}); err != nil {
 		t.Fatalf("create runtime: %v", err)
 	}
-	createdAt := runtime.CreatedAt
 
+	setEnv := func(env map[string]string) {
+		t.Helper()
+		entry := &storage.RuntimeEntry{ID: "runtime-v23", Name: "before", Executable: "runtime.exe", Environment: env}
+		if err := repo.UpdateRuntime(entry); err != nil {
+			t.Fatalf("seed env: %v", err)
+		}
+	}
+	storedEnv := func() map[string]string {
+		t.Helper()
+		entry, err := repo.GetRuntime("runtime-v23")
+		if err != nil {
+			t.Fatalf("get runtime: %v", err)
+		}
+		return entry.Environment
+	}
+	// The exact payload the edit UI sends: plain fields, environment only as
+	// environment_patch (empty patch omitted entirely).
 	update := func(body string, forbidden ...string) runtimeResponse {
 		t.Helper()
 		recorder := httptest.NewRecorder()
-		handler.Update(recorder, httptest.NewRequest(http.MethodPut, "/api/v1/runtimes/"+runtime.ID, strings.NewReader(body)))
+		handler.Update(recorder, httptest.NewRequest(http.MethodPut, "/api/v1/runtimes/runtime-v23", strings.NewReader(body)))
 		if recorder.Code != http.StatusOK {
 			t.Fatalf("update status: got %d, body %s", recorder.Code, recorder.Body.String())
 		}
 		response := responseBody(t, recorder)
-		assertValuesAbsent(t, response, forbidden...)
+		assertValuesAbsent(t, response, append(forbidden, v23CanaryValue)...)
 		var decoded runtimeResponse
 		if err := json.Unmarshal(response, &decoded); err != nil {
 			t.Fatalf("decode update response: %v", err)
@@ -129,37 +146,110 @@ func TestRuntimeUpdatePreservesClearsOrReplacesWriteOnlyEnvironment(t *testing.T
 		return decoded
 	}
 
-	preserved := update(`{"name":"renamed","executable":"runtime.exe","default_args":[]}`, v23RuntimeSecret, "other-value-v23")
-	if !reflect.DeepEqual(preserved.EnvironmentKeys, []string{"GOAL_RUNTIME_SECRET_V23", "OTHER"}) {
-		t.Fatalf("preserved response keys: %#v", preserved.EnvironmentKeys)
+	seed := map[string]string{"A": "one", "B": "two", "GOAL_RUNTIME_SECRET_CANARY": v23CanaryValue}
+
+	// CASE 1: edit an unrelated field -> environment preserved.
+	setEnv(seed)
+	update(`{"name":"renamed","executable":"runtime.exe"}`, "one", "two")
+	if got := storedEnv(); !reflect.DeepEqual(got, seed) {
+		t.Fatalf("CASE 1: unrelated save changed environment: %#v", got)
 	}
-	stored, err := repo.GetRuntime(runtime.ID)
+
+	// CASE 2: replace A -> A changed, B preserved.
+	setEnv(seed)
+	update(`{"name":"renamed","executable":"runtime.exe","environment_patch":[{"key":"A","action":"set","value":"changed"}]}`, "one", "two")
+	if got := storedEnv(); got["A"] != "changed" || got["B"] != "two" || got["GOAL_RUNTIME_SECRET_CANARY"] != v23CanaryValue {
+		t.Fatalf("CASE 2: replace failed: %#v", got)
+	}
+
+	// CASE 3: delete A -> A absent, B preserved.
+	setEnv(seed)
+	update(`{"name":"renamed","executable":"runtime.exe","environment_patch":[{"key":"A","action":"delete"}]}`, "one", "two")
+	if got := storedEnv(); true {
+		if _, ok := got["A"]; ok || got["B"] != "two" || got["GOAL_RUNTIME_SECRET_CANARY"] != v23CanaryValue {
+			t.Fatalf("CASE 3: delete failed: %#v", got)
+		}
+	}
+
+	// CASE 4: add B to existing A -> A preserved, B added.
+	setEnv(map[string]string{"A": "one"})
+	update(`{"name":"renamed","executable":"runtime.exe","environment_patch":[{"key":"B","action":"set","value":"two"}]}`, "one", "two")
+	if got := storedEnv(); got["A"] != "one" || got["B"] != "two" {
+		t.Fatalf("CASE 4: add failed: %#v", got)
+	}
+
+	// CASE 5: set existing A to empty string (explicit "value":"") -> A remains present as "".
+	setEnv(map[string]string{"A": "one"})
+	update(`{"name":"renamed","executable":"runtime.exe","environment_patch":[{"key":"A","action":"set","value":""}]}`, "one")
+	if got := storedEnv(); got["A"] != "" || len(got) != 1 {
+		t.Fatalf("CASE 5: set-empty failed: %#v", got)
+	}
+
+	// CASE 6: A="" then an unrelated-field save -> A remains "".
+	update(`{"name":"renamed-again","executable":"runtime.exe"}`)
+	if got := storedEnv(); got["A"] != "" || len(got) != 1 {
+		t.Fatalf("CASE 6: empty value not preserved: %#v", got)
+	}
+
+	// CASE 7: open edit -> save immediately (the exact no-op UI payload:
+	// pre-filled fields, empty value inputs, empty working directory omitted)
+	// -> environment unchanged.
+	setEnv(seed)
+	createdAt, _ := repo.GetRuntime("runtime-v23")
+	update(`{"name":"before","executable":"runtime.exe"}`, "one", "two")
+	after, err := repo.GetRuntime("runtime-v23")
 	if err != nil {
-		t.Fatalf("get preserved runtime: %v", err)
+		t.Fatalf("CASE 7: get runtime: %v", err)
 	}
-	if stored.Name != "renamed" || stored.Environment["GOAL_RUNTIME_SECRET_V23"] != v23RuntimeSecret || stored.Environment["OTHER"] != "other-value-v23" {
-		t.Fatalf("omitted environment was not preserved: %#v", stored)
+	if !reflect.DeepEqual(after.Environment, seed) {
+		t.Fatalf("CASE 7: no-op save changed environment: %#v", after.Environment)
 	}
-	if !stored.CreatedAt.Equal(createdAt) {
-		t.Fatalf("unrelated update changed created_at: got %v, want %v", stored.CreatedAt, createdAt)
-	}
-
-	cleared := update(`{"name":"renamed","executable":"runtime.exe","default_args":[],"environment":{}}`, v23RuntimeSecret, "other-value-v23")
-	if cleared.EnvironmentKeys == nil || len(cleared.EnvironmentKeys) != 0 {
-		t.Fatalf("clear response keys: %#v", cleared.EnvironmentKeys)
-	}
-	stored, _ = repo.GetRuntime(runtime.ID)
-	if len(stored.Environment) != 0 {
-		t.Fatalf("explicit empty environment did not clear: %#v", stored.Environment)
+	if !after.CreatedAt.Equal(createdAt.CreatedAt) {
+		t.Fatalf("CASE 7: created_at changed: got %v, want %v", after.CreatedAt, createdAt.CreatedAt)
 	}
 
-	replaced := update(`{"name":"renamed","executable":"runtime.exe","default_args":[],"environment":{"NEW_KEY":"new-secret-runtime-v23"}}`, "new-secret-runtime-v23")
-	if !reflect.DeepEqual(replaced.EnvironmentKeys, []string{"NEW_KEY"}) {
-		t.Fatalf("replace response keys: %#v", replaced.EnvironmentKeys)
+	// CASE 8: bootstrap (GET) exposes key names but not values.
+	setEnv(seed)
+	getRecorder := httptest.NewRecorder()
+	handler.Get(getRecorder, httptest.NewRequest(http.MethodGet, "/api/v1/runtimes/runtime-v23", nil))
+	if getRecorder.Code != http.StatusOK {
+		t.Fatalf("CASE 8: get status: %d", getRecorder.Code)
 	}
-	stored, _ = repo.GetRuntime(runtime.ID)
-	if len(stored.Environment) != 1 || stored.Environment["NEW_KEY"] != "new-secret-runtime-v23" {
-		t.Fatalf("explicit environment replacement failed: %#v", stored.Environment)
+	getBody := getRecorder.Body.Bytes()
+	assertValuesAbsent(t, getBody, "one", "two", v23CanaryValue)
+	var got runtimeResponse
+	if err := json.Unmarshal(getBody, &got); err != nil {
+		t.Fatalf("CASE 8: decode: %v", err)
+	}
+	wantKeys := []string{"A", "B", "GOAL_RUNTIME_SECRET_CANARY"}
+	if !reflect.DeepEqual(got.EnvironmentKeys, wantKeys) {
+		t.Fatalf("CASE 8: keys: got %#v, want %#v", got.EnvironmentKeys, wantKeys)
+	}
+
+	// Contract guard: the legacy whole-map field is rejected on update.
+	setEnv(seed)
+	legacy := httptest.NewRecorder()
+	handler.Update(legacy, httptest.NewRequest(http.MethodPut, "/api/v1/runtimes/runtime-v23",
+		strings.NewReader(`{"name":"x","executable":"runtime.exe","environment":{}}`)))
+	if legacy.Code != http.StatusBadRequest {
+		t.Fatalf("legacy environment on PUT: status %d, want 400 (body %s)", legacy.Code, legacy.Body.String())
+	}
+	if got := storedEnv(); !reflect.DeepEqual(got, seed) {
+		t.Fatalf("rejected legacy PUT must not mutate environment: %#v", got)
+	}
+
+	// Validation: unknown patch action and missing key are 400.
+	badAction := httptest.NewRecorder()
+	handler.Update(badAction, httptest.NewRequest(http.MethodPut, "/api/v1/runtimes/runtime-v23",
+		strings.NewReader(`{"environment_patch":[{"key":"A","action":"replace"}]}`)))
+	if badAction.Code != http.StatusBadRequest {
+		t.Fatalf("bad patch action: status %d, want 400", badAction.Code)
+	}
+	noKey := httptest.NewRecorder()
+	handler.Update(noKey, httptest.NewRequest(http.MethodPut, "/api/v1/runtimes/runtime-v23",
+		strings.NewReader(`{"environment_patch":[{"action":"set","value":"v"}]}`)))
+	if noKey.Code != http.StatusBadRequest {
+		t.Fatalf("patch without key: status %d, want 400", noKey.Code)
 	}
 }
 

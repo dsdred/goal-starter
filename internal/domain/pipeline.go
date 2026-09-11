@@ -5,7 +5,13 @@ import "time"
 // PipelineModel is one ordered entry of a Pipeline: a reference to an
 // existing Model plus an optional all-or-nothing launch-args override and an
 // optional autostart flag (ADR 010 D1/D2).
+//
+// ID identifies the entry itself (ADR 013 D1): a Model may appear in the
+// same Pipeline multiple times; the entry is unique, not the ModelID. The
+// ID is generated on create, immutable for the entry's lifetime, and
+// backfilled deterministically for legacy entries (ADR 013 D6).
 type PipelineModel struct {
+	ID        string   `json:"id,omitempty"`
 	ModelID   string   `json:"model_id"`
 	Args      []string `json:"args,omitempty"`
 	AutoStart bool     `json:"auto_start"`

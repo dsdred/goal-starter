@@ -4,6 +4,7 @@ import (
 	"context"
 	"strconv"
 
+	"github.com/dsdred/goal/internal/domain"
 	"github.com/dsdred/goal/internal/storage"
 	apierrors "github.com/dsdred/goal/internal/webui/errors"
 )
@@ -46,6 +47,33 @@ func (s *ModelService) CreateModel(ctx context.Context, entry *storage.ModelEntr
 
 func (s *ModelService) UpdateModel(ctx context.Context, entry *storage.ModelEntry) error {
 	return s.repo.UpdateModel(entry)
+}
+
+func (s *ModelService) PatchModel(ctx context.Context, id string, p *storage.ModelPatch) error {
+	if p.Name != nil && *p.Name == "" {
+		return apierrors.ErrValidation
+	}
+	return s.repo.PatchModel(id, p)
+}
+
+// ValidateEnvPatch validates that all patch operations have a non-empty key,
+// a recognized action, and that "set" operations carry a non-nil value.
+func ValidateEnvPatch(ops []domain.EnvPatchOp) error {
+	for i, op := range ops {
+		if op.Key == "" {
+			return apierrors.NewAPIError(apierrors.CodeBadRequest,
+				"environment_patch["+strconv.Itoa(i)+"].key is required", "")
+		}
+		if op.Action != "set" && op.Action != "delete" {
+			return apierrors.NewAPIError(apierrors.CodeBadRequest,
+				"environment_patch["+strconv.Itoa(i)+"].action must be \"set\" or \"delete\"", "got: "+op.Action)
+		}
+		if op.Action == "set" && op.Value == nil {
+			return apierrors.NewAPIError(apierrors.CodeBadRequest,
+				"environment_patch["+strconv.Itoa(i)+"].value is required for action \"set\"", "")
+		}
+	}
+	return nil
 }
 
 func (s *ModelService) DeleteModel(ctx context.Context, id string) error {

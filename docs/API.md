@@ -197,9 +197,12 @@ Response 200:
 
 Runtime `environment` values are write-only. Runtime read and mutation
 responses never return the values; they return sorted `environment_keys`
-instead. On `PUT`, omitting `environment` preserves the stored map, an explicit
-empty object clears it, and a non-empty object replaces it. Runtime environment
-values remain available internally for process launch.
+instead. On `PUT`, the legacy `environment` field is rejected (400); environment
+changes use `environment_patch` — an array of `{key, action, value?}` operations
+(`action` ∈ `"set"|"delete"`). Omitting `environment_patch` preserves all existing
+keys (KEEP). `set` on an existing key replaces the value; `set` on a new key adds
+it; `set` with `value:""` stores an empty string; `delete` removes the key.
+Runtime environment values remain available internally for process launch.
 
 | Method | Path | Auth | CSRF | Description |
 |--------|------|------|------|-------------|
@@ -231,8 +234,10 @@ Models are configured launch definitions combining a runtime with launch argumen
 | POST | /api/v1/models/{id}/deactivate | Disable autostart |
 | POST | /api/v1/models/{id}/resolve | Preview resolved command |
 
-Model environment values are write-only: they are accepted on create/update but never
-returned in API responses. Only `environment_keys` (the list of variable names) is exposed.
+Model environment values are write-only: they are accepted on create (full map)
+and update (`environment_patch` per-key ops) but never returned in API responses.
+Only `environment_keys` (the list of variable names) is exposed. Omitting
+`environment_patch` on update preserves existing keys.
 
 ## Pipelines
 
@@ -243,13 +248,13 @@ args entirely at launch; an empty/absent `args` uses the model's own args.
 
 | Method | Path | Auth | CSRF | Description |
 |--------|------|------|------|-------------|
-| GET | /api/v1/pipelines | Yes | — | List pipelines (ordered models with `model_name`, `args`, `auto_start`, `active`). |
-| GET | /api/v1/pipelines/{id} | Yes | — | Pipeline detail + per-model live status (`state`, `instance_id`, `pid`, `started_at`, `has_args_override`). |
-| POST | /api/v1/pipelines | Yes | Yes | Create `{name, active?, models:[{model_id, args?, auto_start?}]}` → `201`. `400` on empty name, empty model list, duplicate or unknown model id. `active`/`auto_start` default `false`. |
-| PUT | /api/v1/pipelines/{id} | Yes | Yes | Update. `name`/`args`/`active`/`auto_start` always allowed; structural change (add/remove/reorder) → `409` while the pipeline has active owned instances. |
+| GET | /api/v1/pipelines | Yes | — | List pipelines: `id`, `name`, `active`, `created_at`, `updated_at`, ordered `models:[{id, model_id, model_name, args?, auto_start}]` (each entry has its own `id`; a Model may repeat across entries). |
+| GET | /api/v1/pipelines/{id} | Yes | — | Pipeline detail + per-entry live status: `models:[{id, model_id, model_name, args?, auto_start}]` and `statuses:[{model_id, entry_id?, index, state, instance_id?, pid?, started_at?, auto_start, has_args_override}]`, resolved by `(pipeline_id, pipeline_entry_id)` with a legacy per-model fallback (ADR 013 D4). |
+| POST | /api/v1/pipelines | Yes | Yes | Create `{name, active?, models:[{model_id, args?, auto_start?}]}` → `201`. A `model_id` **may repeat** (each becomes a distinct entry with a server-generated `id`); the client sends no entry `id`s. `400` on empty name, empty model list, empty or unknown `model_id`. `active`/`auto_start` default `false`. Note: `auto_start` is a legacy field — it round-trips for backward compatibility but is **ignored** for launch decisions (an `active` pipeline launches all entries). |
+| PUT | /api/v1/pipelines/{id} | Yes | Yes | Update. `name`/`args`/`active`/`auto_start` always allowed; structural change = a different **entry-`id` sequence** (add/remove/reorder) → `409` while the pipeline has active owned instances. New entries use `id: ""` (server-generated). `auto_start` round-trips but is not a launch gate. |
 | DELETE | /api/v1/pipelines/{id} | Yes | Yes | Delete. `409` while it has active owned instances; `404` on unknown id. Terminal instances keep their historical `pipeline_id`. |
-| POST | /api/v1/pipelines/{id}/start | Yes | Yes | Start all entries sequentially in order (best-effort). `200 {pipeline_id, results:[{model_id, status, instance_id?, error?}]}`. `status` ∈ `started|already-running|orphan-skipped|no-runtime|model-missing|failed`. |
-| POST | /api/v1/pipelines/{id}/stop | Yes | Yes | Stop owned active instances in REVERSE order (best-effort). `200 {pipeline_id, results:[{model_id, instance_id, status, error?}]}`. `status` ∈ `stopped|failed`. |
+| POST | /api/v1/pipelines/{id}/start | Yes | Yes | Start all entries sequentially in order (best-effort, per-entry launch gate + model-owner rule — ADR 013 D3). `200 {pipeline_id, results:[{model_id, entry_id?, index, status, instance_id?, error?}]}`. `status` ∈ `started|already-running|orphan-skipped|no-runtime|model-missing|failed`. |
+| POST | /api/v1/pipelines/{id}/stop | Yes | Yes | Stop the entry's own active instances in REVERSE order (best-effort; per-entry attribution with legacy per-model fallback — ADR 013 D4). `200 {pipeline_id, results:[{model_id, entry_id?, index, instance_id?, stopped_instance_ids?, status, error?}]}`. `status` ∈ `stopped|failed`. |
 | POST | /api/v1/pipelines/{id}/restart | Yes | Yes | Reverse stop then ALWAYS forward start. `200 {pipeline_id, stop_results:[…], start_results:[…]}`. |
 
 Lifecycle requests emit one `pipeline.start` / `pipeline.stop` / `pipeline.restart` audit

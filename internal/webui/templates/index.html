@@ -155,16 +155,15 @@
                         <div class="radio-group">
                             <label class="radio-option">
                                 <input type="radio" name="wiz-rt-mode" value="existing" checked onchange="onWizRtModeChange()">
-                                <span data-i18n="wizard.rt.existing">Использовать существующий</span>
+                                <span data-i18n="wizard.rt.select_mode">Выбрать</span>
                             </label>
                             <label class="radio-option">
                                 <input type="radio" name="wiz-rt-mode" value="new" onchange="onWizRtModeChange()">
-                                <span data-i18n="wizard.rt.new">Создать новый Runtime</span>
+                                <span data-i18n="wizard.rt.create_mode">Создать</span>
                             </label>
                         </div>
                     </div>
                     <div id="wiz-rt-existing-section" class="form-group">
-                        <label data-i18n="wizard.rt.select">Выберите Runtime</label>
                         <div class="rt-selector">
                             <input type="text" id="wiz-rt-search" class="rt-search-input" data-i18n-placeholder="wizard.rt.search_placeholder" placeholder="Search Runtime..." autocomplete="off" oninput="renderRtDropdown()" onkeydown="rtDropdownKeydown(event)">
                             <div id="wiz-rt-dropdown" class="rt-list"></div>
@@ -189,27 +188,24 @@
                 </div>
                 <!-- Step 3: Launch config -->
                 <div class="wizard-panel" data-panel="3">
-                    <div class="form-group">
-                        <label data-i18n="wizard.args">Аргументы запуска *</label>
-                        <textarea id="wiz-args" rows="6" placeholder="-m E:\models\model.gguf&#10;--mmproj E:\models\mmproj.gguf&#10;-ngl 99&#10;-c 131072&#10;--host 127.0.0.1&#10;--port 8080"></textarea>
-                        <small class="hint" data-i18n="wizard.args.hint">По одному флагу в строке. Host и port — обычные аргументы.</small>
+                    <div class="form-autostart-row">
+                        <div class="form-autostart">
+                            <label class="toggle-switch"><input type="checkbox" id="wiz-autostart"><span class="toggle-slider"></span></label>
+                            <span class="autostart-label" data-i18n="wizard.autostart">Автостарт</span>
+                        </div>
+                        <div class="form-autostart-delay" id="wiz-delay-group" style="display:none;">
+                            <label data-i18n="wizard.delay">Задержка (сек)</label>
+                            <input type="number" id="wiz-autostart-delay" value="0" min="0" max="300">
+                        </div>
                     </div>
                     <div class="form-group">
                         <label data-i18n="wizard.env">Переменные окружения</label>
-                        <small class="hint" data-i18n="wizard.env.hint">Дополнительные env-переменные процесса.</small>
                         <div id="wiz-env-container"></div>
                         <button type="button" class="btn btn-ghost btn-sm" onclick="addWizEnvRow()" data-i18n="wizard.env.add">+ Переменная</button>
                     </div>
-                    <div class="form-group form-autostart">
-                        <div>
-                            <span class="autostart-label" data-i18n="wizard.autostart">Автозапуск при старте GoAl</span>
-                            <small class="hint" data-i18n="wizard.autostart.hint">Модель будет запущена автоматически при каждом старте GoAl</small>
-                        </div>
-                        <label class="toggle-switch"><input type="checkbox" id="wiz-autostart"><span class="toggle-slider"></span></label>
-                    </div>
-                    <div class="form-group" id="wiz-delay-group" style="display:none;">
-                        <label data-i18n="wizard.delay">Задержка запуска (сек)</label>
-                        <input type="number" id="wiz-autostart-delay" value="0" min="0" max="300">
+                    <div class="form-group">
+                        <label data-i18n="wizard.args">Аргументы запуска *</label>
+                        <textarea id="wiz-args" rows="6" data-i18n-placeholder="wizard.args.placeholder"></textarea>
                     </div>
                 </div>
                 <div id="wizard-error" class="error-msg" style="display:none;"></div>
@@ -240,28 +236,37 @@
             </div>
             <nav class="sidebar-nav">
                 <button class="nav-item active" data-view="models" onclick="navigate('models')">
-                    <svg class="nav-icon" viewBox="0 0 20 20" fill="currentColor"><path d="M3 4h14a1 1 0 011 1v10a1 1 0 01-1 1H3a1 1 0 01-1-1V5a1 1 0 011-1zm2 2v8h10V6H5z"/></svg>
+                    <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>
                     <span data-i18n="nav.models">Мои модели</span>
                 </button>
                 <button class="nav-item" data-view="logs" onclick="navigate('logs')">
-                    <svg class="nav-icon" viewBox="0 0 20 20" fill="currentColor"><path d="M4 4h12v2H4V4zm0 4h12v2H4V8zm0 4h8v2H4v-2zm0 4h5v2H4v-2z"/></svg>
+                    <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><line x1="10" y1="9" x2="8" y2="9"/></svg>
                     <span data-i18n="nav.logs">Логи</span>
                 </button>
                 <button class="nav-item" data-view="history" onclick="navigate('history')">
-                    <svg class="nav-icon" viewBox="0 0 20 20" fill="currentColor"><path d="M10 2a8 8 0 100 16 8 8 0 000-16zm1 4H9v5l4 2 .75-1.5L11 10.5V6z"/></svg>
+                    <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
                     <span data-i18n="nav.history">История</span>
                 </button>
                 <button class="nav-item" data-view="pipelines" onclick="navigate('pipelines')">
-                    <svg class="nav-icon" viewBox="0 0 20 20" fill="currentColor"><path d="M2 4h6v4H2V4zm8 0h8v4h-8V4zM6 8h4v4H6V8zm2-2h2v2h4v6h-4v-4H6V12H4V8h4V6z"/></svg>
+                    <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="4" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="20" cy="12" r="2"/><line x1="6" y1="12" x2="10" y2="12"/><line x1="14" y1="12" x2="18" y2="12"/></svg>
                     <span data-i18n="nav.pipelines">Пайплайны</span>
                 </button>
             </nav>
             <div class="sidebar-divider"></div>
             <div class="sidebar-label" data-i18n="nav.advanced">РАСШИРЕННО</div>
             <nav class="sidebar-nav">
-                <button class="nav-item nav-adv" data-view="adv-runtimes" onclick="navigate('adv-runtimes')"><span data-i18n="nav.runtimes">Рантаймы</span></button>
-                <button class="nav-item nav-adv" data-view="adv-instances" onclick="navigate('adv-instances')"><span data-i18n="nav.instances">Экземпляры</span></button>
-                <button class="nav-item nav-adv" data-view="adv-settings" onclick="navigate('adv-settings')"><span data-i18n="nav.settings">Настройки</span></button>
+                <button class="nav-item nav-adv" data-view="adv-runtimes" onclick="navigate('adv-runtimes')">
+                    <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2" ry="2"/><rect x="9" y="9" width="6" height="6"/><line x1="9" y1="1" x2="9" y2="4"/><line x1="15" y1="1" x2="15" y2="4"/><line x1="9" y1="20" x2="9" y2="23"/><line x1="15" y1="20" x2="15" y2="23"/><line x1="20" y1="9" x2="23" y2="9"/><line x1="20" y1="14" x2="23" y2="14"/><line x1="1" y1="9" x2="4" y2="9"/><line x1="1" y1="14" x2="4" y2="14"/></svg>
+                    <span data-i18n="nav.runtimes">Рантаймы</span>
+                </button>
+                <button class="nav-item nav-adv" data-view="adv-instances" onclick="navigate('adv-instances')">
+                    <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>
+                    <span data-i18n="nav.instances">Экземпляры</span>
+                </button>
+                <button class="nav-item nav-adv" data-view="adv-settings" onclick="navigate('adv-settings')">
+                    <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12L18.93 16L17 20.66L12 20L7 20.66L5.07 16L2 12L5.07 8L7 3.34L12 4L17 3.34L18.93 8Z"/><path d="M12 9a3 3 0 1 0 0 6a3 3 0 1 0 0-6"/></svg>
+                    <span data-i18n="nav.settings">Настройки</span>
+                </button>
             </nav>
             <div class="sidebar-footer">
                 <div class="sidebar-footer-controls">
@@ -293,7 +298,7 @@
             <section class="view active" id="view-models">
                 <div class="view-header">
                     <h1 data-i18n="models.title">Мои модели</h1>
-                    <button class="btn btn-primary" onclick="openWizard()" data-i18n="models.add">+ Добавить модель</button>
+                    <button class="btn btn-primary" onclick="openWizard()" data-i18n="models.add">Добавить</button>
                 </div>
                 <div class="filter-bar" id="models-filter-bar">
                     <label class="filter-switch"><span class="toggle-switch"><input type="checkbox" id="mf-autostart" onchange="renderModels()"><span class="toggle-slider"></span></span><span data-i18n="models.filter.autostart">Автостарт</span></label>
@@ -319,23 +324,20 @@
             <section class="view" id="view-pipelines">
                 <div class="view-header">
                     <h1 data-i18n="pipelines.title">Пайплайны</h1>
-                    <button class="btn btn-primary" onclick="openCreatePipelineModal()" data-i18n="pipelines.add">+ Создать пайплайн</button>
+                    <button class="btn btn-primary" onclick="openCreatePipelineModal()" data-i18n="pipelines.add">Добавить</button>
                 </div>
+                <div class="filter-bar">
+                    <label class="filter-switch"><span class="toggle-switch"><input type="checkbox" id="pf-autostart" onchange="renderPipelines()"><span class="toggle-slider"></span></span><span data-i18n="models.filter.autostart">Автостарт</span></label>
+                    <input type="text" id="pf-search" data-i18n-placeholder="pipelines.filter.search" oninput="renderPipelines()">
+                </div>
+                <div class="model-list" id="pipeline-list"></div>
                 <div class="empty-state" id="pipelines-empty" style="display:none;">
                     <p data-i18n="pipelines.empty">Пайплайны не созданы.</p>
+                    <p class="empty-state-desc" data-i18n="pipelines.empty_desc">Объединяйте несколько запусков моделей в один сценарий и управляйте ими вместе.</p>
                     <button class="btn btn-primary" onclick="openCreatePipelineModal()" data-i18n="pipelines.empty_cta">Создать первый пайплайн</button>
                 </div>
-                <div id="pipelines-compact" class="compact-list"></div>
-                <div id="pipelines-table-wrap">
-                    <table class="data-table">
-                        <thead><tr>
-                            <th data-i18n="pipelines.col.name">Имя</th>
-                            <th data-i18n="pipelines.col.models">Модели</th>
-                            <th data-i18n="pipelines.col.autostart">Автостарт</th>
-                            <th></th>
-                        </tr></thead>
-                        <tbody id="pipelines-body"></tbody>
-                    </table>
+                <div class="empty-state" id="pipelines-filter-empty" style="display:none;">
+                    <p data-i18n="pipelines.filter.no_match">Нет подходящих пайплайнов.</p>
                 </div>
             </section>
 
@@ -364,7 +366,6 @@
             <section class="view" id="view-history">
                 <div class="view-header">
                     <h1 data-i18n="history.title">История экземпляров</h1>
-                    <button class="btn btn-ghost btn-sm" onclick="openCleanup()" data-i18n="instances.cleanup">Очистка</button>
                 </div>
                 <div class="filter-bar">
                     <select id="hf-state" onchange="renderHistory()">
@@ -374,13 +375,14 @@
                         <option value="stale" data-i18n="history.state.stale">Stale</option>
                     </select>
                     <select id="hf-model" onchange="renderHistory()"><option value="" data-i18n="history.filter.model">All Models</option></select>
+                    <button class="btn btn-ghost btn-sm filter-bar-end" onclick="openCleanup()" data-i18n="instances.cleanup">Очистка</button>
                 </div>
                 <div class="empty-state" id="history-empty" style="display:none;">
                     <p data-i18n="history.empty">Экземпляры не найдены.</p>
                     <small class="hint-text" data-i18n="history.empty.hint">Завершённые экземпляры появятся здесь.</small>
                 </div>
                 <div id="history-compact" class="compact-list"></div>
-                <div id="history-table-wrap">
+                <div id="history-table-wrap" class="table-fit">
                     <table class="data-table">
                         <thead><tr>
                             <th data-i18n="history.col.model">Модель</th>
@@ -401,14 +403,14 @@
             <section class="view" id="view-adv-runtimes">
                 <div class="view-header">
                     <h1 data-i18n="runtimes.title">Runtime</h1>
-                    <button class="btn btn-primary" onclick="showCreateRuntimeModal()" data-i18n="runtimes.add">+ Добавить Runtime</button>
+                    <button class="btn btn-primary" onclick="showCreateRuntimeModal()" data-i18n="runtimes.add">Добавить</button>
                 </div>
                 <div class="empty-state" id="runtimes-empty" style="display:none;">
                     <p data-i18n="runtimes.empty">Runtime не добавлены.</p>
                     <small class="hint-text" data-i18n="runtimes.empty.hint">Добавьте Runtime, чтобы создавать модели.</small>
                 </div>
                 <div id="runtimes-compact" class="compact-list"></div>
-                <div id="runtimes-table-wrap">
+                <div id="runtimes-table-wrap" class="table-fit">
                     <table class="data-table">
                         <thead><tr>
                             <th data-i18n="runtimes.col.name">Имя</th>
@@ -431,7 +433,7 @@
                     <small class="hint-text" data-i18n="instances.empty.hint">Запустите модель из «Мои модели», чтобы увидеть экземпляр здесь.</small>
                 </div>
                 <div id="instances-compact" class="compact-list"></div>
-                <div id="instances-table-wrap">
+                <div id="instances-table-wrap" class="table-fit">
                     <table class="data-table">
                         <thead><tr>
                             <th data-i18n="instances.col.id">ID</th>
@@ -515,7 +517,7 @@
             <div class="modal-header"><h2 id="pipeline-modal-title" data-i18n="pipelines.create.title">Создать пайплайн</h2><button class="modal-close" onclick="closeModal('pipeline-modal')">&times;</button></div>
             <form id="pipeline-form" onsubmit="return handlePipelineSubmit(event)">
                 <input type="hidden" name="id">
-                <div class="form-group"><label data-i18n="pipelines.field.name">Имя *</label><input type="text" name="name" required></div>
+                <div class="form-group"><label data-i18n="pipelines.field.name">Имя *</label><input type="text" id="pl-name" name="name" required></div>
                 <div class="form-group">
                     <label class="filter-switch"><span class="toggle-switch toggle-pipeline"><input type="checkbox" name="active"><span class="toggle-slider"></span></span><span data-i18n="pipelines.field.active">Автостарт GoAl</span></label>
                     <div><small class="hint" data-i18n="pipelines.field.active_hint">Запускает пайплайн при старте GoAl. На кнопку «Старт» не влияет.</small></div>
@@ -523,7 +525,6 @@
                 <div class="form-group">
                     <label data-i18n="pipelines.field.models">Модели (порядок запуска) *</label>
                     <div id="pl-models-container"></div>
-                    <button type="button" class="btn btn-ghost btn-sm" onclick="addPlModelRow()" data-i18n="pipelines.btn.add_model">+ Модель</button>
                 </div>
                 <div class="modal-actions"><button type="submit" class="btn btn-primary" id="pipeline-submit-btn" data-i18n="pipelines.btn.create">Создать</button><button type="button" class="btn btn-ghost" onclick="closeModal('pipeline-modal')" data-i18n="common.cancel">Отмена</button></div>
             </form>
@@ -557,5 +558,6 @@
     </div>
 
     <script src="/static/app.js"></script>
+    <div id="goaltip" class="goal-tooltip" role="tooltip"></div>
 </body>
 </html>{{end}}

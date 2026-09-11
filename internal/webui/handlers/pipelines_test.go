@@ -86,7 +86,6 @@ func TestPipelineAPI_CreateValidationAndDefaults(t *testing.T) {
 	}{
 		{"empty name", `{"name":"  ","models":[{"model_id":"pm-model"}]}`},
 		{"empty model list", `{"name":"p","models":[]}`},
-		{"duplicate model", `{"name":"p","models":[{"model_id":"pm-model"},{"model_id":"pm-model"}]}`},
 		{"unknown model", `{"name":"p","models":[{"model_id":"ghost"}]}`},
 		{"empty model id", `{"name":"p","models":[{"model_id":""}]}`},
 	}
@@ -127,6 +126,36 @@ func TestPipelineAPI_CreateValidationAndDefaults(t *testing.T) {
 	}
 	if len(created.Models) != 1 || created.Models[0].AutoStart || created.Models[0].ModelName != "pm-model-model" {
 		t.Fatalf("models = %+v, want auto_start=false and the model name", created.Models)
+	}
+}
+
+// ADR 013 D1/D5: a duplicate model_id is accepted on create (201); each entry
+// carries a distinct server-generated entry id in the response.
+func TestPipelineAPI_CreateDuplicateModelAccepted(t *testing.T) {
+	e := newAuditEnv(t, 0)
+	addr := "10.9.8.7:4444"
+	sess, csrf := e.loggedIn(t, addr)
+	e.seedGracefulModel(t, "pm-dup")
+
+	status, body := createPipelineAPI(t, e, addr, sess, csrf,
+		`{"name":"dup","models":[{"model_id":"pm-dup"},{"model_id":"pm-dup"}]}`)
+	if status != http.StatusCreated {
+		t.Fatalf("duplicate model create = %d, want 201; body=%s", status, body)
+	}
+	var created struct {
+		Models []struct {
+			ID      string `json:"id"`
+			ModelID string `json:"model_id"`
+		} `json:"models"`
+	}
+	if err := json.Unmarshal([]byte(body), &created); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(created.Models) != 2 {
+		t.Fatalf("want 2 entries, got %d: %+v", len(created.Models), created.Models)
+	}
+	if created.Models[0].ID == "" || created.Models[1].ID == "" || created.Models[0].ID == created.Models[1].ID {
+		t.Fatalf("entries must carry distinct server ids: %+v", created.Models)
 	}
 }
 
@@ -472,8 +501,14 @@ func TestPipelineAPI_ActiveIntegrity(t *testing.T) {
 		t.Fatalf("delete status = %d, want 409; body=%s", rec.Code, rec.Body.String())
 	}
 
-	// Non-structural update (name) → 200.
-	rec = e.do(t, http.MethodPut, "/api/v1/pipelines/"+pipeID, addr, sess, csrf, `{"name":"renamed","models":[{"model_id":"pm-i1"}]}`)
+	// Non-structural update (name) round-trips the server entry id → 200
+	// (ADR 013 D5: the entry list carries ids so the rename is non-structural).
+	pipe, err := e.repo.GetPipeline(pipeID)
+	if err != nil {
+		t.Fatalf("GetPipeline: %v", err)
+	}
+	renameBody := `{"name":"renamed","models":[{"model_id":"pm-i1","id":"` + pipe.Models[0].ID + `"}` + `]}`
+	rec = e.do(t, http.MethodPut, "/api/v1/pipelines/"+pipeID, addr, sess, csrf, renameBody)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("non-structural update = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}

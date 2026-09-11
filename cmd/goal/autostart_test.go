@@ -349,7 +349,10 @@ func TestAutostartPipelines_OwnershipMatrix(t *testing.T) {
 		{name: "pipeline-only", modelActive: false, pipeline: &pipelineSpec{true, true}, wantCount: 1, wantOwned: true},
 		{name: "model-only", modelActive: true, pipeline: nil, wantCount: 1},
 		{name: "both-pipeline-wins", modelActive: true, pipeline: &pipelineSpec{true, true}, wantCount: 1, wantOwned: true},
-		{name: "pipeline-entry-not-autostarted", modelActive: true, pipeline: &pipelineSpec{true, false}, wantCount: 1},
+		// ADR 013 reconciliation: an Active pipeline launches ALL entries even
+		// when the legacy per-entry AutoStart=false; the single instance is
+		// pipeline-owned and the model-level autostart then skips it.
+		{name: "pipeline-active-legacy-autostart-false", modelActive: true, pipeline: &pipelineSpec{true, false}, wantCount: 1, wantOwned: true},
 		{name: "pipeline-inactive", modelActive: false, pipeline: &pipelineSpec{false, true}, wantCount: 0},
 	}
 	for _, tc := range cases {
@@ -403,6 +406,67 @@ func TestAutostartPipelines_TwoPipelinesShareModel(t *testing.T) {
 	}
 	if instances[0].PipelineID != p1 {
 		t.Fatalf("ownership = %q, want the earlier pipeline %q", instances[0].PipelineID, p1)
+	}
+}
+
+// ADR 013 D3/D4 (D10 item 9): extended autostart matrix for repeatable models.
+// One Active pipeline with n AutoStart entries of the same model launches n
+// independent pipeline-owned instances (distinct pipeline_entry_id). Two Active
+// pipelines sharing a model: the earlier (repository order) owns all its
+// entries; the later pipeline's entries yield already-running (no instances).
+func TestAutostartPipelines_RepeatableEntries(t *testing.T) {
+	repo, _ := setupAutostartRepo(t)
+	modelID := addAliveModelFixture(t, repo, "repeat", false)
+
+	// Earlier pipeline: two AutoStart entries of the same model.
+	p1 := &storage.PipelineEntry{
+		Name:   "owner",
+		Active: true,
+		Models: []storage.PipelineModel{{ModelID: modelID, AutoStart: true}, {ModelID: modelID, AutoStart: true}},
+	}
+	if err := repo.CreatePipeline(p1); err != nil {
+		t.Fatalf("CreatePipeline p1: %v", err)
+	}
+	// Later pipeline: one AutoStart entry of the same model.
+	p2 := &storage.PipelineEntry{
+		Name:   "late",
+		Active: true,
+		Models: []storage.PipelineModel{{ModelID: modelID, AutoStart: true}},
+	}
+	if err := repo.CreatePipeline(p2); err != nil {
+		t.Fatalf("CreatePipeline p2: %v", err)
+	}
+
+	runStartup(t, repo)
+
+	instances, err := repo.ListInstances()
+	if err != nil {
+		t.Fatalf("ListInstances: %v", err)
+	}
+	if len(instances) != 2 {
+		t.Fatalf("want exactly 2 instances (the earlier pipeline's entries), got %d: %+v", len(instances), instances)
+	}
+	var p1owned, p2owned int
+	entryIDs := map[string]bool{}
+	for _, inst := range instances {
+		switch inst.PipelineID {
+		case p1.ID:
+			p1owned++
+			if inst.PipelineEntryID != "" {
+				entryIDs[inst.PipelineEntryID] = true
+			}
+		case p2.ID:
+			p2owned++
+		}
+	}
+	if p1owned != 2 {
+		t.Fatalf("earlier pipeline must own 2 instances (one per entry), got %d: %+v", p1owned, instances)
+	}
+	if p2owned != 0 {
+		t.Fatalf("later pipeline must own 0 instances (already-running), got %d: %+v", p2owned, instances)
+	}
+	if len(entryIDs) != 2 {
+		t.Fatalf("the 2 owned instances must carry distinct pipeline_entry_id: %+v", instances)
 	}
 }
 

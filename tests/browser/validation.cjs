@@ -78,7 +78,7 @@ async function main() {
     await page.evaluate(() => window.navigate('adv-instances'));
     await page.waitForTimeout(500);
     const liveId = s1.data ? s1.data.id : '';
-    const compactRow = page.locator('.cinst-row').filter({ hasText: liveId.slice(0, 12) });
+    const compactRow = page.locator('.cinst-row').filter({ hasText: '…' + liveId.slice(-16) });
     const compactText = (await compactRow.first().textContent() || '').trim();
     suite.log('1.1 430px compact row: no garbled zero-date ("1.1 HH:MM" / "0001" / "1970")',
       !/1\.1 \d|0001|1970/.test(compactText), `text=${JSON.stringify(compactText)}`);
@@ -94,14 +94,14 @@ async function main() {
       const row = rows.find(tr => tr.textContent.includes(id));
       if (!row) return null;
       return row.querySelectorAll('td')[5].textContent.trim();
-    }, liveId.slice(0, 16));
+    }, liveId.slice(-16));
     suite.log('1.3 desktop table: running instance stop column is "—"', stoppedCell === '—', `cell=${JSON.stringify(stoppedCell)}`);
     await H.screenshot(page, ws, '02-table-running-1920');
 
     // ═══ SECTION 2: UX-05 — empty name shows app-localized error (RU), not native HTML5 bubble ═══
     await page.evaluate(() => window.navigate('models'));
     await page.waitForTimeout(500);
-    await page.click('#view-models button:has-text("Добавить модель")');
+    await page.click('#view-models button:has-text("Добавить")');
     await page.waitForTimeout(300);
     await page.click('#wiz-next');
     await page.waitForTimeout(300);
@@ -150,7 +150,7 @@ async function main() {
     await page.evaluate(() => window.navigate('models'));
     await page.waitForTimeout(500);
 
-    await page.click('#view-models button:has-text("Add model")');
+    await page.click('#view-models button:has-text("Add")');
     await page.waitForTimeout(300);
     await page.click('#wiz-next');
     await page.waitForTimeout(300);

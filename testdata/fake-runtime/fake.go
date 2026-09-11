@@ -27,6 +27,8 @@ import (
 //   - flood [ms] [n]  Print numbered lines every ms (default 10) until n lines
 //                     are printed (0 or omitted = run until killed)
 //   - echo            Print all remaining arguments and wait briefly
+//   - argv-file       Write the remaining arguments (after the output path),
+//                     one per line, to the given file, then stay alive
 //   - env-file        Write selected environment values to a file and exit
 
 func main() {
@@ -73,12 +75,32 @@ func main() {
 	case "echo":
 		fmt.Println(strings.Join(os.Args[2:], " "))
 		time.Sleep(2 * time.Second)
+	case "argv-file":
+		doArgvFile()
 	case "env-file":
 		doEnvFile()
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown mode: %s\n", mode)
 		os.Exit(1)
 	}
+}
+
+// doArgvFile writes the arguments that follow the output path (os.Args[3:]),
+// one per line, to the file named by os.Args[2]. It then blocks forever so the
+// supervisor sees a running instance. This exposes the exact argv tokens the
+// child process received after the OS command-line round-trip, which is what a
+// tokenizer regression must guarantee.
+func doArgvFile() {
+	if len(os.Args) < 3 {
+		fmt.Fprintln(os.Stderr, "argv-file mode: need an output path")
+		os.Exit(1)
+	}
+	rest := os.Args[3:]
+	if err := os.WriteFile(os.Args[2], []byte(strings.Join(rest, "\n")), 0o600); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	select {} // stay alive until the supervisor stops the process
 }
 
 func doEnvFile() {

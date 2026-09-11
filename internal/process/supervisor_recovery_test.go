@@ -106,6 +106,66 @@ func TestRecover_PidAlive_IdentityConfirmed(t *testing.T) {
 	}
 }
 
+// ADR 013 D10 item 8: recovery reclassifies two instances of the SAME model
+// independently (ADR 005 per-instance identity), with no per-model "first wins"
+// assumption — a repeatable pipeline's two entries survive a restart as two
+// distinct, independently-classified records.
+func TestRecover_TwoInstancesOfOneModel_ClassifyIndependently(t *testing.T) {
+	store := newMockStore()
+	prober := newMockProber()
+	startTime := time.Now().Add(-time.Minute)
+
+	// inst-a: live process, identity confirmed -> orphan (classified on its own).
+	prober.alive[1111] = true
+	prober.identities[1111] = platform.ProcessIdentity{
+		ExecutablePath: "/usr/bin/fake-runtime",
+		StartTime:      startTime,
+		HasStartTime:   true,
+	}
+	// inst-b: dead process -> stale (classified independently of inst-a).
+	prober.alive[2222] = false
+
+	a := &domain.LaunchInstance{
+		ID: "inst-a", ModelID: "same-model", RuntimeID: "rt1",
+		PipelineID: "pipe-1", PipelineEntryID: "pipe-1-e1",
+		State: domain.InstanceStateRunning, PID: 1111,
+		Executable: "/usr/bin/fake-runtime", StartedAt: startTime, CreatedAt: time.Now(),
+	}
+	b := &domain.LaunchInstance{
+		ID: "inst-b", ModelID: "same-model", RuntimeID: "rt1",
+		PipelineID: "pipe-1", PipelineEntryID: "pipe-1-e2",
+		State: domain.InstanceStateRunning, PID: 2222,
+		Executable: "/usr/bin/fake-runtime", StartedAt: startTime, CreatedAt: time.Now(),
+	}
+	store.instances["inst-a"] = domain.ToStorageEntry(a)
+	store.instances["inst-b"] = domain.ToStorageEntry(b)
+
+	sup := NewSupervisor(store)
+	sup.prober = prober
+	if err := sup.Recover(context.Background()); err != nil {
+		t.Fatalf("Recover error: %v", err)
+	}
+
+	// Both records survive as distinct entries (not merged or dropped).
+	if got := len(store.instances); got != 2 {
+		t.Fatalf("want 2 distinct instance records, got %d: %+v", got, store.instances)
+	}
+	ea := store.instances["inst-a"]
+	eb := store.instances["inst-b"]
+	// inst-a (live, identity confirmed) -> orphan, on its own identity.
+	if ea.State != "orphan" {
+		t.Errorf("inst-a state = %q, want orphan", ea.State)
+	}
+	// inst-b (dead) -> stale / pid-not-found, independent of inst-a.
+	if eb.State != "stale" || eb.RecoveryReason != "pid-not-found" {
+		t.Errorf("inst-b = state %q reason %q, want stale/pid-not-found", eb.State, eb.RecoveryReason)
+	}
+	// Per-entry attribution is preserved across recovery (ADR 013 D1).
+	if ea.PipelineEntryID != "pipe-1-e1" || eb.PipelineEntryID != "pipe-1-e2" {
+		t.Errorf("entry attribution lost: a=%q b=%q", ea.PipelineEntryID, eb.PipelineEntryID)
+	}
+}
+
 func TestRecover_PidAlive_IdentityMismatch(t *testing.T) {
 	store := newMockStore()
 	prober := newMockProber()

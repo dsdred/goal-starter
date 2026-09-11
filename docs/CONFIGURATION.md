@@ -68,8 +68,9 @@ Each runtime entry defines an external inference server or service.
 
 Runtime environment values may contain sensitive process configuration. The
 HTTP API accepts them as write-only input and returns sorted
-`environment_keys`, never the values. For API updates, omitting `environment`
-preserves the stored map, `{}` clears it, and an explicit map replaces it.
+`environment_keys`, never the values. For API updates, the legacy `environment`
+field is rejected; use `environment_patch` with per-key `set`/`delete`
+operations. Omitting `environment_patch` preserves the stored map.
 
 ### Runtime healthCheck
 
@@ -169,12 +170,12 @@ The `PUT /api/v1/settings` hint contract is unchanged: password-only change → 
 
 `Runtime.Name` must be unique across all runtimes (case-insensitive). The API returns `409 Conflict` when creating or renaming a runtime to an already-existing name. A runtime can be edited without changing its own name.
 
-## Active Instances vs Instance History
+## Active Instances vs Launch History
 
 | Page | States shown | Source | Actions |
 |------|-------------|--------|---------|
 | **Instances** (Экземпляры) | Active only: `starting`, `running`, `stopping` | In-memory supervisor | Logs, Stop, Restart |
-| **Instance History** (История) | Terminal only: `exited`, `failed`, `stale` | Persistent repository (`goal_repo.json`) | Logs, Cleanup |
+| **Launch History** (История запусков) | Terminal only: `exited`, `failed`, `stale` | Persistent repository (`goal_repo.json`) | Logs, Cleanup |
 
 Terminal instances move from Instances to History automatically when they reach a terminal state. History is repository-backed: records persist across GoAl restarts. The `GET /api/v1/history` endpoint reads terminal instances directly from the persistent store, ensuring they remain visible after process restart. History cleanup deletes terminal instances only; active instances are never affected.
 

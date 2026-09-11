@@ -57,6 +57,34 @@ func (s *RuntimeService) UpdateRuntime(ctx context.Context, entry *storage.Runti
 	return s.repo.UpdateRuntime(entry)
 }
 
+// PatchRuntime applies a partial runtime update (nil fields preserved;
+// environment patched per-key via EnvPatchOp, nil = preserve entirely).
+// The same user-safety property as Model D1: editing unrelated fields never
+// touches the existing environment.
+func (s *RuntimeService) PatchRuntime(ctx context.Context, id string, p *storage.RuntimePatch) error {
+	existing, err := s.repo.GetRuntime(id)
+	if err != nil {
+		return err
+	}
+	if p.Name != nil {
+		if *p.Name == "" {
+			return errors.ErrValidation
+		}
+		if *p.Name != existing.Name && s.nameExists(*p.Name, id) {
+			return errors.NewAPIError(errors.CodeConflict, "a runtime with name \""+*p.Name+"\" already exists")
+		}
+	}
+	if p.Executable != nil && *p.Executable == "" {
+		return errors.ErrValidation
+	}
+	if p.Environment != nil {
+		if err := ValidateEnvPatch(p.Environment); err != nil {
+			return err
+		}
+	}
+	return s.repo.PatchRuntime(id, p)
+}
+
 func (s *RuntimeService) nameExists(name string, excludeID string) bool {
 	all, _ := s.repo.ListRuntimes()
 	target := strings.ToLower(name)

@@ -39,6 +39,20 @@ async function main() {
     const el = page.locator('#login-error');
     return { visible: await el.isVisible(), text: (await el.textContent() || '').trim() };
   };
+  // Wait for a specific login error to be rendered (a fixed ms sleep flaps under
+  // runner/CPU contention when the login round-trip is slower than the sleep;
+  // matching the exact text also avoids catching a stale previous error).
+  const waitForLoginError = (expected) =>
+    page.waitForFunction((exp) => {
+      const e = document.querySelector('#login-error');
+      return !!e && (e.textContent || '').trim() === exp;
+    }, expected, { timeout: 6000 }).catch(() => {});
+  // Wait for the app shell to become visible after a successful login.
+  const waitForShell = () =>
+    page.waitForFunction(() => {
+      const s = document.querySelector('#app-shell');
+      return !!s && getComputedStyle(s).display !== 'none';
+    }, { timeout: 6000 }).catch(() => {});
   const navText = async view =>
     (await page.locator(`.nav-item[data-view="${view}"] span[data-i18n]`).first().textContent() || '').trim();
 
@@ -61,7 +75,7 @@ async function main() {
     await page.fill('#username', ADMIN_USER);
     await page.fill('#password', 'wrong-password');
     await page.click('#login-form button[type="submit"]');
-    await page.waitForTimeout(800);
+    await waitForLoginError('Неверный пользователь или пароль.');
     let le = await loginErrorText();
     suite.log('2.1 RU login failure: localized message shown', le.visible && le.text === 'Неверный пользователь или пароль.', `text=${JSON.stringify(le)}`);
     suite.log('2.2 RU login failure: raw "invalid credentials" not shown', !/invalid credentials/i.test(le.text), `text=${JSON.stringify(le)}`);
@@ -71,7 +85,7 @@ async function main() {
     await page.route('**/api/v1/auth/login', route => route.abort());
     await page.fill('#password', 'whatever');
     await page.click('#login-form button[type="submit"]');
-    await page.waitForTimeout(800);
+    await waitForLoginError('Не удалось подключиться к серверу. Проверьте соединение и повторите попытку.');
     le = await loginErrorText();
     await page.unroute('**/api/v1/auth/login');
     suite.log('3.1 RU login network failure: localized message shown', le.visible && le.text === 'Не удалось подключиться к серверу. Проверьте соединение и повторите попытку.', `text=${JSON.stringify(le)}`);
@@ -86,7 +100,7 @@ async function main() {
     await page.fill('#username', ADMIN_USER);
     await page.fill('#password', 'wrong-password');
     await page.click('#login-form button[type="submit"]');
-    await page.waitForTimeout(800);
+    await waitForLoginError('Invalid username or password.');
     le = await loginErrorText();
     suite.log('4.2 EN login failure: localized message shown', le.visible && le.text === 'Invalid username or password.', `text=${JSON.stringify(le)}`);
     await H.screenshot(page, ws, '04-login-fail-en');
@@ -94,7 +108,7 @@ async function main() {
     await page.fill('#username', ADMIN_USER);
     await page.fill('#password', ADMIN_PASS);
     await page.click('#login-form button[type="submit"]');
-    await page.waitForTimeout(1500);
+    await waitForShell();
     const shellVisible = await page.locator('#app-shell').evaluate(el => getComputedStyle(el).display !== 'none');
     suite.log('4.3 EN correct credentials: login succeeds (app shell visible)', shellVisible);
     suite.log('4.4 EN nav: runtimes item is "Runtimes"', (await navText('adv-runtimes')) === 'Runtimes', `text=${JSON.stringify(await navText('adv-runtimes'))}`);
@@ -135,15 +149,74 @@ async function main() {
       (await tr('totally unknown failure xyz')) === 'Server error: totally unknown failure xyz',
       `got=${JSON.stringify(await tr('totally unknown failure xyz'))}`);
 
-    // ═══ SECTION 7: sanity ═══
+    // ═══ SECTION 7: raw-key detector (i18nMissing + DOM scan) ═══
+    const I18N_KEY_RE = /\b(?:app|auth|blocked|common|confirm|conn|err|history|instances|logs|models|nav|pipelines|runtimes|settings|sidebar|wizard)\.[a-z][a-z0-9]*(?:\.[a-z][a-z0-9]*)+/g;
+    const domRawKeys = () => page.evaluate((reSrc) => {
+      const re = new RegExp(reSrc, 'g');
+      const text = document.body ? document.body.innerText : '';
+      const found = new Set();
+      let m;
+      while ((m = re.exec(text)) !== null) found.add(m[0]);
+      return [...found];
+    }, I18N_KEY_RE.source);
+
+    const missingKeys = () => page.evaluate(() => Object.keys(window.i18nMissing || {}));
+
+    // After the EN switch in Section 6, no keys should be missing.
+    const missingEn = await missingKeys();
+    suite.log('7.1 i18nMissing empty after EN switch (no raw keys from t())', missingEn.length === 0, `missing=${JSON.stringify(missingEn.slice(0, 5))}`);
+    const rawEn = await domRawKeys();
+    suite.log('7.2 No raw i18n key patterns in visible DOM (EN)', rawEn.length === 0, `raw=${JSON.stringify(rawEn.slice(0, 5))}`);
+
+    // ═══ SECTION 8: repeated RU→EN→RU→EN→RU round-trip ═══
+    for (let round = 0; round < 2; round++) {
+      const tag = `R${round + 1}`;
+      await page.evaluate(() => window.setLanguage('ru'));
+      await page.waitForTimeout(400);
+      const mRu = await missingKeys();
+      const rRu = await domRawKeys();
+      suite.log(`${tag}.1 RU: i18nMissing empty`, mRu.length === 0, `missing=${JSON.stringify(mRu.slice(0, 5))}`);
+      suite.log(`${tag}.2 RU: no raw keys in DOM`, rRu.length === 0, `raw=${JSON.stringify(rRu.slice(0, 5))}`);
+      const navRuCheck = await navText('adv-runtimes');
+      suite.log(`${tag}.3 RU: nav localized`, navRuCheck.length > 0 && navRuCheck !== 'Runtimes', `text=${JSON.stringify(navRuCheck)}`);
+
+      await page.evaluate(() => window.setLanguage('en'));
+      await page.waitForTimeout(400);
+      const mEn2 = await missingKeys();
+      const rEn2 = await domRawKeys();
+      suite.log(`${tag}.4 EN: i18nMissing empty`, mEn2.length === 0, `missing=${JSON.stringify(mEn2.slice(0, 5))}`);
+      suite.log(`${tag}.5 EN: no raw keys in DOM`, rEn2.length === 0, `raw=${JSON.stringify(rEn2.slice(0, 5))}`);
+      const navEnCheck = await navText('adv-runtimes');
+      suite.log(`${tag}.6 EN: nav localized`, navEnCheck === 'Runtimes', `text=${JSON.stringify(navEnCheck)}`);
+    }
+
+    // ═══ SECTION 9: dynamic DOM relocalization ═══
+    // Navigate to a view with JS-rendered content, switch language, verify
+    // the dynamic content follows the new locale.
+    await page.evaluate(() => window.navigate('models'));
+    await page.waitForTimeout(400);
+    await page.evaluate(() => window.setLanguage('ru'));
+    await page.waitForTimeout(400);
+    const modelsTitleRu = (await page.locator('#view-models h1').textContent() || '').trim();
+    const modelsTitleRuKey = await page.evaluate(() => t('models.title'));
+    suite.log('9.1 RU: models page title relocalizes after switch', modelsTitleRu === modelsTitleRuKey, `text=${JSON.stringify(modelsTitleRu)} expected=${JSON.stringify(modelsTitleRuKey)}`);
+    const mRu2 = await missingKeys();
+    suite.log('9.2 RU: i18nMissing empty after navigating + switching', mRu2.length === 0, `missing=${JSON.stringify(mRu2.slice(0, 5))}`);
+    await page.evaluate(() => window.setLanguage('en'));
+    await page.waitForTimeout(400);
+    const modelsTitleEn = (await page.locator('#view-models h1').textContent() || '').trim();
+    const modelsTitleEnKey = await page.evaluate(() => t('models.title'));
+    suite.log('9.3 EN: models page title relocalizes back', modelsTitleEn === modelsTitleEnKey, `text=${JSON.stringify(modelsTitleEn)} expected=${JSON.stringify(modelsTitleEnKey)}`);
+
+    // ═══ SECTION 10: sanity ═══
     // The failed-logins above deliberately produce 401/aborted-request network
     // notices; filter those, keep any real JS/resource error (same rule as core.cjs).
     const unexpectedConsole = suite.consoleErrors.filter(e =>
       !/Failed to load resource[^\n]*401 \(Unauthorized\)/.test(e) &&
       !/Failed to load resource[^\n]*net::ERR_FAILED/.test(e));
-    suite.log('7.1 No unexpected console errors', unexpectedConsole.length === 0,
+    suite.log('10.1 No unexpected console errors', unexpectedConsole.length === 0,
       unexpectedConsole.slice(0, 3).join('; ') || `(${suite.consoleErrors.length} expected 401/aborted-login notices ignored)`);
-    suite.log('7.2 No server 5xx errors', suite.serverErrors.length === 0, JSON.stringify(suite.serverErrors.slice(0, 3)));
+    suite.log('10.2 No server 5xx errors', suite.serverErrors.length === 0, JSON.stringify(suite.serverErrors.slice(0, 3)));
 
     ok = await suite.finish();
   } catch (err) {

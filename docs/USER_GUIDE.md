@@ -276,7 +276,7 @@ After starting, GoAl is available at: **http://127.0.0.1:8088**
 - **Instance Management** — start, stop, restart
 - **Runtime CRUD** — configure AI runtimes
 - **Model CRUD** — configure launch definitions (runtime + launch args + environment)
-- **Instance History** — persistent terminal instance records (survives restart)
+- **Launch History** — persistent terminal instance records (survives restart)
 - **Health Monitoring** — check runtime availability
 - **Metrics** — built-in application metrics
 - **Theme** — System / Dark / Light (sidebar footer, persisted in browser localStorage)
@@ -354,18 +354,19 @@ expressed through Args.
 | POST | `/api/v1/models/{id}/resolve` | Preview resolved command |
 
 Model environment values are write-only. The API and Web UI show only their
-keys. Editing other model fields preserves the stored environment when the
-`environment` field is omitted. Send an explicit replacement map to change the
-environment, or `{}` to remove all model environment entries.
+keys. Editing other model fields preserves the stored environment (omitting
+`environment_patch` is a no-op for the map). To change values, send
+`environment_patch` with per-key `set`/`delete` operations.
 
 ### Runtimes
 
 Runtime environment values are write-only through the HTTP API. Runtime reads
 and mutation responses show sorted variable names in `environment_keys`, never
 their values. Editing other runtime fields preserves the stored environment
-when `environment` is omitted. Send `{}` to clear it or an explicit map to
-replace it. Values remain stored locally in `goal_repo.json` for process launch;
-this file is not an encrypted secret vault.
+(omitting `environment_patch` is a no-op for the map). To change values, send
+`environment_patch` with per-key `set`/`delete` operations. Values remain stored
+locally in `goal_repo.json` for process launch; this file is not an encrypted
+secret vault.
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -398,14 +399,14 @@ this file is not an encrypted secret vault.
 
 One model can create multiple instances. Stopping an instance does not delete the model. Restart reuses the same instance: the old process is stopped and a new process is started under the same instance ID.
 
-### Instances vs Instance History
+### Instances vs Launch History
 
 | Page | Shows | Actions |
 |------|-------|---------|
 | **Instances** | Active processes only (`starting`, `running`, `stopping`) | Logs, Stop, Restart |
-| **Instance History** | Terminal runs only (`exited`, `failed`, `stale`) | Logs, Cleanup |
+| **Launch History** | Terminal runs only (`exited`, `failed`, `stale`) | Logs, Cleanup |
 
-When an instance stops or fails, it moves from Instances to History automatically.
+When an instance stops or fails, it moves from Instances to Launch History automatically.
 History is **repository-backed**: terminal instances are persisted in `goal_repo.json`
 and survive GoAl restart. The `/api/v1/history` endpoint returns these persistent
 records. History cleanup removes terminal instances (all, older than 7 days, or
@@ -457,6 +458,18 @@ and environment. All launch parameters (`--host`, `--port`, `-m`, `--mmproj`, et
 are expressed through Args. Physical model files (GGUF, MMProj) are not separate
 entities — they are ordinary launch arguments.
 
+**Args editor syntax.** The Args field (in the model wizard and the Pipeline
+"Custom" args) is a command line. It is split into individual tokens on
+whitespace; wrap a token in double quotes to keep its inner spaces in one
+argument (e.g. `-m "E:\models\my model.gguf"`). Inside double quotes a backslash
+escapes the next character — `\"` becomes a literal `"` and `\\` a literal `\` —
+so JSON values pass through intact, e.g.
+`--chat-template-kwargs "{\"reasoning_effort\":\"medium\"}"` is sent to the runtime
+as the single argument `{"reasoning_effort":"medium"}`. Outside quotes a backslash
+is a literal character, so Windows paths such as `E:\models\m.gguf` are kept as
+typed. The exact same rules apply to the model Args and to a Pipeline entry's
+Custom Args.
+
 ### Creating a Model
 
 **Via Web Interface:**
@@ -482,6 +495,38 @@ curl -X POST http://127.0.0.1:8088/api/v1/models \
     "active": true
   }'
 ```
+
+### Environment variables
+
+**When to use:** The "Environment Variables" field (Переменные окружения) is for
+configuration that the launched runtime process or its dependencies read from
+the OS environment — not for command-line arguments. Use it when the runtime
+(or a library it links) expects a setting via an environment variable rather
+than a `--flag`. Ordinary launch parameters belong in Args.
+
+**Semantics:**
+
+- Variables are passed to the child process at launch time. The child
+  inherits the GoAl parent environment; runtime-level and model-level
+  variables override parent values (model overrides runtime).
+- They are **not** command-line arguments and **not** macros/substitutions
+  inside Args. They are a separate channel.
+- Values are **write-only**: the API accepts them on create/update but never
+  returns them to the client. The Edit Model wizard shows existing keys
+  without revealing values. Leaving an existing key unchanged preserves its
+  value. Replacing a value requires explicitly typing a new value. Deleting
+  a variable requires removing its row.
+
+**Example:**
+
+```
+CUDA_VISIBLE_DEVICES=0,1
+HF_HOME=D:\cache\huggingface
+```
+
+GoAl does not interpret or validate these values — they are passed verbatim to
+the runtime process. Whether a specific variable has effect depends entirely on
+the external runtime and its dependencies.
 
 ### Example: llama.cpp with Qwen GGUF
 
@@ -519,40 +564,54 @@ A **Pipeline** is an ordered group of existing Models that start, stop, and rest
 together. It is a *launcher* over your models — it does not create new models and does
 not store its own launch parameters.
 
-**Per-model Args override (all-or-nothing).** Each model in a pipeline can carry an
-optional Args override. If the override is non-empty, it **replaces the model's Args
-entirely** for that launch (no merge, no append). If it is empty, the model's own Args
-are used. The override is applied only at launch; the model's stored Args are never
-modified. The instance history shows exactly what ran, including overrides.
+**Repeatable entries.** The same Model may appear in a pipeline **more than once** as
+independent entries (e.g. `Qwen3.8-27B` on `--port 8081` and again on `--port 8082`).
+Each entry is a distinct launch with its own identity; the list order is the launch order.
 
-**Group lifecycle.**
-- **Start** launches the models in list order, sequentially and best-effort: a failure on
-  one model does not stop the rest, and already-started models are not rolled back. A model
-  that already has a running instance is skipped (`already-running`) — a pipeline never
-  starts a second copy or adopts a manually started instance. A model whose latest instance
-  is `orphan` is skipped (`orphan-skipped`).
-- **Stop** stops only the instances the pipeline started, in **reverse** order. Manually
-  started instances of the same model are untouched.
+**Per-entry Args mode (all-or-nothing, explicit).** Each entry chooses one of two modes in a
+compact segmented control: **From model** (the model's own Args are used) or **Custom**
+(a textarea, with the note "Model arguments are fully replaced."). A Custom value is a complete
+launch command that **fully replaces** the model's Args for that entry (no merge, no append);
+two entries of one model can therefore launch with different arguments. The mode is applied
+only at launch; the model's stored Args are never modified. The Launch History shows exactly
+what ran, including overrides.
+
+**Group lifecycle (per entry).**
+- **Start** launches the entries in list order, sequentially and best-effort: a failure on
+  one entry does not stop the rest, and already-started entries are not rolled back. An entry
+  yields `already-running` when the model already has an active instance owned by another
+  pipeline or started manually — a pipeline never adopts another owner's instance. Within one
+  pipeline, two entries of the same model launch two independent instances. An entry whose
+  model's latest instance is `orphan` is skipped (`orphan-skipped`).
+- **Stop** stops only the instances the pipeline started, per entry, in **reverse** order.
+  Manually started instances of the same model are untouched.
 - **Restart** = reverse stop, then an always-forward start of all entries.
+- The list shows a single **primary** action — **Start** when the pipeline owns no active
+  instances, **Stop** when it does — with **Restart / Edit / Delete** in a **"…" overflow menu**
+(Delete destructive inside the menu). A **State** column
+  aggregates the entries' live states (running / starting / stopping / failed / orphan /
+  stopped), and repeated models render once per entry with a `×n` badge and their own state.
 
-**Autostart (distinct from the Start button).** A pipeline has an `Active` toggle and each
-model entry has an `AutoStart` checkbox. These are *startup settings only* — they do not
-affect the manual **Start** action. When GoAl starts, `Active` pipelines launch their
-`AutoStart` models first (before model-level autostart), so a model covered by both
-mechanisms gets exactly one instance, owned by the pipeline.
+**Autostart (distinct from the Start button).** A pipeline has an **Active** toggle
+("Pipeline autostart"). This is a *startup setting only* — it does not affect the manual
+**Start** action. When GoAl starts, `Active` pipelines launch **all** their entries
+(before model-level autostart), so a model covered by both mechanisms gets instances owned
+by the pipeline. (The legacy per-entry `AutoStart` field is preserved in storage for
+backward compatibility but no longer gates any launch.)
 
 **Integrity (no implicit cascade).** Deleting a model that a pipeline references returns a
-conflict — edit or delete the pipeline first. Structural edits (add/remove/reorder models)
+conflict — edit or delete the pipeline first. Structural edits (add/remove/reorder entries)
 and deletion are refused with a conflict while the pipeline has active owned instances;
-rename, Args, `Active`, and per-entry `AutoStart` can always be changed.
+rename, Args, and `Active` can always be changed.
 
 **Via Web Interface:**
 1. Go to the **Pipelines** section
 2. Click **+ Create pipeline**
-3. Enter a name, optionally enable the GoAl autostart toggle, add one row per model, and
-   for each row pick the model, an optional Args override, and the autostart checkbox
-4. **Start / Stop / Restart** act on the whole group; per-model status chips show
-   running/stopped/orphan state
+3. Enter a name, optionally enable **Pipeline autostart**, and for each block pick the model
+    and an args mode (**From model** or **Custom**); the blocks stack top to bottom in launch
+    order — add more with **+ Add model** and reorder with the ↑/↓ buttons (× removes a block)
+4. **Start / Stop / Restart / Edit / Delete** act on the whole group via the inline icon
+    strip; the per-entry status chips and the **State** column show running/stopped/orphan state
 
 ---
 
