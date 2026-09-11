@@ -399,6 +399,8 @@ secret vault.
 
 One model can create multiple instances. Stopping an instance does not delete the model. Restart reuses the same instance: the old process is stopped and a new process is started under the same instance ID.
 
+**State semantics:** `RUNNING` means the child process is alive. It does **not** guarantee that the runtime has finished loading the model, that its HTTP inference endpoint is accepting connections, or that no other process shares the same port. GoAl is runtime-agnostic and tracks process liveness only; runtime readiness is the responsibility of the external runtime.
+
 ### Instances vs Launch History
 
 | Page | Shows | Actions |
@@ -474,13 +476,14 @@ Custom Args.
 
 **Via Web Interface:**
 
-1. Go to the **Мои модели** section
-2. Click **+ Добавить модель**
+1. Go to the **Models** section
+2. Click **+ Add model**
 3. Fill in the fields:
-   - Model name
-   - Select runtime
-   - Specify launch arguments (optional)
-   - Specify environment variables (optional)
+    - Model name
+    - Select runtime
+    - AutoStart (optional)
+    - Environment variables (optional)
+    - Launch Args (optional)
 4. Click **Save**
 
 **Via API:**

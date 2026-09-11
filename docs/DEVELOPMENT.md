@@ -4,7 +4,7 @@ This document describes the development workflow for GoAl contributors.
 
 ## Prerequisites
 
-- Go 1.22+ (recommended)
+- Go 1.25.13 (pinned in `.go-version`)
 - GCC (for race detector: `CGO_ENABLED=1`)
 - PowerShell 5.1+ (Windows) or bash (Linux)
 
