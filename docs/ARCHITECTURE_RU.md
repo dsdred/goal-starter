@@ -150,7 +150,7 @@ config ← main (загружается один раз при старте)
 |-----|------|--------|
 | 0001 | Продукт и архитектура (Go, single binary, SSE логи) | Accepted |
 | 0002 | Мультиинстансный Supervisor и Profile → Instance модель | Accepted |
-| 0003 | Web UI через embedded FS | Proposed |
+| 0003 | Web UI через embedded FS | Accepted (decision 1 implemented; decision 2 withdrawn) |
 | 0004 | Config vs Repository (seed-once) | Proposed |
 | 0005 | Recovery: identity-verified orphan detection и reconciliation | Accepted |
 | 0006 | Безопасное хранение креденшелов (bcrypt `adminPasswordHash`) | Accepted |

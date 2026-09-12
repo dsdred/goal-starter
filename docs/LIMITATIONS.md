@@ -61,9 +61,9 @@ Health check configuration is available in the goal.json config format for both 
 
 **Workaround:** Delete the entity from `goal_repo.json` or use the API/UI to update it.
 
-### Hot-reload not wired
+### Hot-reload is explicit, not automatic
 
-Hot-reload is implemented (`internal/config/reload.go`) but not connected to main startup. The config file is read once at startup.
+Config file changes are never applied automatically. The explicit endpoint `POST /api/v1/admin/reload` (auth + CSRF, [ADR 009](adr/009-hot-reload-wiring.md)) re-reads the config file and applies only hot-classified fields (`logLevel`); fields classified as restart-required (`listenAddress`, `webPort`, `dataDir`, `authEnabled`, `adminUser`) are reported in the response and take effect only at the next process restart. A rejected reload never writes the file and never applies credential material.
 
 ### Schema migration
 

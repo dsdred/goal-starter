@@ -695,8 +695,8 @@ function pipelineEntryStatus(p, entry, idx) {
 }
 
 // pipelineChips renders one chip per entry (ADR 013 D7): a repeated model
-// appears once per entry and carries a shared occurrence badge (×n); chips
-// beyond a display budget collapse to +N with a tooltip.
+// appears once per entry (each chip carries the model name and its own
+// per-entry status); chips beyond a display budget collapse to +N with a tooltip.
 function pipelineChips(p) {
     const shown = p.models.slice(0, 6);
     const rest = p.models.slice(6);

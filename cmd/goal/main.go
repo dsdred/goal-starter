@@ -380,13 +380,15 @@ func autostartModels(ctx context.Context, repo storage.Repository, supervisor *p
 }
 
 // autostartPipelines starts entries of Active pipelines after recovery and
-// before model-level autostart (ADR 010 D4). Pipelines are processed in
-// repository order, entries in list order, sequentially; only entries with
-// AutoStart=true are considered. The model-level AutostartDelay is not
-// applied on the pipeline path in first scope. Per-entry failures are
-// operational logs and never abort the pipeline, the remaining pipelines,
-// or startup. Pipeline autostart emits no pipeline.* audit events
-// (no user/session context at startup).
+// before model-level autostart (ADR 010 D4, ADR 013 reconciliation). Pipelines
+// are processed in repository order, entries in list order, sequentially. An
+// Active pipeline launches ALL of its entries — the legacy per-entry AutoStart
+// field is retained for storage/API backward compatibility but is not consulted
+// for pipeline launch selection. The model-level AutostartDelay is not applied
+// on the pipeline path in first scope. Per-entry failures are operational logs
+// and never abort the pipeline, the remaining pipelines, or startup. Pipeline
+// autostart emits no pipeline.* audit events (no user/session context at
+// startup).
 func autostartPipelines(ctx context.Context, repo storage.Repository, svc *application.PipelineService) {
 	pipelines, err := repo.ListPipelines()
 	if err != nil {

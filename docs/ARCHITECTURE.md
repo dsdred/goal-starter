@@ -154,7 +154,7 @@ config ← main (loaded once at startup)
 |-----|-------|--------|
 | 0001 | Product and architecture (Go, single binary, SSE logs) | Accepted |
 | 0002 | Multi-instance Supervisor and Profile → Instance model | Accepted |
-| 0003 | Web UI serving via embedded FS | Proposed |
+| 0003 | Web UI serving via embedded FS | Accepted (decision 1 implemented; decision 2 withdrawn) |
 | 0004 | Config file vs Repository ownership (seed-once) | Proposed |
 | 0005 | Recovery: identity-verified orphan detection and restart reconciliation | Accepted |
 | 0006 | Secure credential storage (bcrypt `adminPasswordHash`) | Accepted |

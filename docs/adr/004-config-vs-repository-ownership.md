@@ -2,6 +2,7 @@
 
 **Status:** Proposed
 **Date:** 2026-08-10
+**Implementation note (post-v2.1.0, factual):** the ADR status line was never formally updated to Accepted. The Option A decision (seed-once: `goal.json` is a startup seed, `goal_repo.json` is the source of truth after first run) is the implemented behavior and is documented in [LIMITATIONS.md](../LIMITATIONS.md) ("Seed-once policy"); the Option D `strategy`/`source` fields are NOT implemented and remain future work per this ADR's own Decision.
 **Related:** ADR 001 (single binary), ADR 002 (supervisor)
 
 ## Context
