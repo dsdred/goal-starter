@@ -6,11 +6,16 @@ This document lists the verified limitations of GoAl 2.0. Each item is either a 
 
 ### No PID reattachment after restart
 
-When GoAl restarts, running instances are marked as `stale`. GoAl does not verify whether the PID is still alive, does not reuse PIDs, and does not reattach to pipes.
+When GoAl restarts, transitional instances (`running`, `starting`, `stopping`, `pending`) are classified by `Recover()`:
 
-**Impact:** After a restart, the user must manually start a new instance if the previous process is still running externally.
+- **`orphan`** — the process is still alive and its identity is confirmed (executable path match; start time where available). GoAl does not adopt or reattach to it.
+- **`stale`** — the process is gone, has no recorded PID, or its identity cannot be confirmed.
 
-**Code:** `internal/process/supervisor.go` — `Recover()` marks `running|starting|stopping|pending` instances as `stale`.
+In both cases GoAl does not reuse the PID, does not reattach to stdout/stderr pipes, and does not guarantee runtime readiness (a live process does not mean the model has finished loading or that its HTTP endpoint is accepting connections).
+
+**Impact:** After a restart, the user must manually start a new instance or use the Dismiss/Kill actions on an `orphan` before starting again.
+
+**Code:** `internal/process/supervisor.go` — `Recover()` + `classifyForRecovery()` (ADR 005).
 
 ### No pipe reattachment
 
@@ -62,7 +67,7 @@ Hot-reload is implemented (`internal/config/reload.go`) but not connected to mai
 
 ### Schema migration
 
-Config schema: `1 -> 2` (add default health check config). Storage schema: `5 -> 6` (profiles become models, old physical models folded into args). Both run automatically at startup.
+Config schema: `1 -> 2` (apply defaults for ListenAddress, WebPort, DataDir). Storage schema: `≤5/6 -> 7 -> 8` (profiles become models, old physical models folded into args, pipelines added). Both run automatically at startup; current storage schema is v8.
 
 ## Security
 
@@ -97,7 +102,7 @@ The supported Windows API model has no directory flush; rename durability relies
 
 ### No schema versioning framework
 
-Schema version is tracked (`version` field) with automatic migrations for config (v1→v2) and storage (v5→v6). No general-purpose migration framework exists; future schema changes require code-level migration functions.
+Schema version is tracked (`version` field) with automatic migrations for config (v1→v2) and storage (≤5/6→7→8, current v8). No general-purpose migration framework exists; future schema changes require code-level migration functions.
 
 ## Packaging
 

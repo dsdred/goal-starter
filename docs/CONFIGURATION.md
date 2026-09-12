@@ -135,17 +135,11 @@ in the GoAl 2.0 domain.
 
 The profile JSON accepts both `args` and `arguments` as the key for additional command-line arguments. The parser treats them as equivalent for backward compatibility.
 
-## Storage migration (v5 → v6)
+## Storage migration
 
-On first startup with a v5 `goal_repo.json`, GoAl automatically migrates to v6:
+On first startup, GoAl automatically migrates `goal_repo.json` to the current schema (v8). Legacy files with schema ≤5 or 6 are migrated to v7 (profiles become models, physical models folded into args, `profile_id` renamed to `model_id`); v7 loads directly as v8 (the `pipelines` key is additive). Instance history is preserved and resolved-command semantics are maintained.
 
-- `profiles` entries become `models` (launch definitions).
-- Old physical `models` entries (with `path`/`arguments`) are folded into the corresponding model's launch args (e.g., `-m <path>`).
-- `profile_id` in instances becomes `model_id`.
-- Instance history is preserved.
-- Resolved-command semantics are maintained: the final launch command is identical before and after migration.
-
-After migration, `goal_repo.json` contains only `runtimes`, `models`, and `instances`.
+After migration, `goal_repo.json` contains `runtimes`, `models`, `instances`, and `pipelines`.
 
 ## Hot-reload (ADR 009)
 

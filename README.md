@@ -68,7 +68,7 @@ GoAl Windows releases are currently **not code-signed**. The publisher may appea
 
 ## Known limitations
 
-- No PID reattachment after GoAl restart (instances marked as `stale`)
+- No PID reattachment after GoAl restart (instances marked as `stale` or `orphan`)
 - SSE is the authoritative live-log transport; WebSocket is implemented but not wired
 - TCP HealthChecker results stored internally, not exposed as a separate public API
 > Full reference: [LIMITATIONS.md](docs/LIMITATIONS.md)

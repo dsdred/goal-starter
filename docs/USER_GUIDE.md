@@ -892,12 +892,12 @@ never touches user data (config, repository, audit, logs).
 
 ---
 
-## Migration (v5 → v6)
+## Migration
 
-If you upgrade from GoAl v1.x, the `goal_repo.json` is automatically migrated on first startup:
+If you upgrade from GoAl v1.x, the `goal_repo.json` is automatically migrated to the current schema (v8) on first startup:
 
-| v5 (old) | v6 (new) |
-|----------|----------|
+| Legacy (v5) | Current (v8) |
+|-------------|--------------|
 | `profiles` entries | Become `models` (launch definitions) |
 | `models` entries (physical GGUF) | Folded into the model's launch args (e.g., `-m <path>`) |
 | Instance `profile_id` | Renamed to `model_id` |
