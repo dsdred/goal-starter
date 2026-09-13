@@ -397,7 +397,7 @@ secret vault.
 - **Model** — configured launch definition (runtime reference + launch args + environment)
 - **Instance** — a process launch (runtime entity) with a lifecycle state
 
-One model can create multiple instances. Stopping an instance does not delete the model. Restart reuses the same instance: the old process is stopped and a new process is started under the same instance ID.
+One model can create multiple instances. Stopping an instance does not delete the model. Restart reuses the same instance: the old process is stopped and a new process is started under the same instance ID. Restart uses the model's **current** configuration — arguments, environment, and runtime edits made after the initial launch are picked up on restart (for pipeline-owned instances, the pipeline entry's `Args` override continues to win, all-or-nothing). If the model, its runtime, or the owning pipeline entry no longer exists, the restart fails with a bounded error instead of silently relaunching the old configuration.
 
 **State semantics:** `RUNNING` means the child process is alive. It does **not** guarantee that the runtime has finished loading the model, that its HTTP inference endpoint is accepting connections, or that no other process shares the same port. GoAl is runtime-agnostic and tracks process liveness only; runtime readiness is the responsibility of the external runtime.
 

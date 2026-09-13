@@ -113,7 +113,7 @@ Instances are running processes created from models.
 | `GET` | `/api/v1/history` | Yes | — | List terminal instances (repository-backed, persists across restart). |
 | `POST` | `/api/v1/instances/start` | Yes | Yes | Start a new instance from a model. |
 | `POST` | `/api/v1/instances/{id}/stop` | Yes | Yes | Stop an instance. |
-| `POST` | `/api/v1/instances/{id}/restart` | Yes | Yes | Restart an instance. |
+| `POST` | `/api/v1/instances/{id}/restart` | Yes | Yes | Restart an instance: the old process is stopped and a new one is started under the **same InstanceID** (pipeline attribution preserved). Restart re-resolves the **current** launch configuration — `Model.Args` + `Model.Environment`, the runtime (executable/working directory/environment) of the current `Model.RuntimeID`, and, for pipeline-owned instances, the owning entry's `Args` override (all-or-nothing). If the model, runtime, or owning pipeline/entry can no longer be resolved (including legacy instances without entry attribution), the request fails with a bounded `500` error and the frozen launch snapshot is never relaunched. |
 | `POST` | `/api/v1/instances/{id}/dismiss` | Yes | Yes | Dismiss an orphan instance (transitions `orphan` → `stale`). No process is touched. |
 | `POST` | `/api/v1/instances/{id}/kill` | Yes | Yes | Terminate an orphan process (destructive, ADR 008). Strict identity re-verification before every signal; `orphan`-only. |
 

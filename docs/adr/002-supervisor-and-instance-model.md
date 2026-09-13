@@ -59,7 +59,7 @@ This separation means:
 - Profiles are independent of process lifecycle
 - Multiple instances can share one profile
 - Stopping an instance does not delete its profile
-- Restarting creates a new instance with a new ID
+- Restarting reuses the same instance ID: the old process is stopped and a new process is started under the same ID (the launch configuration is re-resolved from the current model/runtime/pipeline state)
 
 ### Lifecycle
 

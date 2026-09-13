@@ -100,7 +100,21 @@ func doArgvFile() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	select {} // stay alive until the supervisor stops the process
+	// Stay alive until the supervisor stops the process. A bare `select {}`
+	// on the main goroutine is killed by the Go runtime deadlock detector
+	// ("all goroutines are asleep", exit 2) whenever no other runtime
+	// activity is in flight — a timing-dependent flake. A pending timer plus
+	// a signal handler thread keeps the runtime alive deterministically
+	// (same pattern as "infinite"/"graceful" modes); this mode stays silent.
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
+	for {
+		select {
+		case <-sigCh:
+			os.Exit(0)
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
 }
 
 func doEnvFile() {

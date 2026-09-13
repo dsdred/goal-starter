@@ -307,7 +307,8 @@ func (s *Supervisor) Stop(ctx context.Context, id domain.InstanceID) error {
 	return ctrl.Stop(ctx)
 }
 
-// Restart restarts a specific instance.
+// Restart restarts a specific instance, reusing the instance's frozen launch
+// fields from the original resolve.
 func (s *Supervisor) Restart(ctx context.Context, id domain.InstanceID) (*domain.LaunchInstance, error) {
 	s.mu.RLock()
 	ctrl, ok := s.instances[id]
@@ -318,6 +319,22 @@ func (s *Supervisor) Restart(ctx context.Context, id domain.InstanceID) (*domain
 	}
 
 	return ctrl.Restart(ctx)
+}
+
+// RestartWithLaunch restarts a specific instance using a freshly resolved
+// launch specification built from the current model/runtime configuration.
+// See InstanceController.RestartWithLaunch for the identity and ownership
+// contract.
+func (s *Supervisor) RestartWithLaunch(ctx context.Context, id domain.InstanceID, model *domain.Model, runtime *domain.Runtime, customArgs []string, customEnv map[string]string) (*domain.LaunchInstance, error) {
+	s.mu.RLock()
+	ctrl, ok := s.instances[id]
+	s.mu.RUnlock()
+
+	if !ok {
+		return nil, fmt.Errorf("instance %s not found", id)
+	}
+
+	return ctrl.RestartWithLaunch(ctx, model, runtime, customArgs, customEnv)
 }
 
 // Status returns a snapshot of a specific instance.
@@ -934,8 +951,28 @@ func (ic *InstanceController) stopCore(ctx context.Context) error {
 }
 
 // Restart serializes lifecycle operations, waits for the old controller run to
-// finish completely, then acquires a fresh concurrency reservation before launch.
+// finish completely, then acquires a fresh concurrency reservation before
+// launch, reusing the instance's frozen launch fields.
 func (ic *InstanceController) Restart(ctx context.Context) (*domain.LaunchInstance, error) {
+	return ic.restartWithRefresh(ctx, nil, "")
+}
+
+// RestartWithLaunch restarts the same instance using a freshly resolved launch
+// specification built from the current model/runtime configuration. The
+// InstanceID, the persisted record, and the PipelineID/PipelineEntryID
+// attribution are preserved (no new ID is minted); only the launch-affecting
+// fields (RuntimeID, Executable, Args, WorkingDirectory, Environment) are
+// refreshed before the new process generation starts. ModelName is
+// intentionally NOT refreshed (display metadata).
+func (ic *InstanceController) RestartWithLaunch(ctx context.Context, model *domain.Model, runtime *domain.Runtime, customArgs []string, customEnv map[string]string) (*domain.LaunchInstance, error) {
+	spec, err := ic.resolver.Resolve(model, runtime, customArgs, customEnv)
+	if err != nil {
+		return nil, fmt.Errorf("resolve instance: %w", err)
+	}
+	return ic.restartWithRefresh(ctx, spec, runtime.ID)
+}
+
+func (ic *InstanceController) restartWithRefresh(ctx context.Context, spec *domain.CommandSpec, runtimeID string) (*domain.LaunchInstance, error) {
 	ic.lifecycleMu.Lock()
 	defer ic.lifecycleMu.Unlock()
 
@@ -958,6 +995,21 @@ func (ic *InstanceController) Restart(ctx context.Context) (*domain.LaunchInstan
 		}
 	}
 
+	if spec != nil {
+		// Refresh the frozen launch fields under ic.mu: startCore reads them
+		// while holding the same lock, and lifecycleMu orders this refresh
+		// before the new run is published — no race with the new startCore.
+		ic.mu.Lock()
+		if runtimeID != "" {
+			ic.instance.RuntimeID = runtimeID
+		}
+		ic.instance.Executable = spec.Executable
+		ic.instance.Args = spec.Args
+		ic.instance.WorkingDirectory = spec.WorkingDirectory
+		ic.instance.Environment = specEnvironmentMap(spec.Environment)
+		ic.mu.Unlock()
+	}
+
 	var reservation *slotReservation
 	var err error
 	if ic.supervisorRef != nil {
@@ -972,6 +1024,18 @@ func (ic *InstanceController) Restart(ctx context.Context) (*domain.LaunchInstan
 
 	snap := ic.Snapshot()
 	return &snap, nil
+}
+
+// specEnvironmentMap converts the resolved "k=v" launch environment into the
+// instance environment map (same conversion as ResolveToInstance).
+func specEnvironmentMap(env []string) map[string]string {
+	envMap := make(map[string]string, len(env))
+	for _, ev := range env {
+		if k, v, ok := strings.Cut(ev, "="); ok {
+			envMap[k] = v
+		}
+	}
+	return envMap
 }
 
 // Snapshot returns a copy of the current instance state.

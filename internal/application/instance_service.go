@@ -48,8 +48,72 @@ func (s *InstanceService) StopInstance(ctx context.Context, id domain.InstanceID
 	return s.supervisor.Stop(ctx, id)
 }
 
+// RestartInstance restarts the instance with the CURRENT launch configuration
+// resolved from the repository (ownership-aware):
+//
+//   - MODEL-owned and PIPELINE FROM-MODEL instances relaunch with the current
+//     Model.Args;
+//   - PIPELINE CUSTOM instances (entry.Args non-empty) relaunch with the
+//     current PipelineEntry.Args — all-or-nothing, never merged with or
+//     replaced by Model.Args;
+//   - the runtime is re-resolved from the current Model.RuntimeID;
+//   - the InstanceID, the persisted record, and the PipelineID/PipelineEntryID
+//     attribution are preserved (same-ID in-place refresh, new PID).
+//
+// If the model, the runtime, or the owning pipeline/entry can no longer be
+// resolved (including legacy pipeline instances without an entry
+// attribution), the restart fails with a bounded error instead of silently
+// relaunching the frozen launch snapshot.
 func (s *InstanceService) RestartInstance(ctx context.Context, id domain.InstanceID) (*domain.LaunchInstance, error) {
-	return s.supervisor.Restart(ctx, id)
+	inst, err := s.supervisor.Status(id)
+	if err != nil {
+		return nil, err
+	}
+
+	me, err := s.repo.GetModel(inst.ModelID)
+	if err != nil {
+		return nil, fmt.Errorf("model not found: %s", inst.ModelID)
+	}
+
+	domainModel := domain.ModelEntryToDomain(me)
+	if inst.PipelineID != "" {
+		if inst.PipelineEntryID == "" {
+			return nil, fmt.Errorf("pipeline entry ownership cannot be reconstructed for instance %s (legacy attribution)", id)
+		}
+		pe, err := s.repo.GetPipeline(inst.PipelineID)
+		if err != nil {
+			return nil, fmt.Errorf("pipeline not found: %s", inst.PipelineID)
+		}
+		entry, ok := pipelineEntryByID(pe, inst.PipelineEntryID)
+		if !ok {
+			return nil, fmt.Errorf("pipeline entry %s not found in pipeline %s", inst.PipelineEntryID, inst.PipelineID)
+		}
+		if len(entry.Args) > 0 {
+			domainModel.Args = entry.Args
+		}
+	}
+
+	rte, err := s.repo.GetRuntime(domainModel.RuntimeID)
+	if err != nil {
+		return nil, fmt.Errorf("runtime not found: %s", domainModel.RuntimeID)
+	}
+
+	domainRuntime := process.RuntimeToDomain(
+		rte.ID, rte.Name, rte.Executable, rte.WorkingDirectory,
+		rte.Environment,
+	)
+
+	return s.supervisor.RestartWithLaunch(ctx, id, domainModel, domainRuntime, nil, nil)
+}
+
+// pipelineEntryByID finds a pipeline entry (ADR 013 D1 identity) by its ID.
+func pipelineEntryByID(pe *storage.PipelineEntry, entryID string) (domain.PipelineModel, bool) {
+	for _, e := range pe.Models {
+		if e.ID == entryID {
+			return e, true
+		}
+	}
+	return domain.PipelineModel{}, false
 }
 
 func (s *InstanceService) ListInstances(ctx context.Context) ([]*domain.LaunchInstance, error) {
