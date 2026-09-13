@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -81,17 +82,39 @@ type Repository interface {
 
 	ValidateCrossReferences(ctx context.Context) error
 	CountActiveInstances() int
+
+	ImportGraph(runtimes []*RuntimeEntry, models []*ModelEntry, pipelines []*PipelineEntry) error
+}
+
+// ErrImportConflict is returned by ImportGraph when one or more imported
+// entities collide with existing repository state.
+type ErrImportConflict struct {
+	Conflicts []ImportConflict
+}
+
+func (e *ErrImportConflict) Error() string {
+	return fmt.Sprintf("import conflict: %d collision(s)", len(e.Conflicts))
+}
+
+// ImportConflict describes a single collision.
+type ImportConflict struct {
+	Type   string
+	ID     string
+	Reason string
+	Name   string
 }
 
 // JSONRepository implements Repository using a single atomic JSON file.
 type JSONRepository struct {
-	mu          sync.RWMutex
-	filePath    string
-	runtimes    []*RuntimeEntry
-	models      []*ModelEntry
-	instances   []*LaunchInstanceEntry
-	pipelines   []*PipelineEntry
-	idGenerator func() string
+	mu             sync.RWMutex
+	filePath       string
+	runtimes       []*RuntimeEntry
+	models         []*ModelEntry
+	instances      []*LaunchInstanceEntry
+	pipelines      []*PipelineEntry
+	idGenerator    func() string
+	writeFunc      func(path string, data []byte, perm os.FileMode) error
+	importLockHook func()
 }
 
 func NewJSONRepository(filePath string) (Repository, error) {
@@ -103,6 +126,7 @@ func NewJSONRepository(filePath string) (Repository, error) {
 	r := &JSONRepository{
 		filePath:    filePath,
 		idGenerator: generateID,
+		writeFunc:   fsutil.WriteFileDurable,
 	}
 
 	if err := r.load(); err != nil {
@@ -505,7 +529,11 @@ func (r *JSONRepository) writeUnified(path string) error {
 	if err != nil {
 		return fmt.Errorf("marshal JSON: %w", err)
 	}
-	return fsutil.WriteFileDurable(path, data, 0o600)
+	wf := r.writeFunc
+	if wf == nil {
+		wf = fsutil.WriteFileDurable
+	}
+	return wf(path, data, 0o600)
 }
 
 func (r *JSONRepository) save() error {
@@ -1048,6 +1076,75 @@ func (r *JSONRepository) ListPipelines() ([]*PipelineEntry, error) {
 		out[i] = &cp
 	}
 	return out, nil
+}
+
+// ImportGraph atomically imports runtimes, models, and pipelines into the
+// repository. Collision detection, mutation, and durable write happen under
+// a single exclusive lock. On save failure, in-memory state is rolled back.
+func (r *JSONRepository) ImportGraph(runtimes []*RuntimeEntry, models []*ModelEntry, pipelines []*PipelineEntry) error {
+	r.mu.Lock()
+	if r.importLockHook != nil {
+		r.importLockHook()
+	}
+	defer r.mu.Unlock()
+
+	// Collision detection under lock.
+	var conflicts []ImportConflict
+	for _, rt := range runtimes {
+		for _, existing := range r.runtimes {
+			if existing.ID == rt.ID {
+				conflicts = append(conflicts, ImportConflict{Type: "runtime", ID: rt.ID, Reason: "id_exists"})
+				break
+			}
+		}
+		for _, existing := range r.runtimes {
+			if strings.EqualFold(existing.Name, rt.Name) {
+				conflicts = append(conflicts, ImportConflict{Type: "runtime", ID: rt.ID, Reason: "name_exists", Name: rt.Name})
+				break
+			}
+		}
+	}
+	for _, m := range models {
+		for _, existing := range r.models {
+			if existing.ID == m.ID {
+				conflicts = append(conflicts, ImportConflict{Type: "model", ID: m.ID, Reason: "id_exists"})
+				break
+			}
+		}
+	}
+	for _, p := range pipelines {
+		for _, existing := range r.pipelines {
+			if existing.ID == p.ID {
+				conflicts = append(conflicts, ImportConflict{Type: "pipeline", ID: p.ID, Reason: "id_exists"})
+				break
+			}
+		}
+	}
+	if len(conflicts) > 0 {
+		return &ErrImportConflict{Conflicts: conflicts}
+	}
+
+	// Capture rollback state (copy slice headers, not backing arrays).
+	prevRuntimes := make([]*RuntimeEntry, len(r.runtimes))
+	copy(prevRuntimes, r.runtimes)
+	prevModels := make([]*ModelEntry, len(r.models))
+	copy(prevModels, r.models)
+	prevPipelines := make([]*PipelineEntry, len(r.pipelines))
+	copy(prevPipelines, r.pipelines)
+
+	// Mutate in-memory state.
+	r.runtimes = append(r.runtimes, runtimes...)
+	r.models = append(r.models, models...)
+	r.pipelines = append(r.pipelines, pipelines...)
+
+	// Single durable write.
+	if err := r.saveLocked(); err != nil {
+		r.runtimes = prevRuntimes
+		r.models = prevModels
+		r.pipelines = prevPipelines
+		return err
+	}
+	return nil
 }
 
 // ─── Instance CRUD ───

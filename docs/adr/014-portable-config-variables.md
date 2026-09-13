@@ -732,6 +732,28 @@ Slice 2 is implemented as two commits:
 
 Each commit leaves main green. No dangerous half-contract is exposed.
 
-### Slice 2 Status
+### Slice 2A Implementation Evidence (2026-09-14)
 
-**NOT STARTED.** Implementation requires separate Owner implementation gate after this contract is committed.
+Slice 2A (Portable Bundle + Atomic ImportGraph + Application Service) is implemented.
+
+**Delivered:**
+
+- `internal/application/portable/portable.go` — Bundle v1 DTOs (`Bundle`, `PortableRuntime`, `PortableModel`, `PortablePipeline`, `PortableEntry`), strict `ParseBundle` (rejects malformed JSON, unknown fields, trailing data, wrong format, unsupported version), `validateBundle` (duplicate IDs, referential integrity, variable syntax, domain constraints, runtime name uniqueness), typed errors (`ErrMalformedBundle`, `ErrWrongFormat`, `ErrUnsupportedVersion`, `ErrValidation`).
+- `internal/application/portable/export.go` — `ExportBundle(repo, root)` with `ExportRoot` (RuntimeID/ModelID/PipelineID or all), dependency closure (Pipeline→Models→Runtimes, deduped by ID), deterministic `MarshalBundle` (sorted environment_keys, struct field order, no timestamps).
+- `internal/application/portable/import.go` — `ImportOrchestrator.Import(bundle, dryRun)`: full validation + collision detection + `ImportGraph` call; dry-run performs zero mutation; `convertBundle` creates entities with `Environment: nil` (environment_keys advisory only).
+- `internal/storage/repository.go` — `ImportGraph(runtimes, models, pipelines)`: exclusive lock, collision detection under lock, single `saveLocked()`, rollback on save failure. `ErrImportConflict` type.
+- 39 permanent tests (22 unit + 8 export integration + 9 import integration).
+
+**Invariants verified:**
+- Deterministic export (byte-identical for unchanged state).
+- Environment values never in bundle; keys sorted.
+- Args preserved exactly (secret round-trip proven).
+- Import creates empty Environment (no `{"KEY": ""}`).
+- Collision = REJECT, zero writes.
+- Dry-run = zero mutation.
+- Active entities preserved, no process launch.
+- Self-contained bundle (all refs resolve within bundle).
+- Variable grammar validated, undefined variables accepted.
+- No schema bump (v8 unchanged).
+
+**NOT STARTED:** Slice 2B (HTTP/API), Slice 3 (UI).
