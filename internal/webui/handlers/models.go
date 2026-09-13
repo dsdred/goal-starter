@@ -313,7 +313,11 @@ func (h *ModelsHandler) Resolve(w http.ResponseWriter, r *http.Request) {
 	domainRuntime := domain.RuntimeEntryToDomain(rte)
 	spec, err := h.supervisor.ResolvePreview(domainModel, domainRuntime, nil, nil)
 	if err != nil {
-		writeError(w, 500, err.Error())
+		if isVariableResolutionError(err) {
+			writeError(w, 400, err.Error())
+		} else {
+			writeError(w, 500, err.Error())
+		}
 		return
 	}
 	var envKeys []string
@@ -340,4 +344,10 @@ func modelIDFromPath(path string) string {
 		return rest[:idx]
 	}
 	return rest
+}
+
+func isVariableResolutionError(err error) bool {
+	var uve *domain.UndefinedVariableError
+	var ivre *domain.InvalidVariableReferenceError
+	return errors.As(err, &uve) || errors.As(err, &ivre)
 }

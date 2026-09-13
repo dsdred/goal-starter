@@ -100,6 +100,74 @@ simplified format: `id`, `name`, `runtime_id`, `args`, `environment`.
 | `arguments` | array of string | No | `[]` | Command-line arguments (legacy; folded into model args). |
 | `environment` | map[string]string | No | `{}` | Process environment variables. |
 
+## Variable resolution (ADR 014)
+
+GoAl supports environment-variable-style references in launch-consumed fields. Variables are resolved **at consumption time** (launch, restart, preview) — stored values remain raw and portable.
+
+### Syntax
+
+```
+${NAME}
+```
+
+`NAME` must match `[A-Za-z_][A-Za-z0-9_]*`. An unescaped `${` begins an attempted variable reference.
+
+### Escape
+
+`$$` produces a literal `$`. Therefore:
+
+| Stored | Resolved |
+|--------|----------|
+| `${GOAL_DATA}/models` | `<dataDir>/models` |
+| `$${GOAL_DATA}` | `${GOAL_DATA}` (literal) |
+| `$$` | `$` |
+| `$foo` | `$foo` (literal; no braces) |
+
+### Sources and precedence
+
+1. **Built-in GoAl variables** (fixed, authoritative):
+   - `GOAL_DATA` — the absolute data directory (e.g., `C:\Users\me\GoAl` or `~/.local/share/goal`)
+2. **Process environment variables** of the GoAl server process.
+
+A known built-in (e.g., `GOAL_DATA`) **cannot** be overridden by a process environment variable of the same name. Non-built-in `GOAL_*` names are resolved from the process environment normally.
+
+### Resolution rules
+
+- **Single pass, non-recursive:** a resolved value that itself contains `${...}` is NOT further expanded.
+- **Fail-fast:** if any reference in a field fails, the entire field resolution fails. No partial substitution.
+- **Environment keys are never resolved** — only values.
+- **Defined-empty vs undefined:** a variable set to `""` resolves to an empty string. A missing variable is an error.
+- **Path semantics unchanged:** variable substitution is textual. After substitution, the existing relative/absolute path logic applies.
+
+### Supported fields
+
+Variables are resolved in:
+
+- `Runtime.Executable`
+- `Runtime.WorkingDirectory`
+- `Runtime.Environment` values
+- `Model.Args` tokens
+- `Model.Environment` values
+- Pipeline entry custom `Args` tokens
+
+NOT resolved: entity IDs, display names, booleans, numeric fields, environment keys.
+
+### Errors
+
+| Error | Meaning | Example diagnostic |
+|-------|---------|--------------------|
+| `UndefinedVariable` | Valid `${NAME}` but no value exists | `model.args[1]: undefined variable MY_MODEL_PATH` |
+| `InvalidVariableReference` | Malformed `${...}` syntax | `runtime.executable: invalid variable reference "${1BAD}"` |
+
+Both errors **refuse the launch** and surface a bounded diagnostic in the resolve/preview endpoint (HTTP 400).
+
+### What is NOT available (yet)
+
+- No persisted user-defined variable store.
+- No variable CRUD endpoints or UI editor.
+- No export/import (Slice 2, not implemented).
+- No relative-root path system.
+
 ## Profile configuration (legacy `goal.json` format)
 
 Profiles in `goal.json` are the legacy launch template format. At startup, each profile

@@ -105,6 +105,11 @@ func (s *Supervisor) SetRecoveryProber(p platform.RecoveryProber) {
 	s.prober = p
 }
 
+// SetDataDir configures the GOAL_DATA built-in variable for variable resolution.
+func (s *Supervisor) SetDataDir(dir string) {
+	s.resolver.SetDataDir(dir)
+}
+
 // SetProcessKiller replaces the platform killer (test injection).
 func (s *Supervisor) SetProcessKiller(k platform.ProcessKiller) {
 	s.killer = k

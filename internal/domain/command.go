@@ -21,6 +21,7 @@ type CommandSpec struct {
 // LaunchResolver resolves a Model + Runtime into a CommandSpec.
 type LaunchResolver struct {
 	envCaseInsensitive bool
+	dataDir            string
 }
 
 // timeNow is a variable for testing.
@@ -36,6 +37,16 @@ func NewLaunchResolver() *LaunchResolver {
 	return &LaunchResolver{
 		envCaseInsensitive: runtime.GOOS == "windows",
 	}
+}
+
+// SetDataDir configures the GOAL_DATA built-in variable.
+func (r *LaunchResolver) SetDataDir(dir string) {
+	r.dataDir = dir
+}
+
+// source returns the variable source for this resolver.
+func (r *LaunchResolver) source() VariableSource {
+	return NewVariableSource(r.dataDir)
 }
 
 // Resolve builds a CommandSpec from model and runtime.
@@ -54,13 +65,44 @@ func (r *LaunchResolver) Resolve(
 	if runtime.Executable == "" {
 		return nil, fmt.Errorf("runtime executable is empty")
 	}
-	exePath := resolveExecutablePath(runtime.Executable, runtime.WorkingDirectory)
 
-	args := make([]string, 0, len(model.Args)+len(customArgs))
-	args = append(args, model.Args...)
-	args = append(args, customArgs...)
+	src := r.source()
 
-	// Build environment: parent → runtime → model → custom.
+	exe, err := ResolveStringField(runtime.Executable, "runtime.executable", src)
+	if err != nil {
+		return nil, err
+	}
+	wd, err := ResolveStringField(runtime.WorkingDirectory, "runtime.working_directory", src)
+	if err != nil {
+		return nil, err
+	}
+	rtEnv, err := ResolveEnvValues(runtime.Environment, "runtime.environment", src)
+	if err != nil {
+		return nil, err
+	}
+	modelArgs, err := ResolveArgs(model.Args, "model.args", src)
+	if err != nil {
+		return nil, err
+	}
+	custArgs, err := ResolveArgs(customArgs, "custom.args", src)
+	if err != nil {
+		return nil, err
+	}
+	modelEnv, err := ResolveEnvValues(model.Environment, "model.environment", src)
+	if err != nil {
+		return nil, err
+	}
+	custEnv, err := ResolveEnvValues(customEnv, "custom.environment", src)
+	if err != nil {
+		return nil, err
+	}
+
+	exePath := resolveExecutablePath(exe, wd)
+
+	args := make([]string, 0, len(modelArgs)+len(custArgs))
+	args = append(args, modelArgs...)
+	args = append(args, custArgs...)
+
 	envMap := make(map[string]string)
 	for _, ev := range os.Environ() {
 		k, v, ok := strings.Cut(ev, "=")
@@ -69,13 +111,13 @@ func (r *LaunchResolver) Resolve(
 		}
 		envMap[r.normalizeKey(k)] = v
 	}
-	for k, v := range runtime.Environment {
+	for k, v := range rtEnv {
 		envMap[r.normalizeKey(k)] = v
 	}
-	for k, v := range model.Environment {
+	for k, v := range modelEnv {
 		envMap[r.normalizeKey(k)] = v
 	}
-	for k, v := range customEnv {
+	for k, v := range custEnv {
 		envMap[r.normalizeKey(k)] = v
 	}
 
@@ -87,7 +129,7 @@ func (r *LaunchResolver) Resolve(
 	return &CommandSpec{
 		Executable:       exePath,
 		Args:             args,
-		WorkingDirectory: runtime.WorkingDirectory,
+		WorkingDirectory: wd,
 		Environment:      env,
 	}, nil
 }
@@ -161,20 +203,51 @@ func (r *LaunchResolver) Preview(
 		return nil, fmt.Errorf("runtime executable is empty")
 	}
 
-	exePath := resolveExecutablePath(runtime.Executable, runtime.WorkingDirectory)
+	src := r.source()
 
-	args := make([]string, 0, len(model.Args)+len(customArgs))
-	args = append(args, model.Args...)
-	args = append(args, customArgs...)
+	exe, err := ResolveStringField(runtime.Executable, "runtime.executable", src)
+	if err != nil {
+		return nil, err
+	}
+	wd, err := ResolveStringField(runtime.WorkingDirectory, "runtime.working_directory", src)
+	if err != nil {
+		return nil, err
+	}
+	rtEnv, err := ResolveEnvValues(runtime.Environment, "runtime.environment", src)
+	if err != nil {
+		return nil, err
+	}
+	modelArgs, err := ResolveArgs(model.Args, "model.args", src)
+	if err != nil {
+		return nil, err
+	}
+	custArgs, err := ResolveArgs(customArgs, "custom.args", src)
+	if err != nil {
+		return nil, err
+	}
+	modelEnv, err := ResolveEnvValues(model.Environment, "model.environment", src)
+	if err != nil {
+		return nil, err
+	}
+	custEnv, err := ResolveEnvValues(customEnv, "custom.environment", src)
+	if err != nil {
+		return nil, err
+	}
+
+	exePath := resolveExecutablePath(exe, wd)
+
+	args := make([]string, 0, len(modelArgs)+len(custArgs))
+	args = append(args, modelArgs...)
+	args = append(args, custArgs...)
 
 	envMap := make(map[string]string)
-	for k, v := range runtime.Environment {
+	for k, v := range rtEnv {
 		envMap[r.normalizeKey(k)] = v
 	}
-	for k, v := range model.Environment {
+	for k, v := range modelEnv {
 		envMap[r.normalizeKey(k)] = v
 	}
-	for k, v := range customEnv {
+	for k, v := range custEnv {
 		envMap[r.normalizeKey(k)] = v
 	}
 
@@ -186,7 +259,7 @@ func (r *LaunchResolver) Preview(
 	return &CommandSpec{
 		Executable:       exePath,
 		Args:             args,
-		WorkingDirectory: runtime.WorkingDirectory,
+		WorkingDirectory: wd,
 		Environment:      env,
 	}, nil
 }

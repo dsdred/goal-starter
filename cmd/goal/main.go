@@ -271,6 +271,9 @@ func runApplication(configPath string, ctx context.Context) error {
 	// Create Supervisor with lifecycle context.
 	supervisor := process.NewSupervisorWithContext(ctx, repo)
 
+	absDataDir, _ := filepath.Abs(dataDir)
+	supervisor.SetDataDir(absDataDir)
+
 	// Recover instances from previous runs that were not properly stopped.
 	// Marks running/starting/stopping/pending instances as stale.
 	if err := supervisor.Recover(context.Background()); err != nil {

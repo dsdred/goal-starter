@@ -239,6 +239,17 @@ and update (`environment_patch` per-key ops) but never returned in API responses
 Only `environment_keys` (the list of variable names) is exposed. Omitting
 `environment_patch` on update preserves existing keys.
 
+**Resolve endpoint and variable resolution (ADR 014).** `POST /api/v1/models/{id}/resolve`
+resolves `${VAR}` references in the model's launch-consumed fields before returning
+the command. On success (200), `executable`, `args`, and `workingDirectory` are fully
+resolved. On variable-resolution failure, the endpoint returns **400** with a bounded
+diagnostic:
+
+- `{"error":"model.args[1]: undefined variable MY_PATH"}` — valid reference, no value
+- `{"error":"runtime.executable: invalid variable reference \"${1BAD}\""}` — malformed syntax
+
+These are client/configuration errors (400), not server errors (500).
+
 ## Pipelines
 
 A **Pipeline** (ADR 010) is an ordered group of existing Models with a group lifecycle.

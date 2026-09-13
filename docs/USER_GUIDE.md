@@ -472,6 +472,39 @@ is a literal character, so Windows paths such as `E:\models\m.gguf` are kept as
 typed. The exact same rules apply to the model Args and to a Pipeline entry's
 Custom Args.
 
+### Variable references
+
+GoAl resolves `${VAR}` references in Args, executable paths, working directories,
+and environment values at **launch/restart time** (not at save time). This makes
+configurations portable across machines.
+
+**Built-in:** `${GOAL_DATA}` resolves to GoAl's data directory (absolute path).
+
+**Process environment:** `${MY_VAR}` resolves from the GoAl server's environment.
+
+**Escape:** `$${GOAL_DATA}` produces the literal text `${GOAL_DATA}`.
+
+**Examples:**
+
+```
+# Model Args (portable across machines):
+-m ${GOAL_DATA}/models/my-model.gguf --port 8080
+
+# Runtime executable:
+${GOAL_DATA}/bin/llama-server
+
+# Environment value:
+HF_HOME=${GOAL_DATA}/hf-cache
+```
+
+**Behavior:**
+
+- **Preview/Start/Restart** all resolve variables from the *current* process environment.
+- **Restart** picks up environment changes: if you set `MY_VAR=B` after launching with `MY_VAR=A`, a Restart uses `B`.
+- **Undefined** `${MISSING}` or **malformed** `${123}` refuses the launch with a clear diagnostic.
+- **No recursion:** if `A` is set to `${B}`, then `${A}` resolves to the literal text `${B}` (not to B's value).
+- **Export/Import** of configurations is **not yet available**.
+
 ### Creating a Model
 
 **Via Web Interface:**

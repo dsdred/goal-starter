@@ -1,6 +1,6 @@
 # ADR 014: Portable Configuration — Variable Resolution and Secret-Safe Export/Import
 
-**Status:** Accepted — owner contract agreed 2026-09-13; implementation NOT STARTED (Slice 1 requires separate implementation gate)
+**Status:** Accepted — owner contract agreed 2026-09-13; **Slice 1 implemented 2026-09-14** (commit pending Owner gate); Slice 2/3 NOT STARTED
 **Date:** 2026-09-13
 **Related:** ADR 004 (Config vs Repository ownership), ADR 010 (Pipeline), ADR 011 (Windows Service — owner decision 3: no new path resolution without Owner contract), ADR 013 (Pipeline repeatable entries), ADR 009 (Hot-reload — restart-class fields), ADR 006 (Secure Credential Storage), ADR 007 (Audit Logging), ROADMAP P1 "Portable Configuration & Path Variables"
 
@@ -651,3 +651,29 @@ Slice 1 is independently shippable and testable. It changes launch-time behavior
 - It does not affect the TLS / Native HTTPS direction (ADR 012, PAUSED).
 - It does not change the process-ownership rules (ADR 001/002).
 - It does not affect recovery / orphan semantics (ADR 005/008).
+
+## Slice 1 Implementation Evidence (2026-09-14)
+
+Slice 1 (Variable Resolution Foundation) is implemented. Implementation commit pending Owner commit gate.
+
+**Delivered:**
+
+- `internal/domain/varresolve.go` — pure resolver: `ResolveString`, `ResolveStringField`, `ResolveArgs`, `ResolveEnvValues`; `UndefinedVariableError`, `InvalidVariableReferenceError`; `VariableSource` interface; `builtinSource` / `envSource` / `combinedSource`; `NewVariableSource(dataDir)`.
+- `internal/domain/command.go` — `LaunchResolver` integrates variable resolution into `Resolve` and `Preview`; `SetDataDir` / `source()` wire the combined source.
+- `internal/process/supervisor.go` — `Supervisor.SetDataDir(dir)` delegates to the resolver.
+- `cmd/goal/main.go` — `filepath.Abs(dataDir)` passed to `supervisor.SetDataDir` at startup.
+- `internal/webui/handlers/models.go` — `Resolve` endpoint maps `UndefinedVariableError` / `InvalidVariableReferenceError` to HTTP 400 (consistent with repository validation-error convention).
+
+**Invariants verified by tests (52 permanent tests):**
+
+- Single-pass, non-recursive substitution.
+- No partial substitution (fail-fast).
+- `GOAL_DATA` built-in cannot be overridden by process env.
+- Defined-empty (`MY_VAR=`) resolves to `""`.
+- Environment keys never resolved.
+- Backward-compatible: fields without `$` pass through unchanged.
+- Restart uses current process environment; same `InstanceID` preserved.
+- Pipeline FROM MODEL and CUSTOM args resolve correctly.
+- No schema bump, no persisted variable store, no export/import.
+
+**NOT STARTED:** Slice 2 (Export/Import), Slice 3 (UI).
