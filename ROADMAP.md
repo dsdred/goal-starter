@@ -72,7 +72,7 @@
 - [ ] Native HTTPS / TLS: binary serves HTTPS directly (cert/key config, HTTP/HTTPS mode toggle, Secure cookie, TLS version defaults, diagnostics); no reverse proxy required; independent security-hardening direction (not blocked by Secure Credential Storage)
   - Design gate: security/config ADR (TLS config model, certificate loading, Secure-cookie activation)
 - [ ] Portable Configuration & Path Variables: config export/import, environment-variable expansion (`${VAR}`), built-in GoAl variables, resolve-at-consumption, undefined-variable diagnostic, backward-compatible load, secret-safe export
-  - Design gate: architecture ADR (config model, variable resolution semantics, security policy for exported secrets)
+  - Design gate: [ADR 014](docs/adr/014-portable-config-variables.md) (**Accepted** — owner contract agreed 2026-09-13; implementation NOT STARTED — Slice 1 requires separate implementation gate). Defines: variable syntax `${NAME}` with `$$` escape, built-in `GOAL_DATA`, process-environment source, resolve-at-consumption (launch/restart/preview), undefined-variable + malformed-reference errors, single-pass non-recursive algorithm, secret-safe export (keys only, no env values), portable bundle format v1, REJECT collision policy, atomic graph-import primitive, 3-slice phasing (Slice 1 = resolution foundation, no export/import)
   - Constraint (not a hard dependency): secret-safe export must account for Secure Credential Storage (P0) and future TLS private keys; the portable-config ADR defines the export security contract, but implementation is not blocked until both directions land
 - [ ] Persistent logs
 - [ ] Configurable log storage location
