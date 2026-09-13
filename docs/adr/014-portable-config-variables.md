@@ -316,9 +316,7 @@ A versioned JSON document:
       "name": "Llama.cpp",
       "executable": "${GOAL_DATA}/bin/llama-server",
       "working_directory": "${GOAL_DATA}/bin",
-      "environment": {
-        "CUDA_VISIBLE_DEVICES": "0"
-      }
+      "environment_keys": ["CUDA_VISIBLE_DEVICES"]
     }
   ],
   "models": [
@@ -327,9 +325,7 @@ A versioned JSON document:
       "name": "My Model",
       "runtime_id": "rt-001",
       "args": ["-m", "${GOAL_DATA}/models/my-model.gguf", "--port", "8080"],
-      "environment": {
-        "MODEL_EXTRA": ""
-      },
+      "environment_keys": ["MODEL_EXTRA"],
       "active": true,
       "autostart_delay": 0
     }
@@ -369,7 +365,7 @@ A versioned JSON document:
 - `pipelines[].models[].id` is the entry identity (ADR 013)
 - Repeated model entries (same `model_id`, different entry `id`) round-trip losslessly
 
-**Environment:** only **keys** are present (D13). The `environment` object contains key→value pairs, but for the default export the values are omitted or empty. The exact representation of "keys without values" is an implementation detail (e.g., `{"KEY": ""}` or a separate `"environment_keys": [...]` array) — the ADR mandates that **values are not exported** but does not freeze the exact JSON shape of the key-only representation. The implementation must choose one and document it in API.md.
+**Environment:** only **keys** are present (D13). Representation (settled by Owner SC-2): `"environment_keys": ["KEY1", "KEY2"]` — a sorted array of key names. Values are never exported. `environment_keys` is advisory redaction metadata describing keys whose values existed in the source but were removed. Import does NOT create Environment entries from `environment_keys`; imported entities have empty Environment. `environment_keys` is not guaranteed to survive export → import → export.
 
 **NOT in the bundle:** `created_at`, `updated_at` timestamps (the importing instance generates its own).
 
@@ -490,7 +486,7 @@ Scope:
 - Bundle validation (D15)
 - Conflict detection (all collisions, bounded report)
 - Atomic graph-import repository primitive (D16)
-- API endpoints: `GET /api/v1/export` (or `POST` with options), `POST /api/v1/import`
+- API endpoints: `GET /api/v1/export` (optional `?runtime_id=|model_id=|pipeline_id=`), `POST /api/v1/import` (raw Bundle v1 body, `?dry_run=true` for dry-run)
 - Auth + CSRF per convention
 - ADR 007 audit events for export/import
 - Tests: round-trip (export → import → identical graph), collision rejection, validation failures, atomicity (failure mid-import → zero writes)
@@ -677,3 +673,65 @@ Slice 1 (Variable Resolution Foundation) is implemented. Implementation commit p
 - No schema bump, no persisted variable store, no export/import.
 
 **NOT STARTED:** Slice 2 (Export/Import), Slice 3 (UI).
+
+## Slice 2 Owner Contract (agreed 2026-09-14)
+
+The following implementation decisions are settled by explicit Owner agreement. They refine (not contradict) the architecture above.
+
+### SC-1 — Export API
+
+`GET /api/v1/export` with optional query parameters:
+
+- No parameter → export all portable configuration
+- `?runtime_id={id}` → export that Runtime
+- `?model_id={id}` → export that Model + its Runtime closure
+- `?pipeline_id={id}` → export that Pipeline + full Model/Runtime closure
+
+At most one root parameter. Auth: `requireAuth` (read). No POST export.
+
+### SC-2 — Environment Keys Representation
+
+Bundle v1 uses `"environment_keys": ["KEY1", "KEY2"]` (sorted array of strings).
+
+- Environment **values** are never exported.
+- `environment_keys` is **redaction/advisory metadata**: it describes keys whose values existed in the source configuration but were intentionally removed.
+- **Import MUST NOT** create `{"KEY": ""}` or any `Runtime`/`Model` Environment entry merely because a key appears in `environment_keys`.
+- Imported entities have `Environment: {}` (empty map). The user must explicitly reconfigure values after import.
+- `environment_keys` is **NOT guaranteed to survive** export → import → export (it is not persisted repository state).
+
+### SC-3 — Dry-Run
+
+`POST /api/v1/import?dry_run=true` executes the full validation pipeline (parse, structural, referential, variable-syntax, collision detection) with **zero mutation and zero durable writes**. Default is `dry_run=false`.
+
+### SC-4 — Import Request Body
+
+`POST /api/v1/import` accepts the **raw** `goal-portable-config` Bundle v1 JSON document as the request body. No wrapper object. A downloaded `goal-portable-config.json` is directly usable as the import request body.
+
+### SC-5 — Export Filename
+
+`Content-Disposition: attachment; filename="goal-portable-config.json"`. No timestamp.
+
+### SC-6 — Import Body Size Limit
+
+Maximum import request body: **10 MiB**. The request MUST be bounded before full JSON decoding and before any repository mutation.
+
+**Oversize response:** HTTP **413 Payload Too Large** with the existing bounded JSON error envelope. Zero repository mutation. Zero durable writes. This is a transport/request-size failure, distinct from bundle semantic validation failures (400), collisions (409), and persistence failures (500).
+
+### SC-7 — Args Warning Contract
+
+The ADR D13 Args warning is satisfied through **explicit documentation only** (API.md, CONFIGURATION.md, USER_GUIDE EN/RU). No custom HTTP response header, no acknowledgement parameter, no heuristic secret scanner, no warning field in the bundle.
+
+Warning text: "Args are exported as-is and may contain user-supplied sensitive values. GoAl does not attempt heuristic secret detection or redaction inside Args."
+
+### SC-8 — Implementation Slicing
+
+Slice 2 is implemented as two commits:
+
+- **2A:** Portable DTOs + Parse/Validate + Export closure + `ImportGraph` repository primitive + application service (export + import) + unit/integration tests. No HTTP surface.
+- **2B:** HTTP handlers (`GET /api/v1/export`, `POST /api/v1/import`) + route registration + handler tests + documentation.
+
+Each commit leaves main green. No dangerous half-contract is exposed.
+
+### Slice 2 Status
+
+**NOT STARTED.** Implementation requires separate Owner implementation gate after this contract is committed.
