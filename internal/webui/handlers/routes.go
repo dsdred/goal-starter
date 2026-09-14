@@ -40,6 +40,7 @@ type RouteRegistry struct {
 	authEnabled       bool
 	staticFS          fs.FS
 	audit             *audit.AuditLogger
+	portableHandler   *PortableHandler
 }
 
 type RouteRegistryOption func(*RouteRegistry)
@@ -123,6 +124,7 @@ func NewRouteRegistry(
 		instanceHandler: NewInstancesHandler(instanceSvc, csrf),
 		pipelineHandler: NewPipelineHandler(pipelineSvc, repo, instanceSvc, csrf),
 		systemHandler:   NewSystemHandler(supervisor, sessionStore, csrf, instanceSvc),
+		portableHandler: NewPortableHandler(repo),
 		csrf:            csrf,
 		sessionStore:    sessionStore,
 		passwordStore:   passwordStore,
@@ -214,6 +216,10 @@ func (r *RouteRegistry) Build() http.Handler {
 	mux.HandleFunc("POST /api/v1/pipelines/{id}/start", r.requireAuthCSRF(r.pipelineHandler.Start))
 	mux.HandleFunc("POST /api/v1/pipelines/{id}/stop", r.requireAuthCSRF(r.pipelineHandler.Stop))
 	mux.HandleFunc("POST /api/v1/pipelines/{id}/restart", r.requireAuthCSRF(r.pipelineHandler.Restart))
+
+	// Portable configuration (ADR 014 Slice 2B).
+	mux.HandleFunc("GET /api/v1/export", r.requireAuth(r.portableHandler.Export))
+	mux.HandleFunc("POST /api/v1/import", r.requireAuthCSRF(r.portableHandler.Import))
 
 	mux.HandleFunc("/", r.systemHandler.ServeIndex)
 

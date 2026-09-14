@@ -756,4 +756,38 @@ Slice 2A (Portable Bundle + Atomic ImportGraph + Application Service) is impleme
 - Variable grammar validated, undefined variables accepted.
 - No schema bump (v8 unchanged).
 
-**NOT STARTED:** Slice 2B (HTTP/API), Slice 3 (UI).
+**NOT STARTED:** Slice 3 (UI).
+
+### Slice 2B Implementation Evidence
+
+**Scope:** HTTP API layer — `GET /api/v1/export`, `POST /api/v1/import`.
+
+**Files:**
+- `internal/webui/handlers/portable.go` — PortableHandler with Export and Import methods.
+- `internal/webui/handlers/portable_test.go` — 28 permanent HTTP-level tests.
+- `internal/webui/handlers/routes.go` — route registration (`requireAuth` for GET, `requireAuthCSRF` for POST).
+- `docs/API.md` — public API documentation.
+- `docs/USER_GUIDE.md`, `docs/USER_GUIDE_RU.md` — user documentation.
+- `docs/CONFIGURATION.md` — variable/portable reconciliation.
+
+**Contract implemented:**
+- SC-1: `GET /api/v1/export` with `runtime_id`/`model_id`/`pipeline_id` query params.
+- SC-2: `environment_keys` in bundle; never restored as Environment on import.
+- SC-3: `POST /api/v1/import?dry_run=true` — same validation, zero mutation.
+- SC-4: Raw Bundle v1 as request body.
+- SC-5: `Content-Disposition: attachment; filename="goal-portable-config.json"`.
+- SC-6: 10 MiB limit via `http.MaxBytesReader`; HTTP 413 for oversize.
+- SC-7: Args exported unchanged (documentation warning only).
+- SC-8: Delegates to Slice 2A `portable.ExportBundle` / `portable.ImportOrchestrator.Import`.
+
+**Security:**
+- Export: `requireAuth` (session check). Import: `requireAuthCSRF` (session + CSRF).
+- Environment values never in HTTP response.
+- No Bundle contents logged.
+- 413 fires before any JSON parsing or repository mutation.
+
+**Tests (28):**
+- Export: all, runtime root, model root, pipeline root, unknown 404, two roots 400, empty selector, repeated selector, env-value non-leak, args-as-is.
+- Import: valid real, dry-run zero-mutation, malformed JSON, wrong format, unsupported version, missing dependency, collision 409, empty body, trailing garbage, oversize 413, exact boundary, dry_run malformed/duplicate/empty.
+- Atomicity: persistence failure → 500, original state intact.
+- Auth/CSRF: 401 without session, 403 without CSRF token, 200 with valid CSRF.

@@ -278,6 +278,81 @@ event each (bounded counters only). Pipeline CRUD is not audited in first scope.
 | `GET` | `/api/v1/logs` | Yes | — | Query aggregated logs (filters: `stream`, `search`, `instance_id`, `page`, `page_size`). |
 | `GET` | `/api/v1/logs/stream` | Yes | — | SSE log stream (multi-instance LogBroker). |
 
+## Portable Configuration (ADR 014)
+
+Export and import a self-contained portable configuration bundle (runtimes, models, pipelines).
+Environment **values** are never exported; only `environment_keys` (key names) are included.
+Model `args` are exported unchanged and may contain sensitive user-supplied values.
+
+### GET /api/v1/export
+
+| Auth | CSRF | Description |
+|------|------|-------------|
+| Yes | — | Export a portable configuration bundle as JSON. |
+
+Query parameters (at most one; none = export all):
+
+| Parameter | Effect |
+|-----------|--------|
+| (none) | Export all runtimes, models, and pipelines. |
+| `runtime_id` | Export that runtime only. |
+| `model_id` | Export that model and its runtime (closure). |
+| `pipeline_id` | Export that pipeline, its models, and their runtimes (closure). |
+
+Response `200`:
+
+- `Content-Type: application/json`
+- `Content-Disposition: attachment; filename="goal-portable-config.json"`
+- Body: raw Bundle v1 JSON (`{"format":"goal-portable-config","version":1,"runtimes":[…],"models":[…],"pipelines":[…]}`).
+
+Errors:
+
+| Status | Meaning |
+|--------|---------|
+| `400` | More than one root selector, repeated selector, or empty selector value. |
+| `404` | Root entity not found. |
+| `500` | Internal error. |
+
+### POST /api/v1/import
+
+| Auth | CSRF | Description |
+|------|------|-------------|
+| Yes | Yes | Import a portable configuration bundle. Atomic all-or-nothing. |
+
+Request body: raw Bundle v1 JSON (the exact file downloaded from export). No wrapper object.
+
+Query parameters:
+
+| Parameter | Default | Accepted values |
+|-----------|---------|-----------------|
+| `dry_run` | `false` | `true`, `false` |
+
+`dry_run=true` performs full validation and collision detection but performs zero mutation.
+A dry-run success does **not** guarantee a subsequent real import will succeed (TOCTOU).
+
+Maximum body size: **10 MiB** (10,485,760 bytes). Exceeding the limit returns `413`.
+
+Import behavior:
+- Does **not** launch models or pipelines. `Active`/`AutoStart` flags are preserved and apply on next normal server startup.
+- Does **not** restore `environment_keys` as Environment entries. They are advisory metadata only.
+- Variable references (`${VAR}`) are validated for grammar only. Undefined variables are accepted; malformed references are rejected.
+- Collision policy: **reject** (no overwrite, no merge, no remap).
+
+Response `200`:
+
+```json
+{ "dry_run": false, "runtimes": 2, "models": 3, "pipelines": 1 }
+```
+
+Errors:
+
+| Status | Meaning |
+|--------|---------|
+| `400` | Malformed JSON, wrong format, unsupported version, structural validation failure, malformed variable reference, empty body, malformed `dry_run` value. |
+| `409` | Import collision (runtime ID, runtime name case-insensitive, model ID, or pipeline ID already exists). Response includes bounded conflict details. |
+| `413` | Request body exceeds 10 MiB. |
+| `500` | Persistence or internal failure. |
+
 ## Not part of the public contract
 
 | Path | Status |

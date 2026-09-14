@@ -757,6 +757,54 @@ curl "http://127.0.0.1:8088/api/v1/logs?page=2&page_size=50"
 
 ---
 
+## Portable Configuration (Export / Import)
+
+Export and import your runtimes, models, and pipelines as a single portable JSON file.
+
+### Export
+
+```bash
+# Export everything
+curl -b "goal_session=..." -o goal-portable-config.json \
+  "http://127.0.0.1:8088/api/v1/export"
+
+# Export a single model (includes its runtime)
+curl -b "goal_session=..." -o goal-portable-config.json \
+  "http://127.0.0.1:8088/api/v1/export?model_id=your-model-id"
+```
+
+The downloaded file is named `goal-portable-config.json`. It contains the full dependency closure of the selected root.
+
+**Security notes:**
+- Environment **values** are NOT exported. Only environment **key names** (`environment_keys`) are included as advisory metadata.
+- Model **Args are exported unchanged** and may contain sensitive values you supplied (API keys, tokens in command-line arguments). **Inspect Args before sharing the file.**
+
+### Import
+
+```bash
+# Dry-run (validates, checks collisions, but does NOT modify anything)
+curl -b "goal_session=..." -X POST \
+  "http://127.0.0.1:8088/api/v1/import?dry_run=true" \
+  -d @goal-portable-config.json
+
+# Real import
+curl -b "goal_session=..." -X POST -H "X-CSRF-Token: <token>" \
+  "http://127.0.0.1:8088/api/v1/import" \
+  -d @goal-portable-config.json
+```
+
+**Import behavior:**
+- The exported JSON file can be imported directly as the POST body.
+- Import does **not** overwrite existing entities. If any ID or runtime name collides, the entire import is rejected (HTTP 409).
+- Import is **atomic**: either all entities are created or none are.
+- Import does **not** launch models or pipelines immediately. Preserved `Active`/`AutoStart` flags apply on the next normal server startup.
+- `environment_keys` in the bundle are advisory only and are NOT restored as Environment entries on the target machine.
+- Variable references (`${VAR}`) are validated for syntax. Undefined variables are accepted (they will be resolved at launch time on the target machine).
+- Maximum file size: 10 MiB.
+- Dry-run is advisory: repository changes between dry-run and real import may cause the real import to fail with 409.
+
+---
+
 ## Security
 
 ### Current Security Settings

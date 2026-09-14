@@ -165,8 +165,18 @@ Both errors **refuse the launch** and surface a bounded diagnostic in the resolv
 
 - No persisted user-defined variable store.
 - No variable CRUD endpoints or UI editor.
-- No export/import (Slice 2, not implemented).
 - No relative-root path system.
+
+### Portable export/import and variables (ADR 014 Slice 2)
+
+Raw variable references (`${VAR}`) are preserved in the portable bundle. Import validates
+variable **grammar only** — the target machine need not currently define the referenced
+variables. Resolution happens later at launch/restart/preview time.
+
+- Environment **values** are excluded from portable files. Only `environment_keys` (key
+  names) are exported as advisory metadata. They are NOT restored as Environment entries
+  on import.
+- Model **Args** are exported unchanged and may contain sensitive user-supplied values.
 
 ## Profile configuration (legacy `goal.json` format)
 
