@@ -1991,6 +1991,7 @@ async function loadSettings() {
         document.getElementById('set-port').textContent = m.web_port ? String(m.web_port) : '-';
         document.getElementById('set-auth').textContent = m.auth_enabled ? t('settings.server.auth.on') : t('settings.server.auth.off');
     } catch {}
+    portableUpdateEntitySelector();
 }
 
 // ─── Error messages ─────────────────────────────────────────────────────────
@@ -2392,6 +2393,228 @@ async function saveSettingsEdit() {
     }
 }
 
+// ─── Portable Configuration ─────────────────────────────────────────────────
+
+let portableImportFileContent = null;
+let portableImportValidated = false;
+
+function portableUpdateEntitySelector() {
+    const scopeSel = document.getElementById('portable-export-scope');
+    const entitySel = document.getElementById('portable-export-entity');
+    if (!scopeSel || !entitySel) return;
+    const scope = scopeSel.value;
+    if (!scope) {
+        entitySel.style.display = 'none';
+        entitySel.innerHTML = '';
+        return;
+    }
+    entitySel.style.display = '';
+    let options = '<option value="">' + t('portable.export.scope') + '</option>';
+    if (scope === 'runtime') {
+        options += runtimesData.map(function (r) { return '<option value="' + esc(r.id) + '">' + esc(r.name) + '</option>'; }).join('');
+    } else if (scope === 'model') {
+        options += modelsData.map(function (m) { return '<option value="' + esc(m.id) + '">' + esc(m.name) + '</option>'; }).join('');
+    } else if (scope === 'pipeline') {
+        options += pipelinesData.map(function (p) { return '<option value="' + esc(p.id) + '">' + esc(p.name) + '</option>'; }).join('');
+    }
+    entitySel.innerHTML = options;
+}
+
+function portableSelectScope() {
+    portableUpdateEntitySelector();
+}
+
+async function portableExport() {
+    const btn = document.getElementById('portable-export-btn');
+    const scopeSel = document.getElementById('portable-export-scope');
+    const entitySel = document.getElementById('portable-export-entity');
+    const scope = scopeSel.value;
+    let query = '';
+    if (scope === 'runtime') query = '?runtime_id=' + encodeURIComponent(entitySel.value);
+    else if (scope === 'model') query = '?model_id=' + encodeURIComponent(entitySel.value);
+    else if (scope === 'pipeline') query = '?pipeline_id=' + encodeURIComponent(entitySel.value);
+    btn.disabled = true;
+    const oldLabel = btn.textContent;
+    btn.textContent = t('common.loading');
+    try {
+        const r = await fetch('/api/v1/export' + query, { headers: { 'Accept': 'application/json' } });
+        if (!r.ok) {
+            let msg = r.statusText;
+            try { const d = await r.json(); msg = d.error || msg; } catch {}
+            throw new Error(msg);
+        }
+        const blob = await r.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'goal-portable-config.json';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+        showToast(t('portable.export.success'), 'success');
+    } catch (e) {
+        showToast(t('portable.export.error') + ': ' + (e.message || e), 'error');
+    } finally {
+        btn.disabled = false;
+        btn.textContent = oldLabel;
+    }
+}
+
+function portableOnFileChange() {
+    const fileInput = document.getElementById('portable-import-file');
+    const file = fileInput.files[0];
+    portableImportFileContent = null;
+    portableImportValidated = false;
+    const iBtn = document.getElementById('portable-import-btn');
+    const result = document.getElementById('portable-import-result');
+    if (iBtn) iBtn.disabled = true;
+    if (result) { result.style.display = 'none'; result.innerHTML = ''; }
+    if (!file) return;
+    if (file.size > 10 * 1024 * 1024) {
+        portableShowResult('error', t('portable.import.file_too_large'));
+        fileInput.value = '';
+        document.getElementById('portable-validate-btn').disabled = true;
+        return;
+    }
+    const reader = new FileReader();
+    reader.onload = function () {
+        portableImportFileContent = reader.result;
+        document.getElementById('portable-validate-btn').disabled = false;
+    };
+    reader.onerror = function () {
+        portableShowResult('error', t('portable.import.invalid'));
+    };
+    reader.readAsText(file);
+}
+
+function portableResetImport() {
+    portableImportFileContent = null;
+    portableImportValidated = false;
+    const vBtn = document.getElementById('portable-validate-btn');
+    const iBtn = document.getElementById('portable-import-btn');
+    const fileInput = document.getElementById('portable-import-file');
+    if (vBtn) vBtn.disabled = true;
+    if (iBtn) iBtn.disabled = true;
+    if (fileInput) fileInput.value = '';
+    const result = document.getElementById('portable-import-result');
+    if (result) { result.style.display = 'none'; result.innerHTML = ''; }
+}
+
+function portableShowResult(type, html) {
+    const el = document.getElementById('portable-import-result');
+    el.innerHTML = '<div class="portable-result-' + type + '">' + html + '</div>';
+    el.style.display = '';
+}
+
+function portableShowConflicts(details) {
+    let html = '<div class="portable-result-error">' + t('portable.import.conflict') + '</div><ul class="portable-result-conflicts">';
+    details.forEach(function (d) { html += '<li>' + esc(d) + '</li>'; });
+    html += '</ul>';
+    const el = document.getElementById('portable-import-result');
+    el.innerHTML = html;
+    el.style.display = '';
+}
+
+async function portableValidate() {
+    const vBtn = document.getElementById('portable-validate-btn');
+    const iBtn = document.getElementById('portable-import-btn');
+    if (!portableImportFileContent) return;
+    vBtn.disabled = true;
+    iBtn.disabled = true;
+    const oldLabel = vBtn.textContent;
+    vBtn.textContent = t('common.loading');
+    portableImportValidated = false;
+    const result = document.getElementById('portable-import-result');
+    result.style.display = 'none';
+    result.innerHTML = '';
+    try {
+        const r = await fetch('/api/v1/import?dry_run=true', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
+            body: portableImportFileContent
+        });
+        if (!r.ok) {
+            let msg = r.statusText;
+            let code = '';
+            let details = null;
+            try {
+                const d = await r.json();
+                msg = d.error || msg;
+                code = d.code || '';
+                if (Array.isArray(d.details)) details = d.details;
+            } catch {}
+            if (r.status === 409 && details) {
+                portableShowConflicts(details);
+            } else {
+                portableShowResult('error', esc(friendlyError({ message: msg, code: code, status: r.status })));
+            }
+        } else {
+            const d = await r.json();
+            portableImportValidated = true;
+            portableShowResult('success', esc(t('portable.import.dryrun_success', { runtimes: d.runtimes, models: d.models, pipelines: d.pipelines })));
+            iBtn.disabled = false;
+        }
+    } catch (e) {
+        portableShowResult('error', esc(friendlyError(e)));
+    } finally {
+        vBtn.disabled = false;
+        vBtn.textContent = oldLabel;
+    }
+}
+
+async function portableImport() {
+    if (!portableImportFileContent) return;
+    const content = portableImportFileContent;
+    showConfirm(t('portable.import.confirm'), async function () {
+        const iBtn = document.getElementById('portable-import-btn');
+        const oldLabel = iBtn.textContent;
+        iBtn.disabled = true;
+        iBtn.textContent = t('common.loading');
+        try {
+            const r = await fetch('/api/v1/import', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
+                body: content
+            });
+            if (!r.ok) {
+                let msg = r.statusText;
+                let code = '';
+                let details = null;
+                try {
+                    const d = await r.json();
+                    msg = d.error || msg;
+                    code = d.code || '';
+                    if (Array.isArray(d.details)) details = d.details;
+                } catch {}
+                closeConfirm();
+                if (r.status === 409 && details) {
+                    portableShowConflicts(details);
+                    showToast(t('portable.import.stale'), 'warning');
+                } else {
+                    portableShowResult('error', esc(friendlyError({ message: msg, code: code, status: r.status })));
+                    showToast(t('portable.import.error'), 'error');
+                }
+                iBtn.disabled = true;
+                return;
+            }
+            const d = await r.json();
+            closeConfirm();
+            portableResetImport();
+            portableShowResult('success', esc(t('portable.import.success', { runtimes: d.runtimes, models: d.models, pipelines: d.pipelines })));
+            showToast(t('portable.import.success', { runtimes: d.runtimes, models: d.models, pipelines: d.pipelines }), 'success');
+            await reloadAllData();
+            renderAll();
+        } catch (e) {
+            closeConfirm();
+            portableShowResult('error', esc(friendlyError(e)));
+            showToast(t('portable.import.error'), 'error');
+        } finally {
+            iBtn.textContent = oldLabel;
+        }
+    });
+}
+
 let lastMetrics = {};
 
 // ─── Expose to global scope for inline onclick handlers ────────────────────
@@ -2476,6 +2699,11 @@ window.plDragEnd = plDragEnd;
 window.plDragOver = plDragOver;
 window.plDragLeave = plDragLeave;
 window.plDrop = plDrop;
+window.portableSelectScope = portableSelectScope;
+window.portableExport = portableExport;
+window.portableOnFileChange = portableOnFileChange;
+window.portableValidate = portableValidate;
+window.portableImport = portableImport;
 window.i18nMissing = i18nMissing;
 
 // ─── Boot ───────────────────────────────────────────────────────────────────

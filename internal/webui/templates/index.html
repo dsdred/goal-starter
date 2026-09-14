@@ -465,6 +465,37 @@
                             <button class="btn btn-ghost btn-sm" onclick="openSettingsEdit()" data-i18n="settings.server.edit">Изменить</button>
                         </div>
                     </div>
+                    <div class="settings-section" id="portable-section">
+                        <h3 data-i18n="portable.title">Переносимая конфигурация</h3>
+                        <div class="portable-subsection">
+                            <h4 data-i18n="portable.export.title">Экспорт</h4>
+                            <div class="portable-export-row">
+                                <select id="portable-export-scope" onchange="portableSelectScope()">
+                                    <option value="" data-i18n="portable.export.scope.all">Всё</option>
+                                    <option value="runtime" data-i18n="portable.export.scope.runtime">Runtime</option>
+                                    <option value="model" data-i18n="portable.export.scope.model">Модель</option>
+                                    <option value="pipeline" data-i18n="portable.export.scope.pipeline">Пайплайн</option>
+                                </select>
+                                <select id="portable-export-entity" style="display:none;"></select>
+                                <button class="btn btn-primary btn-sm" id="portable-export-btn" onclick="portableExport()" data-i18n="portable.export.button">Скачать</button>
+                            </div>
+                        </div>
+                        <div class="portable-warning-box">
+                            <p class="hint-text" data-i18n="portable.warning">Значения переменных окружения НЕ экспортируются. Экспортируются только имена ключей. Args экспортируются как есть и могут содержать конфиденциальные данные (API-ключи, токены, пути). GoAl не выполняет детекцию секретов в Args.</p>
+                        </div>
+                        <div class="portable-subsection">
+                            <h4 data-i18n="portable.import.title">Импорт</h4>
+                            <div class="form-group">
+                                <label for="portable-import-file" data-i18n="portable.import.file">Файл конфигурации</label>
+                                <input type="file" id="portable-import-file" accept=".json,application/json" onchange="portableOnFileChange()">
+                            </div>
+                            <div class="portable-import-actions">
+                                <button class="btn btn-ghost btn-sm" id="portable-validate-btn" onclick="portableValidate()" disabled data-i18n="portable.import.validate">Проверить</button>
+                                <button class="btn btn-primary btn-sm" id="portable-import-btn" onclick="portableImport()" disabled data-i18n="portable.import.button">Импорт</button>
+                            </div>
+                            <div id="portable-import-result" style="display:none;"></div>
+                        </div>
+                    </div>
                     <div class="settings-section">
                         <h3 data-i18n="settings.about.title">О программе</h3>
                         <div class="setting-row"><span data-i18n="settings.about.version">Версия</span><span id="set-version">-</span></div>

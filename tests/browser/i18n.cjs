@@ -150,7 +150,7 @@ async function main() {
       `got=${JSON.stringify(await tr('totally unknown failure xyz'))}`);
 
     // ═══ SECTION 7: raw-key detector (i18nMissing + DOM scan) ═══
-    const I18N_KEY_RE = /\b(?:app|auth|blocked|common|confirm|conn|err|history|instances|logs|models|nav|pipelines|runtimes|settings|sidebar|wizard)\.[a-z][a-z0-9]*(?:\.[a-z][a-z0-9]*)+/g;
+    const I18N_KEY_RE = /\b(?:app|auth|blocked|common|confirm|conn|err|history|instances|logs|models|nav|pipelines|portable|runtimes|settings|sidebar|wizard)\.[a-z][a-z0-9]*(?:\.[a-z][a-z0-9]*)+/g;
     const domRawKeys = () => page.evaluate((reSrc) => {
       const re = new RegExp(reSrc, 'g');
       const text = document.body ? document.body.innerText : '';

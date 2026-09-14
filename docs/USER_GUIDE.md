@@ -761,7 +761,24 @@ curl "http://127.0.0.1:8088/api/v1/logs?page=2&page_size=50"
 
 Export and import your runtimes, models, and pipelines as a single portable JSON file.
 
-### Export
+### Web UI
+
+Navigate to **Settings → Portable Configuration**.
+
+**Export:**
+1. Choose a scope: **All** (default), **Runtime**, **Model**, or **Pipeline**.
+2. If a specific scope is selected, choose the entity from the dropdown.
+3. Click **Download**. The browser saves `goal-portable-config.json`.
+
+**Import:**
+1. Click the file picker and select a `goal-portable-config.json` file.
+2. Click **Validate** (dry-run). The UI shows the entity counts or conflict details.
+3. If validation passes, click **Import** and confirm in the dialog.
+4. The imported entities appear immediately in the UI.
+
+The same API is available via `curl` for scripting:
+
+### Export (API)
 
 ```bash
 # Export everything

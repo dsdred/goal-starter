@@ -791,3 +791,42 @@ Slice 2A (Portable Bundle + Atomic ImportGraph + Application Service) is impleme
 - Import: valid real, dry-run zero-mutation, malformed JSON, wrong format, unsupported version, missing dependency, collision 409, empty body, trailing garbage, oversize 413, exact boundary, dry_run malformed/duplicate/empty.
 - Atomicity: persistence failure → 500, original state intact.
 - Auth/CSRF: 401 without session, 403 without CSRF token, 200 with valid CSRF.
+
+### Slice 3 Implementation Evidence (2026-09-15)
+
+Slice 3 (Product UI / Acceptance) is implemented.
+
+**Delivered:**
+
+- `internal/webui/templates/index.html` — "Portable Configuration" section in Settings (export scope selector + entity selector + download button; security warning box; import file picker + validate/confirm buttons + result area).
+- `internal/webui/static/app.js` — `portableSelectScope`, `portableUpdateEntitySelector`, `portableExport` (fetch + Blob download), `portableOnFileChange` (FileReader, 10 MiB client pre-check), `portableValidate` (dry-run POST), `portableImport` (confirm dialog + real import POST), `portableResetImport`, `portableShowResult`, `portableShowConflicts`. Window exports for inline `onclick`.
+- `internal/webui/static/i18n/en.json` + `ru.json` — 22 `portable.*` keys (EN/RU).
+- `internal/webui/static/style.css` — `.portable-subsection`, `.portable-export-row`, `.portable-warning-box`, `.portable-import-actions`, `#portable-import-result` styles.
+- `tests/browser/portable.cjs` — 51 permanent browser checks (export all/root, import happy path, collision, invalid, undefined variable, malformed variable, >10 MiB client limit, exact-boundary, Active/AutoStart safety, responsive, i18n, security warning, no 5xx).
+- `tests/browser/package.json` — registered as 12th suite.
+- `tests/browser/i18n.cjs` — `portable` added to `I18N_KEY_RE`.
+
+**Contract implemented:**
+- Export UI: scope selector (All/Runtime/Model/Pipeline) + entity selector (conditional) + download as `goal-portable-config.json` (fetch + Blob, no re-serialization).
+- Import UI: file picker → dry-run (mandatory) → conflict/success presentation → explicit confirm dialog → real import. Same raw content used for both dry-run and real import.
+- Conflict presentation: 409 `details` array rendered as a list; Import button disabled.
+- Security warning: static hint box explaining env-values exclusion and Args risk.
+- Active/AutoStart: confirmation dialog text explains preserved state + next-start behavior.
+- Environment keys: confirmation explains values not restored.
+- Variable references: confirmation explains syntax-only validation.
+- 10 MiB: client-side pre-check (file.size > limit → local error, no request sent).
+- Double-submit: buttons disabled during in-flight requests.
+- EN/RU: all visible strings via `t()` / `data-i18n`.
+- Responsive: no overflow at 430px; file input fits; buttons wrap.
+
+**NOT modified (Slice 2A/2B freeze respected):**
+- `internal/application/portable/*`
+- `internal/storage/repository.go`
+- `internal/webui/handlers/portable.go`
+
+**Tests (51 browser checks):**
+- Export: all (format/version/entities/env-absent), model root (closure).
+- Import: happy path (dry-run → confirm → success → entities exist → no instances started), collision (409, conflicts shown, import disabled), invalid format (error, import disabled), undefined variable (dry-run passes, import succeeds, raw string preserved), malformed variable (error, import disabled).
+- >10 MiB: client-side rejection (localized error, no request sent, validate disabled), exact 10 MiB boundary (not rejected by client, reaches server).
+- Active/AutoStart safety: model with `active: true` imported, state preserved, zero instances created, instance count unchanged.
+- UI: RU/EN labels, scope selector visibility, warning box, responsive 430px, i18n completeness (no missing keys), no unexpected console errors, no 5xx.

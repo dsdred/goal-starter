@@ -594,6 +594,21 @@ code { font-family: var(--font-mono); font-size: 0.9em; background: var(--bg-inp
 .auth-creds .form-group { margin-bottom: 0.8rem; }
 .auth-creds .form-group:last-child { margin-bottom: 0; }
 
+/* Portable Configuration */
+.portable-subsection { margin-bottom: 1rem; }
+.portable-subsection h4 { font-size: 0.8rem; font-weight: 600; margin-bottom: 0.4rem; color: var(--text-secondary); }
+.portable-export-row { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
+.portable-export-row select { flex: 1; min-width: 100px; max-width: 200px; }
+.portable-warning-box { margin: 0.8rem 0; padding: 0.6rem 0.8rem; background: var(--bg-card); border: 1px solid var(--warning); border-radius: var(--radius-sm); }
+.portable-warning-box .hint-text { margin: 0; font-size: 0.78rem; }
+.portable-import-actions { display: flex; gap: 0.5rem; margin-top: 0.6rem; }
+#portable-import-result { margin-top: 0.8rem; font-size: 0.82rem; }
+#portable-import-result .portable-result-success { color: var(--success); }
+#portable-import-result .portable-result-error { color: var(--danger); }
+#portable-import-result .portable-result-conflicts { margin: 0.4rem 0 0 1rem; padding: 0; }
+#portable-import-result .portable-result-conflicts li { margin-bottom: 0.2rem; word-break: break-word; }
+#portable-import-file { width: 100%; font-size: 0.8rem; }
+
 /* Runtime delete options */
 .rt-delete-options { display: flex; flex-direction: column; gap: 8px; margin: 1rem 0; }
 

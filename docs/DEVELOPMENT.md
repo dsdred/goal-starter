@@ -94,6 +94,7 @@ Each suite builds the `goal` binary and a platform-native `fake-runtime` into a 
 | `i18n.cjs` | RU/EN nav labels (runtimes item translated, no raw "Runtime"), login failure/network failure localized in RU+EN (raw "invalid credentials" never shown), successful login in EN, server-message mapping (known strings localized, unmatched strings kept in a localized frame, stable `code` wins over message), **raw-key detector** (`window.i18nMissing` empty + DOM regex scan for i18n key patterns after each switch), **repeated RU→EN→RU→EN→RU round-trip** (×2 rounds, no raw keys, nav localized each round), **dynamic DOM relocalization** (navigate + switch: page title follows the new locale) |
 | `connection.cjs` | Server connection feedback: sidebar dot starts online; with all requests aborted (server "down") the dot turns red and a top banner appears (RU/EN text); after unabort the dot returns to green, the banner hides, and a localized recovery toast is shown — loss/recovery detected within two 5 s health-probe cycles |
 | `instance-id.cjs` | Instance ID presentation + routing identity: three simultaneous instances of ONE model are pairwise distinguishable in the Instances table and the 430px compact cards (compact cells = `…` + full-id tail-16, derived from the full id), the full canonical id stays reachable via `title` (table cell, compact card, Logs bar), Logs selector labels are pairwise distinct while option values remain the FULL ids, per-line log badges use the short suffix form (`…` + full-id tail-8) and are pairwise distinct, and Stop/Restart/Logs onclick targets remain the FULL instance ids; History rows keep the full id in `title` |
+| `portable.cjs` | Portable Configuration UI (ADR 014 Slice 3): Settings section visibility RU/EN, export (all + model root closure, filename, format, env-absent), import happy path (file select → dry-run → confirm → success → entities exist → no instances started), collision (409, conflicts shown, import disabled), invalid format (error, import disabled), undefined variable (dry-run passes, raw string preserved), malformed variable (error, import disabled), responsive 430px (no overflow, file input fits), i18n completeness (no missing `portable.*` keys EN/RU), security warning visible, no unexpected console errors, no 5xx |
 
 Run locally:
 
@@ -104,7 +105,7 @@ npx playwright install chromium
 npm test
 ```
 
-`npm test` runs all eleven suites (the ten tabled above plus the ADR 013 `acceptance.cjs` owner-acceptance harness) sequentially and exits non-zero on any failure.
+`npm test` runs all twelve suites (the eleven tabled above plus the ADR 013 `acceptance.cjs` owner-acceptance harness) sequentially and exits non-zero on any failure.
 
 **CI:** the `browser-acceptance` job in `.github/workflows/ci.yml` runs the same `npm test` on ubuntu-latest with headless Chromium.
 
