@@ -1,6 +1,6 @@
 # ADR 014: Portable Configuration — Variable Resolution and Secret-Safe Export/Import
 
-**Status:** Accepted — owner contract agreed 2026-09-13; **Slice 1 implemented 2026-09-14** (commit pending Owner gate); Slice 2/3 NOT STARTED
+**Status:** Accepted — owner contract agreed 2026-09-13; **MVP complete and published 2026-09-15** (Slices 1, 2A, 2B, 3; final SHA `4624d81`, CI run `34889093837` 7/7 PASS). Deferred items (persisted variable store, secret-value export, merge/remap, relative-root) remain open for future Owner decisions.
 **Date:** 2026-09-13
 **Related:** ADR 004 (Config vs Repository ownership), ADR 010 (Pipeline), ADR 011 (Windows Service — owner decision 3: no new path resolution without Owner contract), ADR 013 (Pipeline repeatable entries), ADR 009 (Hot-reload — restart-class fields), ADR 006 (Secure Credential Storage), ADR 007 (Audit Logging), ROADMAP P1 "Portable Configuration & Path Variables"
 
@@ -650,7 +650,7 @@ Slice 1 is independently shippable and testable. It changes launch-time behavior
 
 ## Slice 1 Implementation Evidence (2026-09-14)
 
-Slice 1 (Variable Resolution Foundation) is implemented. Implementation commit pending Owner commit gate.
+Slice 1 (Variable Resolution Foundation) is implemented and published (commit `422486f`, CI PASS).
 
 **Delivered:**
 
@@ -672,7 +672,7 @@ Slice 1 (Variable Resolution Foundation) is implemented. Implementation commit p
 - Pipeline FROM MODEL and CUSTOM args resolve correctly.
 - No schema bump, no persisted variable store, no export/import.
 
-**NOT STARTED:** Slice 2 (Export/Import), Slice 3 (UI).
+Slice 2 and Slice 3 are implemented (see evidence below).
 
 ## Slice 2 Owner Contract (agreed 2026-09-14)
 
@@ -756,7 +756,7 @@ Slice 2A (Portable Bundle + Atomic ImportGraph + Application Service) is impleme
 - Variable grammar validated, undefined variables accepted.
 - No schema bump (v8 unchanged).
 
-**NOT STARTED:** Slice 3 (UI).
+Slice 3 is implemented (see evidence below).
 
 ### Slice 2B Implementation Evidence
 
