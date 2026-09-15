@@ -136,6 +136,7 @@ Formalized as the D2 owner contract in [ADR 010](docs/adr/010-pipeline.md) (Acce
 - [ ] Auto-update
 - [ ] Advanced Pipeline: DAG / dependencies / readiness / resource scheduling
 - [ ] ACME / automatic certificate management (depends on Native HTTPS / TLS)
+- [ ] MCP (Model Context Protocol) interface: expose GoAl management (models, runtimes, pipelines, instances, logs, settings) as MCP tools/resources so AI agents and assistants can operate GoAl programmatically; requires its own design gate (protocol mapping, tool/resource surface, auth/CSRF bridge, secret-safety for proxied operations) before implementation
 
 ## Product/UX evolution (multi-release)
 
