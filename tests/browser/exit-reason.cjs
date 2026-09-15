@@ -59,6 +59,29 @@ async function waitHistoryRow(base, modelId, timeoutMs = 15000) {
   }, timeoutMs);
 }
 
+// All seven scenario rows, by first-cell model name.
+const HISTORY_NAMES = ['ER Normal', 'ER Crash', 'ER Stop', 'ER Fail', 'ER Orphan', 'ER Orphan2', 'ER Dead'];
+
+// Deterministic UI synchronization (replaces fixed sleeps as a correctness
+// mechanism): refresh client data through the app's existing async contract
+// (window.reloadAllData, app.js:2704) and re-render the history view with the
+// existing synchronous renderer (window.renderHistory, app.js:2718). Each
+// iteration is a full refresh+check, so the wait converges on observable DOM
+// state regardless of where the app's 3 s refresh poll phase sits.
+async function waitForHistoryRows(page, timeoutMs = 20000) {
+  return poll(async () => {
+    await page.evaluate(async () => {
+      await window.reloadAllData();
+      window.renderHistory();
+    });
+    return page.evaluate((names) => {
+      const firsts = [...document.querySelectorAll('#history-body tr')]
+        .map(r => (r.querySelector('td') || {}).textContent);
+      return names.every(n => firsts.includes(n));
+    }, HISTORY_NAMES);
+  }, timeoutMs, 500);
+}
+
 // Rows are located by the model name in the first cell of #history-body.
 async function historyRow(page, modelName) {
   return page.evaluate((name) => {
@@ -102,7 +125,12 @@ const EXPECT = {
 async function checkLang(page, suite, lang, data) {
   const E = EXPECT[lang];
   await page.evaluate(() => window.navigate('history'));
-  await page.waitForTimeout(1500);
+  // Synchronize on observable state (all seven rows rendered), not on a fixed
+  // sleep: the orphan rows enter /api/v1/history only after kill/dismiss
+  // makes them terminal, and client data otherwise refreshes on the app's
+  // 3 s poll.
+  const rows = await waitForHistoryRows(page);
+  suite.log(`[${lang}] all 7 history rows rendered (deterministic refresh)`, !!rows);
 
   const header = await page.evaluate(() => {
     const ths = [...document.querySelectorAll('#view-history thead th')];
@@ -303,6 +331,15 @@ async function main() {
       iDismiss.data && iDismiss.data.state === 'stale' && iDismiss.data.recovery_reason === 'reconciled-by-user',
       iDismiss.data ? `${iDismiss.data.state}/${iDismiss.data.recovery_reason}` : `status=${iDismiss.status}`);
 
+    // API-level synchronization: /api/v1/history carries terminal instances
+    // only (InstanceService.ListHistory) — the orphan rows appear there only
+    // AFTER kill/dismiss. Wait for both before any UI assertion.
+    const histOrph = await waitHistoryRow(BASE, 'model-orph');
+    const histOrph2 = await waitHistoryRow(BASE, 'model-orph2');
+    suite.log('API: orphan terminal rows present in /history',
+      !!histOrph && !!histOrph2,
+      `${histOrph ? `${histOrph.state}/${histOrph.recovery_reason}` : 'missing'} / ${histOrph2 ? `${histOrph2.state}/${histOrph2.recovery_reason}` : 'missing'}`);
+
     // The UI renders /history (repository) rows: exit_code 0 is omitted there
     // (ToDomain drops zero). Collect the exact fields the UI will see.
     const histStop = await waitHistoryRow(BASE, mStop.id);
@@ -318,21 +355,26 @@ async function main() {
     await H.screenshot(page, ws, 'exit_reason_ru');
 
     // ═══ UI assertions — EN ═══
-    await page.evaluate(() => window.setLanguage('en'));
-    await page.waitForTimeout(3500);
+    // setLanguage is async (awaits loadI18n, then renderAll): await its actual
+    // completion instead of a fixed 3500 ms window (which previously only
+    // guaranteed a data-refresh poll tick because it exceeded the 3 s
+    // interval). checkLang performs its own deterministic refresh + row wait.
+    await page.evaluate(async () => { await window.setLanguage('en'); });
     await checkLang(page, suite, 'en', data);
     await H.screenshot(page, ws, 'exit_reason_en');
 
     // ═══ Responsive 430px: compact rows + no page-level horizontal overflow ═══
     await page.setViewportSize({ width: 430, height: 932 });
     await page.evaluate(() => window.navigate('history'));
-    await page.waitForTimeout(1000);
-    const geo = await page.evaluate(() => ({
-      compactRows: document.querySelectorAll('#history-compact .chist-row').length,
-      overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
-    }));
-    suite.log('@430 history compact rows rendered', geo.compactRows >= 5, `rows=${geo.compactRows}`);
-    suite.log('@430 no page-level horizontal overflow', geo.overflow <= 0, `overflow=${geo.overflow}px`);
+    const geo = await poll(async () => {
+      const g = await page.evaluate(() => ({
+        compactRows: document.querySelectorAll('#history-compact .chist-row').length,
+        overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      }));
+      return g.compactRows >= 5 ? g : null;
+    }, 10000);
+    suite.log('@430 history compact rows rendered', !!geo && geo.compactRows >= 5, geo ? `rows=${geo.compactRows}` : 'timeout');
+    suite.log('@430 no page-level horizontal overflow', !!geo && geo.overflow <= 0, geo ? `overflow=${geo.overflow}px` : 'n/a');
     await H.screenshot(page, ws, 'exit_reason_430');
 
     suite.log('Console: 0 uncaught exceptions', suite.consoleErrors.length === 0, suite.consoleErrors.slice(0, 3).join('; '));
