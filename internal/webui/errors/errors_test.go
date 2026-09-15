@@ -1,9 +1,6 @@
 package errors
 
 import (
-	"encoding/json"
-	"net/http"
-	"net/http/httptest"
 	"testing"
 )
 
@@ -27,61 +24,13 @@ func TestAPIError_Error(t *testing.T) {
 	}
 }
 
-func TestAPIError_WriteJSON(t *testing.T) {
-	err := NewAPIError(CodeBadRequest, "test message")
-	w := httptest.NewRecorder()
-	err.WriteJSON(w, http.StatusBadRequest)
-
-	resp := w.Result()
-	if resp.StatusCode != http.StatusBadRequest {
-		t.Errorf("expected status %d, got %d", http.StatusBadRequest, resp.StatusCode)
-	}
-
-	// WriteJSON encodes APIError directly (not ErrorResponse wrapper).
-	var body APIError
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		t.Fatalf("failed to decode response: %v", err)
-	}
-
-	if body.Code != CodeBadRequest {
-		t.Errorf("expected CodeBadRequest in response, got %s", body.Code)
-	}
-	if body.Message != "test message" {
-		t.Errorf("expected 'test message' in response, got %s", body.Message)
-	}
-}
-
-func TestWriteError(t *testing.T) {
-	w := httptest.NewRecorder()
-	WriteError(w, http.StatusNotFound, ErrNotFound)
-
-	resp := w.Result()
-	if resp.StatusCode != http.StatusNotFound {
-		t.Errorf("expected status %d, got %d", http.StatusNotFound, resp.StatusCode)
-	}
-
-	var body ErrorResponse
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		t.Fatalf("failed to decode response: %v", err)
-	}
-
-	if body.Error == nil {
-		t.Fatal("expected error in response body, got nil")
-	}
-}
-
 func TestPredefinedErrors(t *testing.T) {
 	tests := []struct {
 		name     string
 		err      *APIError
 		expected Code
 	}{
-		{"ErrBadRequest", ErrBadRequest, CodeBadRequest},
-		{"ErrUnauthorized", ErrUnauthorized, CodeUnauthorized},
-		{"ErrForbidden", ErrForbidden, CodeForbidden},
-		{"ErrNotFound", ErrNotFound, CodeNotFound},
-		{"ErrConflict", ErrConflict, CodeConflict},
-		{"ErrInternalServer", ErrInternalServer, CodeInternalServer},
+		{"ErrValidation", ErrValidation, CodeBadRequest},
 	}
 
 	for _, tt := range tests {
@@ -99,12 +48,7 @@ func TestSpecificErrors(t *testing.T) {
 		err      *APIError
 		wantCode Code
 	}{
-		{"ErrInvalidPortDetail", ErrInvalidPortDetail("out of range"), CodeInvalidPort},
-		{"ErrInvalidHostDetail", ErrInvalidHostDetail("invalid format"), CodeInvalidHost},
-		{"ErrInvalidAddressDetail", ErrInvalidAddressDetail("bad host", "bad port"), CodeInvalidAddress},
-
 		{"ErrRuntimeNotFound", ErrRuntimeNotFound("id_456"), CodeInvalidRuntime},
-		{"ErrModelNotFound", ErrModelNotFound("id_789"), CodeInvalidModel},
 	}
 
 	for _, tt := range tests {

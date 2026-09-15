@@ -83,7 +83,7 @@
 - [ ] Prometheus-compatible monitoring
 - [ ] Bruno API collections
 - [ ] Supervisor decomposition
-- [ ] `internal/webui/errors`: the nested-format writers (`APIError.WriteJSON`, `WriteError`, `ErrorResponse`, the `{"error":{"error_code",...}}` block) are dead in production — handlers use the flat `writeError`/`writeAPIError` shapes (`error` / `code` / `details`); remove or wire (technical debt, surfaced during the 2026-08-29 i18n task; the nested format is not the API contract)
+- [x] `internal/webui/errors`: the nested-format writers (`APIError.WriteJSON`, `WriteError`, `ErrorResponse`, the `{"error":{"error_code",...}}` block) and 10 unused predefined error vars/constructors removed from the package (technical debt, surfaced during the 2026-08-29 i18n task). Package retained because `Code`/`APIError`/`NewAPIError`/`ErrValidation`/`ErrRuntimeNotFound` are live production dependencies used by 14 importers. The shipped flat `writeError`/`writeAPIError` contract (`error` / `code` / `details`) is unchanged.
 - [ ] Migration framework (schema migration + tests)
 - [ ] Chaos / concurrency / recovery tests
 - [ ] Comprehensive integration tests
