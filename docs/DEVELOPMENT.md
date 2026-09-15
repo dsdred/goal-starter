@@ -95,6 +95,7 @@ Each suite builds the `goal` binary and a platform-native `fake-runtime` into a 
 | `connection.cjs` | Server connection feedback: sidebar dot starts online; with all requests aborted (server "down") the dot turns red and a top banner appears (RU/EN text); after unabort the dot returns to green, the banner hides, and a localized recovery toast is shown — loss/recovery detected within two 5 s health-probe cycles |
 | `instance-id.cjs` | Instance ID presentation + routing identity: three simultaneous instances of ONE model are pairwise distinguishable in the Instances table and the 430px compact cards (compact cells = `…` + full-id tail-16, derived from the full id), the full canonical id stays reachable via `title` (table cell, compact card, Logs bar), Logs selector labels are pairwise distinct while option values remain the FULL ids, per-line log badges use the short suffix form (`…` + full-id tail-8) and are pairwise distinct, and Stop/Restart/Logs onclick targets remain the FULL instance ids; History rows keep the full id in `title` |
 | `portable.cjs` | Portable Configuration UI (ADR 014 Slice 3): Settings section visibility RU/EN, export (all + model root closure, filename, format, env-absent), import happy path (file select → dry-run → confirm → success → entities exist → no instances started), collision (409, conflicts shown, import disabled), invalid format (error, import disabled), undefined variable (dry-run passes, raw string preserved), malformed variable (error, import disabled), responsive 430px (no overflow, file input fits), i18n completeness (no missing `portable.*` keys EN/RU), security warning visible, no unexpected console errors, no 5xx |
+| `exit-reason.cjs` | Human-readable exit reason in Launch History (ROADMAP Instance History item): deterministic scenarios via `fake-runtime` + pre-seeded repository — normal completion (`exited/normal` → "Completed"/«Завершен»), explicit Stop (`exited/signaled` → "Stopped"/«Остановлен», never a crash, raw code tooltip-only), non-zero exit (`failed/failure/42` → "Crashed"/«Аварийно завершен» + "Exit code: 42" tooltip), start failure (missing executable with HTML-active path chars → `failed/error` + `last_error` rendered verbatim/escaped in "Startup failed: …"/«Не удалось запустить: …»), orphan killed via Kill (→ stale/`killed-by-user` → "Force stopped"/«Принудительно остановлен»), orphan dismissed (→ stale/`reconciled-by-user` → "Dismissed"/«Отклонено»), dead PID recovery (→ stale/`pid-not-found` → "Process not found"/«Процесс не найден»); RU/EN parity, 430px compact rows + no page-level horizontal overflow, no console errors, no unexpected 5xx |
 
 Run locally:
 
@@ -105,7 +106,7 @@ npx playwright install chromium
 npm test
 ```
 
-`npm test` runs all twelve suites (the eleven tabled above plus the ADR 013 `acceptance.cjs` owner-acceptance harness) sequentially and exits non-zero on any failure.
+`npm test` runs all thirteen suites (the twelve tabled above plus the ADR 013 `acceptance.cjs` owner-acceptance harness) sequentially and exits non-zero on any failure.
 
 **CI:** the `browser-acceptance` job in `.github/workflows/ci.yml` runs the same `npm test` on ubuntu-latest with headless Chromium.
 

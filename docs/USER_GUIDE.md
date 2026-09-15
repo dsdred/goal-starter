@@ -414,6 +414,24 @@ and survive GoAl restart. The `/api/v1/history` endpoint returns these persisten
 records. History cleanup removes terminal instances (all, older than 7 days, or
 older than 30 days). Active instances are never deleted by cleanup.
 
+The **Reason** column shows a human-readable termination reason:
+
+| Reason | Meaning |
+|--------|---------|
+| Completed | the process finished normally (exit code 0) |
+| Stopped | stopped by GoAl (user Stop, Restart, or GoAl shutdown) |
+| Crashed | abnormal non-zero termination |
+| Force stopped | forced termination (kill escalation, or an orphan killed via the Kill action) |
+| Startup failed: … | the process never started; the bounded diagnostic follows |
+| Process not found | stale record: the process no longer exists |
+| Identity not confirmed | stale record: the process identity could not be verified |
+| Dismissed | the orphan record was dismissed (reconciled) |
+
+The raw exit code is never the primary reason: a routine GoAl stop reports the
+platform control code (3221225786 on Windows, 143 on Linux), which is a normal
+stop, not a crash. A non-zero exit code stays available as secondary tooltip
+information ("Exit code: N").
+
 ### Stop behavior
 
 - **User-initiated Stop** → instance reaches `exited` state (shown as STOPPED in UI). This is a normal, successful outcome.

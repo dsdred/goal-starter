@@ -1896,6 +1896,51 @@ function historyStateLabel(s) {
     return mval !== mkey ? mval : s;
 }
 
+// Human-readable termination reason for a terminal history row. Maps the
+// persisted exit_class (plus state / last_error / recovery_reason) to a
+// user-facing label. The raw exit code is NEVER the primary reason: a routine
+// GoAl stop shows 3221225786 on Windows (CTRL_BREAK 0xC000013A) or 143 on
+// Linux (SIGTERM) — both are normal stops, not crashes. Returns null when no
+// reason is known (the state badge still carries the state).
+function exitReason(i) {
+    if (i.state === 'stale') {
+        switch (i.recovery_reason) {
+            case 'killed-by-user': return t('history.reason.force_stopped');
+            case 'pid-gone':
+            case 'pid-not-found': return t('history.reason.process_not_found');
+            case 'identity-unconfirmed': return t('history.reason.identity_unconfirmed');
+            case 'reconciled-by-user': return t('history.reason.dismissed');
+            default: break;
+        }
+        if (i.exit_class === 'killed') return t('history.reason.force_stopped');
+        return null;
+    }
+    switch (i.exit_class) {
+        case 'normal': return t('history.reason.completed');
+        case 'signaled':
+        case 'context': return t('history.reason.stopped');
+        case 'killed':
+        case 'timeout': return t('history.reason.force_stopped');
+        case 'failure': return t('history.reason.crashed');
+        case 'error':
+            return i.last_error ? t('history.reason.start_failed', { error: i.last_error }) : t('history.reason.start_failed.short');
+        default:
+            if (i.state === 'failed' && i.last_error) {
+                return t('history.reason.start_failed', { error: i.last_error });
+            }
+            return null;
+    }
+}
+
+// Dense-row variant: long start-failure diagnostics are abbreviated in the
+// compact row; the full text stays reachable via the row tooltip.
+function exitReasonShort(i, reason) {
+    if (reason && i.last_error && i.state === 'failed') {
+        return t('history.reason.start_failed.short');
+    }
+    return reason;
+}
+
 function renderHistory() {
     const empty = document.getElementById('history-empty');
     const tableWrap = document.getElementById('history-table-wrap');
@@ -1924,13 +1969,17 @@ function renderHistory() {
     if (tableWrap) tableWrap.dataset.has = '1';
     document.getElementById('history-body').innerHTML = filtered.slice(0, 200).map(function (i) {
         const modelName = i.model_name || getModelName(i.model_id);
-        const exitTitle = i.exit_code != null ? ' title="' + esc(String(i.exit_code)) + '"' : '';
+        const reason = exitReason(i);
+        const reasonText = reason || '—';
+        const reasonTitle = i.exit_code != null
+            ? ' title="' + esc(t('history.reason.exit_code', { code: i.exit_code })) + '"'
+            : '';
         return '<tr><td class="inst-model" title="' + esc(modelName) + '">' + esc(modelName) + '</td>' +
             '<td class="inst-mono" title="' + esc(i.id) + '">' + esc(compactInstanceId(i.id)) + '</td>' +
             '<td class="inst-state"><span class="status-badge ' + esc(i.state) + '">' + esc(historyStateLabel(i.state)) + '</span></td>' +
             '<td class="inst-mono">' + (i.pid || '—') + '</td>' +
             '<td class="inst-time" title="' + esc(fmtTime(i.started_at)) + '">' + fmtTime(i.started_at) + '</td><td class="inst-time" title="' + esc(fmtTime(i.stopped_at)) + '">' + fmtTime(i.stopped_at) + '</td>' +
-            '<td class="inst-mono"' + exitTitle + '>' + (i.exit_code != null ? i.exit_code : '—') + '</td>' +
+            '<td class="inst-reason"' + reasonTitle + '>' + esc(reasonText) + '</td>' +
             '<td class="actions-cell">' + iconBtn(ICONS.logs, t('instances.actions.logs'), 'ghost', 'viewInstanceLogs', i.id) + '</td></tr>';
     }).join('');
     const compact = document.getElementById('history-compact');
@@ -1940,15 +1989,20 @@ function renderHistory() {
             const modelName = i.model_name || getModelName(i.model_id);
             const range = fmtRange(i.started_at, i.stopped_at);
             const title = [fmtTime(i.started_at), fmtTime(i.stopped_at)].join(' → ');
-            const rangeTitle = range ? ' title="' + esc(i.id + ' · ' + title) + '"' : ' title="' + esc(i.id) + '"';
-            const exitPart = i.exit_code != null ? ' · Exit ' + i.exit_code : '';
+            const reason = exitReason(i);
+            let tooltipText = i.id;
+            if (range) tooltipText += ' · ' + title;
+            if (i.exit_code != null) tooltipText += ' · ' + t('history.reason.exit_code', { code: i.exit_code });
+            if (reason && reason !== exitReasonShort(i, reason)) tooltipText += ' · ' + reason;
+            const rangeTitle = ' title="' + esc(tooltipText) + '"';
+            const reasonPart = reason ? ' · ' + esc(exitReasonShort(i, reason)) : '';
             return '<div class="compact-row chist-row">' +
                 '<div class="compact-main">' +
                     '<div class="compact-l1">' +
                         '<span class="status-badge ' + esc(i.state) + '">' + esc(historyStateLabel(i.state)) + '</span>' +
                         '<span class="compact-title" title="' + esc(modelName) + '">' + esc(modelName) + '</span>' +
                     '</div>' +
-                    '<div class="compact-l2"' + rangeTitle + '>' + esc(compactInstanceId(i.id)) + ' · PID ' + (i.pid || '—') + exitPart + (range ? ' · ' + range : '') + '</div>' +
+                    '<div class="compact-l2"' + rangeTitle + '>' + esc(compactInstanceId(i.id)) + ' · PID ' + (i.pid || '—') + reasonPart + (range ? ' · ' + range : '') + '</div>' +
                 '</div>' +
                 '<div class="compact-actions">' +
                     iconBtn(ICONS.logs, t('instances.actions.logs'), 'ghost', 'viewInstanceLogs', i.id) +
