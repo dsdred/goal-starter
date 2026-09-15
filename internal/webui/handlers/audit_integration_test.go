@@ -345,12 +345,10 @@ func TestAuditSettingsSavedPortOnly(t *testing.T) {
 	if _, ok := events[0].Detail["web_port"]; !ok {
 		t.Fatalf("web_port name missing from detail: %v", events[0].Detail)
 	}
-	line, err := json.Marshal(events[0])
-	if err != nil {
-		t.Fatalf("marshal event: %v", err)
-	}
-	if bytes.Contains(line, []byte("9099")) {
-		t.Fatalf("event carries the port value: %s", line)
+	for k, v := range events[0].Detail {
+		if v != "changed" && v != "true" {
+			t.Fatalf("detail[%s] = %q, want sentinel \"changed\" or \"true\" (value leakage)", k, v)
+		}
 	}
 }
 
