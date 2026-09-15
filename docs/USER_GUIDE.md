@@ -963,12 +963,19 @@ goal.exe --service start
   `auto` on boot (`--start manual` to opt out), SCM stop timeout 45 s.
 - **Install refuses** (nothing is written) when the config cannot be loaded and
   validated, when the effective `dataDir` is relative **or does not exist**
-  (install never creates it), or when any runtime executable / working
-  directory (in the config or in an existing `goal_repo.json`) or model path
-  (in the config) is a relative path — a service's working directory is
-  `C:\Windows\System32`, so relative paths are not a supported service
-  configuration. Service deployments must use absolute paths for `dataDir`,
-  runtimes, and models, and the `dataDir` directory must exist.
+  (install never creates it), when any runtime `workingDirectory` (in the config
+  or in an existing `goal_repo.json`) or model path (in the config) is a
+  relative path, or when a runtime `executable` is not service-safe. An
+  `executable` is service-safe when it is absolute, **or** when it is relative
+  and its `workingDirectory` is an absolute path in which the executable exists
+  — the service then runs the joined absolute path, exactly as a normal launch
+  does (e.g. `executable: llama-server.exe` +
+  `workingDirectory: C:\tools\llamacpp\b10519` is accepted and runs
+  `C:\tools\llamacpp\b10519\llama-server.exe`). A relative `executable` with an
+  empty or relative `workingDirectory`, or whose joined path does not exist, is
+  refused — a service's working directory is `C:\Windows\System32`, so such
+  paths cannot be anchored deterministically. Stored values are never rewritten
+  by install.
 - Re-running install with the same image is an idempotent no-op; a different
   image (exe, config, or arguments) is refused — uninstall first.
 

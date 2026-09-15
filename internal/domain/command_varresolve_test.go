@@ -24,7 +24,7 @@ func TestLaunchResolver_Resolve_VariableInExecutable(t *testing.T) {
 		t.Fatal(err)
 	}
 	// On Windows, the resolved exe is absolute (starts with drive letter),
-	// so resolveExecutablePath returns it as-is.
+	// so ResolveExecutablePath returns it as-is.
 	want := textConcat(dataDir, "/bin/llama-server")
 	if spec.Executable != want {
 		t.Fatalf("executable = %q, want %q", spec.Executable, want)

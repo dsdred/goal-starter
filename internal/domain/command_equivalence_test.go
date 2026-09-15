@@ -37,7 +37,7 @@ type v5ModelCfg struct {
 func v5ResolvedCommand(t *testing.T, rt *Runtime, defaultArgs []string, prof v5ProfileCfg, model v5ModelCfg) *CommandSpec {
 	t.Helper()
 
-	exePath := resolveExecutablePath(rt.Executable, rt.WorkingDirectory)
+	exePath := ResolveExecutablePath(rt.Executable, rt.WorkingDirectory)
 
 	args := make([]string, 0)
 	args = append(args, defaultArgs...)

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/dsdred/goal/internal/config"
+	"github.com/dsdred/goal/internal/domain"
 )
 
 // serviceImageString renders the registered service image for install output
@@ -39,16 +40,39 @@ type repoPathProbe struct {
 	} `json:"runtimes"`
 }
 
+// serviceRuntimeExecutableCheck validates one runtime executable for service
+// install (ADR 011 D3.2 + addendum, owner decision 11): an absolute executable
+// passes unchanged (existing behavior); a relative executable passes only when
+// WorkingDirectory is textually absolute and the effective executable produced
+// by the launch join semantics (domain.ResolveExecutablePath — the exact rule
+// runtime launch uses) is absolute and exists. Stored fields are never
+// rewritten.
+func serviceRuntimeExecutableCheck(executable, workingDirectory string) error {
+	if filepath.IsAbs(executable) {
+		return nil
+	}
+	effective := domain.ResolveExecutablePath(executable, workingDirectory)
+	if !filepath.IsAbs(effective) {
+		return fmt.Errorf("executable %q is relative and workingDirectory %q is not absolute; the service would resolve it against the SCM working directory", executable, workingDirectory)
+	}
+	if _, err := os.Stat(effective); err != nil {
+		return fmt.Errorf("effective executable %q (executable %q resolved against workingDirectory %q) does not exist", effective, executable, workingDirectory)
+	}
+	return nil
+}
+
 // serviceInstallPreflight enforces the deterministic service-install contract
-// (ADR 011 D3.2/D3.3): it refuses registration (bounded diagnostic naming
-// every offending entry; nothing is written) unless the resolved config
+// (ADR 011 D3.2/D3.3 + addendum): it refuses registration (bounded diagnostic
+// naming every offending entry; nothing is written) unless the resolved config
 // exists and passes LoadReadOnly + ValidateFull, the effective dataDir is
 // absolute AND exists as a directory (a missing/relative dataDir is refused —
 // D3.2: it would place the repository and the audit file in the SCM working
-// directory; install never creates it), and every seeded runtime executable /
-// workingDirectory and seeded model path (when set), plus every current-repo
-// runtime executable / workingDirectory, is absolute. It returns the absolute
-// cleaned config path.
+// directory; install never creates it), every workingDirectory and seeded
+// model path (when set) is absolute, and every runtime executable is either
+// absolute or resolvable — via the launch join semantics
+// (domain.ResolveExecutablePath) — to an existing absolute effective
+// executable (addendum: relative executable + textually absolute
+// workingDirectory). It returns the absolute cleaned config path.
 func serviceInstallPreflight(exePath, configPath string) (string, []string) {
 	var problems []string
 
@@ -81,8 +105,10 @@ func serviceInstallPreflight(exePath, configPath string) (string, []string) {
 	}
 
 	for i, rt := range cfg.Runtimes {
-		if rt.Executable != "" && !filepath.IsAbs(rt.Executable) {
-			problems = append(problems, fmt.Sprintf("config runtime %q (index %d): executable %q is relative", rt.Name, i, rt.Executable))
+		if rt.Executable != "" {
+			if err := serviceRuntimeExecutableCheck(rt.Executable, rt.WorkingDirectory); err != nil {
+				problems = append(problems, fmt.Sprintf("config runtime %q (index %d): %v", rt.Name, i, err))
+			}
 		}
 		if rt.WorkingDirectory != "" && !filepath.IsAbs(rt.WorkingDirectory) {
 			problems = append(problems, fmt.Sprintf("config runtime %q (index %d): workingDirectory %q is relative", rt.Name, i, rt.WorkingDirectory))
@@ -103,8 +129,10 @@ func serviceInstallPreflight(exePath, configPath string) (string, []string) {
 				problems = append(problems, fmt.Sprintf("repository decode: %v", err))
 			} else {
 				for _, rt := range probe.Runtimes {
-					if rt.Executable != "" && !filepath.IsAbs(rt.Executable) {
-						problems = append(problems, fmt.Sprintf("repository runtime %q: executable %q is relative", rt.ID, rt.Executable))
+					if rt.Executable != "" {
+						if err := serviceRuntimeExecutableCheck(rt.Executable, rt.WorkingDirectory); err != nil {
+							problems = append(problems, fmt.Sprintf("repository runtime %q: %v", rt.ID, err))
+						}
 					}
 					if rt.WorkingDirectory != "" && !filepath.IsAbs(rt.WorkingDirectory) {
 						problems = append(problems, fmt.Sprintf("repository runtime %q: workingDirectory %q is relative", rt.ID, rt.WorkingDirectory))

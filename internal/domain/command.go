@@ -97,7 +97,7 @@ func (r *LaunchResolver) Resolve(
 		return nil, err
 	}
 
-	exePath := resolveExecutablePath(exe, wd)
+	exePath := ResolveExecutablePath(exe, wd)
 
 	args := make([]string, 0, len(modelArgs)+len(custArgs))
 	args = append(args, modelArgs...)
@@ -134,9 +134,12 @@ func (r *LaunchResolver) Resolve(
 	}, nil
 }
 
-// resolveExecutablePath resolves a relative executable path against the
-// runtime's WorkingDirectory.
-func resolveExecutablePath(executable, workingDir string) string {
+// ResolveExecutablePath resolves a relative executable path against the
+// runtime's WorkingDirectory. It is the single executable join rule shared by
+// runtime launch (Resolve/Preview) and the Windows service install pre-flight
+// (ADR 011 D3.2 addendum), so preflight validates the exact effective
+// executable that launch would run.
+func ResolveExecutablePath(executable, workingDir string) string {
 	if filepath.IsAbs(executable) {
 		return executable
 	}
@@ -234,7 +237,7 @@ func (r *LaunchResolver) Preview(
 		return nil, err
 	}
 
-	exePath := resolveExecutablePath(exe, wd)
+	exePath := ResolveExecutablePath(exe, wd)
 
 	args := make([]string, 0, len(modelArgs)+len(custArgs))
 	args = append(args, modelArgs...)

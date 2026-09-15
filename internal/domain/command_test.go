@@ -26,19 +26,19 @@ func absOtherPath(t *testing.T) string {
 func TestResolveExecutablePath_RelativeWithWorkDir(t *testing.T) {
 	wd := absToolPath(t)
 	name := filepath.Base(absOtherPath(t))
-	got := resolveExecutablePath(name, wd)
+	got := ResolveExecutablePath(name, wd)
 	want := filepath.Join(wd, name)
 	if got != want {
-		t.Errorf("resolveExecutablePath = %q, want %q", got, want)
+		t.Errorf("ResolveExecutablePath = %q, want %q", got, want)
 	}
 }
 
 func TestResolveExecutablePath_RelativeWithDotPrefix(t *testing.T) {
 	wd := absToolPath(t)
-	got := resolveExecutablePath(filepath.Join(".", "llama-server"), wd)
+	got := ResolveExecutablePath(filepath.Join(".", "llama-server"), wd)
 	want := filepath.Join(wd, "llama-server")
 	if got != want {
-		t.Errorf("resolveExecutablePath = %q, want %q", got, want)
+		t.Errorf("ResolveExecutablePath = %q, want %q", got, want)
 	}
 }
 
@@ -48,14 +48,14 @@ func TestResolveExecutablePath_Absolute(t *testing.T) {
 		t.Fatalf("test path %q is not absolute on %s", abs, runtime.GOOS)
 	}
 	wd := absToolPath(t)
-	got := resolveExecutablePath(abs, wd)
+	got := ResolveExecutablePath(abs, wd)
 	if got != abs {
 		t.Errorf("absolute path should remain unchanged, got %q", got)
 	}
 }
 
 func TestResolveExecutablePath_EmptyWorkDir(t *testing.T) {
-	got := resolveExecutablePath("llama-server", "")
+	got := ResolveExecutablePath("llama-server", "")
 	if got != "llama-server" {
 		t.Errorf("expected unchanged relative path with empty workdir, got %q", got)
 	}
