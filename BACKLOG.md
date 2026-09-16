@@ -155,6 +155,10 @@
 - [x] Log filtering and pagination (server-side) — `internal/process/log_store.go`, `GET /api/v1/logs/query`
 - [x] WebSocket для log stream (`internal/webui/websocket/`)
 - [x] Metrics endpoint (Prometheus format) — `internal/webui/metrics/`
+- [ ] `DELETE /api/v1/models/{id}` на несуществующую модель возвращает 500 вместо 404 (bounded API-correctness defect, обнаружен во время ADR 007 entity-audit реализации, 2026-09-16; НЕ исправлен)
+   - Доказательная цепочка: `JSONRepository.DeleteModel` (internal/storage/repository.go:965) возвращает plain `fmt.Errorf("model not found: %s", id)` — не `APIError` — поэтому в `ModelsHandler.Delete` (internal/webui/handlers/models.go:214-228) `errors.As` не срабатывает, mapping `CodeNotFound → 404` (models.go:218-223) для этого пути мёртвый, и handler падает в `writeError(w, 500, err.Error())`. Sibling-эндпоинты намеренно возвращают 404 на отсутствующую модель: `Activate`/`Deactivate` (models.go:309/329), `RuntimesHandler.Delete` (runtimes.go:257-258)
+   - ADR 007 тест (audit_entity_test.go:151-154) сознательно утверждает только "rejection" (not 404) — тест на 404 не ждать, пока handler не вернёт 404
+   - Будущая задача: вернуть `APIError` `CodeNotFound` из repository/service + регрессионный тест, ожидающий 404; schema API не меняется, только behavior hardening
 
 ### P2 — Packaging
 
@@ -210,6 +214,10 @@
   - Мигрируется автоматически при загрузке старого конфига
 - [x] Runtime-specific health check config (`RuntimeHealthCheck`)
   - `Type`, `Enabled`, `Interval`, `Timeout`, `Host`, `Port`, `HTTPPath`
+- [ ] Browser suite `core.cjs` check 24.1 flake в restart-окне (test-harness hardening debt; НЕ production defect; НЕ исправлен)
+  - Симптом (наблюдено один раз в CI): `24.1 Auth phase: no unexpected console errors` — 3 × `net::ERR_CONNECTION_REFUSED`. Evidence: ADR 007 SHA `3b8519e`, CI run `35055731936` (first pass FAIL; same-SHA rerun 7/7 PASS); локальные попытки воспроизведения 3/3 PASS (57/57); repository-content correction не требовалась
+  - Механизм: Phase B `server.stop()` (core.cjs:346) выполняется, пока auth-OFF страница (page) открыта; `watchPage` (harness.cjs:166-174) без unwatch пишет console-ошибки обеих страниц (page L62 + page2 L359) в общий `suite.consoleErrors`; запросы в окне stop→server2-accept дают connection-refused, а whitelist 24.1 (core.cjs:387-388) фильтрует только 401-уведомления
+  - Будущая задача: forensic/design детерминированной синхронизации. Направления расследования (не принятые fix): остановить/unwatch polling auth-OFF страницы до `server.stop()`; явная синхронизация restart-окна; узкая классификация ожидаемых refused/aborted ошибок только внутри намеренного restart-окна. Глобальный whitelist `ERR_CONNECTION_REFUSED` — НЕ допускается
 
 ### P2 — Monitoring
 

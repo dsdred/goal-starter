@@ -138,6 +138,7 @@ Formalized as the D2 owner contract in [ADR 010](docs/adr/010-pipeline.md) (Acce
 - [ ] Advanced Pipeline: DAG / dependencies / readiness / resource scheduling
 - [ ] ACME / automatic certificate management (depends on Native HTTPS / TLS)
 - [ ] MCP (Model Context Protocol) interface: expose GoAl management (models, runtimes, pipelines, instances, logs, settings) as MCP tools/resources so AI agents and assistants can operate GoAl programmatically; requires its own design gate (protocol mapping, tool/resource surface, auth/CSRF bridge, secret-safety for proxied operations) before implementation
+- [ ] macOS support (low priority): validate and support GoAl on darwin/amd64 and darwin/arm64; native lifecycle/service integration (launchd-specific design) and distribution/signing/notarization to be defined only when product demand justifies the platform work — **macOS is not currently supported**
 
 ## Product/UX evolution (multi-release)
 
