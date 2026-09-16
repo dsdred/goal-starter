@@ -508,7 +508,73 @@ async function main() {
     const cardHeaderHasState = await page.locator('#pipeline-list .model-row .model-row-name .status-badge').count() >= 1;
     suite.log('11.3 Card header shows name + state', cardHeaderHasState);
     await H.screenshot(page, ws, '07-pipelines-768');
+
+    // ═══ SECTION 11.5: zoom 125%/150% — per-model chip overflow regression ═══
+    // Browser zoom shrinks the CSS viewport (1366 laptop @125% -> 1093px, @150% ->
+    // 911px). A per-entry model-name chip is a nowrap box whose width is the full
+    // model name; unconstrained, it extended past the viewport (clipped by
+    // .model-row-sub overflow:hidden -> unreachable content). The chip must stay
+    // inside the viewport, ellipsize with a marker, and keep the full name in its
+    // title tooltip.
+    const LONG_Z = 'llama-3.1-70b-instruct-q4_k_m-community-2026-08-stable-release-channel-revision-build-042-extended-precision-tensor-quantization-superprofile';
+    const zm = await api('POST', '/api/v1/models', { name: LONG_Z, runtime_id: 'rt-fake', args: ['infinite'] });
+    suite.log('11.5.1 Seed: long-named model created', zm.status === 201, `status=${zm.status}`);
+    const zp = await api('POST', '/api/v1/pipelines', { name: 'Zoom Chip Probe', models: [{ model_id: zm.data.id }] });
+    suite.log('11.5.2 Seed: probe pipeline created', zp.status === 201, `status=${zp.status}`);
+    await page.reload({ waitUntil: 'networkidle' });
+    await page.evaluate(() => window.navigate('pipelines'));
+    await page.waitForFunction(name => {
+      const el = [...document.querySelectorAll('#pipeline-list .pl-name')].find(x => x.title === name);
+      return !!el && el.getBoundingClientRect().width > 0;
+    }, 'Zoom Chip Probe', { timeout: 10000 });
+
+    const chipGeom = async () => page.evaluate(name => {
+      const vw = window.innerWidth;
+      let overVw = 0;
+      document.querySelectorAll('#pipeline-list .model-row *').forEach(el => {
+        const r = el.getBoundingClientRect();
+        if (r.width > 0 && r.right > vw + 1) overVw = Math.max(overVw, Math.round((r.right - vw) * 10) / 10);
+      });
+      const row = [...document.querySelectorAll('#pipeline-list .model-row')].find(r =>
+        (r.querySelector('.pl-name') || {}).title === name || (r.textContent || '').includes(name));
+      const chip = row ? row.querySelector('.pl-chips-wrap .status-badge') : null;
+      if (!chip) return null;
+      return {
+        vw,
+        docOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+        chipRight: Math.round(chip.getBoundingClientRect().right * 10) / 10,
+        chipW: Math.round(chip.getBoundingClientRect().width * 10) / 10,
+        chipMaxW: getComputedStyle(chip).maxWidth,
+        ellipsis: chip.scrollWidth > chip.clientWidth,
+        title: chip.getAttribute('title') || '',
+        actionsVisible: [...row.querySelectorAll('.model-row-actions .icon-btn')].some(b => { const r = b.getBoundingClientRect(); return r.width > 0 && r.right <= vw + 1; }),
+        overVw,
+      };
+    }, 'Zoom Chip Probe');
+
+    await page.setViewportSize({ width: 1093, height: 1080 });
+    await page.waitForTimeout(300);
+    const zg125 = await chipGeom();
+    suite.log('11.5.3 @1093px (1366 @125% zoom): chip fits inside the viewport', zg125 && zg125.chipRight <= zg125.vw, JSON.stringify(zg125));
+    suite.log('11.5.4 @1093px: long chip name ellipsizes (truncation visible)', zg125 && zg125.ellipsis === true, `chipW=${zg125 && zg125.chipW}`);
+    suite.log('11.5.5 @1093px: full model name kept in chip title tooltip', zg125 && zg125.title === LONG_Z, `title=${JSON.stringify(zg125 && zg125.title)}`);
+
+    await page.setViewportSize({ width: 911, height: 1080 });
+    await page.waitForTimeout(300);
+    const zg150 = await chipGeom();
+    suite.log('11.5.6 @911px (1366 @150% zoom): chip fits inside the viewport', zg150 && zg150.chipRight <= zg150.vw, JSON.stringify(zg150));
+    suite.log('11.5.7 @911px: no page-level horizontal overflow', zg150 && zg150.docOverflow === 0 && zg150.overVw === 0, `docOverflow=${zg150 && zg150.docOverflow} overVw=${zg150 && zg150.overVw}`);
+    suite.log('11.5.8 @911px: action strip stays visible/reachable', zg150 && zg150.actionsVisible === true, JSON.stringify(zg150));
+
+    // Restore 100% (1920): chip fits without ellipsis, layout unchanged.
     await page.setViewportSize({ width: 1920, height: 1080 });
+    await page.waitForTimeout(300);
+    const zg100 = await chipGeom();
+    suite.log('11.5.9 @1920px (100% zoom): chip fits without truncation', zg100 && zg100.chipRight <= zg100.vw && zg100.ellipsis === false, JSON.stringify(zg100));
+    const delZp = await api('DELETE', `/api/v1/pipelines/${zp.data.id}`);
+    suite.log('11.5.10 Cleanup: probe pipeline deleted', delZp.status === 200, `status=${delZp.status}`);
+    await page.reload({ waitUntil: 'networkidle' });
+    await page.evaluate(() => window.navigate('pipelines'));
     await page.waitForTimeout(300);
 
     // ═══ SECTION 12: i18n EN/RU ═══

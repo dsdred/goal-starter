@@ -433,7 +433,12 @@ code { font-family: var(--font-mono); font-size: 0.9em; background: var(--bg-inp
    from the manual Start action (persistent setting, accent color). */
 .toggle-pipeline input:checked + .toggle-slider { background: var(--accent); }
 .pl-chips-wrap { flex-wrap: wrap; gap: 2px; white-space: normal; }
-.pl-chips-wrap .status-badge { margin: 0 4px 2px 0; }
+/* Per-entry model-name chip: constrain to the available width. At narrow
+   viewports (125%/150% browser zoom, narrow desktop windows) an unconstrained
+   nowrap chip was wider than the row and its box extended past the viewport
+   (clipped by .model-row-sub overflow:hidden). inline-block + ellipsis keeps
+   the full name reachable in the title tooltip and shows a truncation marker. */
+.pl-chips-wrap .status-badge { display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; margin: 0 4px 2px 0; }
 /* Pipeline linear builder (ADR 013 Owner UI): each block is one model entry;
    blocks stack top-to-bottom in launch order (no DAG, no drag&drop, no
    decorative connectors). Each block carries explicit move up / move down /
