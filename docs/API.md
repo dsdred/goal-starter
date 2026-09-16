@@ -98,9 +98,11 @@ Response 200 (events **newest first**):
 
 `total` is the count of **all** matching events, not just this page. `src_ip` is the TCP peer address only (`X-Forwarded-For`/`X-Real-IP` are not trusted). `detail` carries identifiers and booleans only — never secrets.
 
-First-scope event taxonomy: `login.success`, `login.failure` (attempted user), `login.rate_limited`, `session.logout`, `settings.saved` (changed field *names*; `password_changed`), `instance.start` (success and failure), `instance.stop`, `instance.restart`, `instance.dismiss`, `instance.kill` (every kill attempt that passes the state precondition; detail `instance_id` + bounded `outcome` `terminated|reconciled|refused` + `reason`), `instance.cleanup` (`mode` + `deleted` count), `config.reload` (ADR 009; `status` `reloaded|rejected` + bounded field-name lists `applied` / `restart_required`; rejected events carry `error=invalid_config`, never file content).
+First-scope event taxonomy: `login.success`, `login.failure` (attempted user), `login.rate_limited`, `session.logout`, `settings.saved` (changed field *names*; `password_changed`), `instance.start` (success and failure), `instance.stop`, `instance.restart`, `instance.dismiss`, `instance.kill` (every kill attempt that passes the state precondition; detail `instance_id` + bounded `outcome` `terminated|reconciled|refused` + `reason`), `instance.cleanup` (`mode` + `deleted` count), `config.reload` (ADR 009; `status` `reloaded|rejected` + bounded field-name lists `applied` / `restart_required`; rejected events carry `error=invalid_config`, never file content), `pipeline.start` / `pipeline.stop` / `pipeline.restart` (ADR 010; bounded per-outcome counters).
 
-The audit log never contains passwords or hashes, session/CSRF tokens, environment values, request bodies, or raw headers.
+Entity-CRUD extension (ADR 007 §2a): `model.create|update|delete|activate|deactivate`, `runtime.create|update|delete|replace|cascade_delete`, `pipeline.create|update|delete` — success-only, after the durable mutation, no event on 400/404/409. Detail: identifiers, bounded counts/booleans, and changed field *names* only (sentinel `"changed"`, never values) — `model.update`/`runtime.update`/`pipeline.update` record one `"<field>":"changed"` key per changed field; `runtime.replace` adds `new_runtime_id` + `models_moved`; `runtime.cascade_delete` adds `models_deleted`; `pipeline.create` adds `entries`; `model.activate`/`model.deactivate` add `active` `true`/`false`. Model-page and runtime-page process actions are not audited here (the `instance.*` trail is the sole process-lifecycle record).
+
+The audit log never contains passwords or hashes, session/CSRF tokens, environment values, entity names, launch args, executable/working-directory paths, request bodies, or raw headers.
 
 ## Instances (processes)
 
@@ -269,7 +271,9 @@ args entirely at launch; an empty/absent `args` uses the model's own args.
 | POST | /api/v1/pipelines/{id}/restart | Yes | Yes | Reverse stop then ALWAYS forward start. `200 {pipeline_id, stop_results:[…], start_results:[…]}`. |
 
 Lifecycle requests emit one `pipeline.start` / `pipeline.stop` / `pipeline.restart` audit
-event each (bounded counters only). Pipeline CRUD is not audited in first scope.
+event each (bounded counters only). Pipeline CRUD emits `pipeline.create|update|delete`
+(success-only; detail: `id`, `entries` count on create, changed field *names* on update —
+ADR 007 §2a).
 
 ## Logs (aggregated)
 

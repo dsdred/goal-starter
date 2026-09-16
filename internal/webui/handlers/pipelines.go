@@ -218,6 +218,10 @@ func (h *PipelineHandler) Create(w http.ResponseWriter, r *http.Request) {
 		writeServiceError(w, err)
 		return
 	}
+	logAudit(h.audit, h.sess, r, audit.EventPipelineCreate, map[string]string{
+		"id":      entry.ID,
+		"entries": strconv.Itoa(len(entry.Models)),
+	})
 	writeJSON(w, http.StatusCreated, newPipelineResponse(&entry, h.modelName))
 }
 
@@ -234,9 +238,31 @@ func (h *PipelineHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	entry.ID = id
+	var prev *storage.PipelineEntry
+	if p, err := h.repo.GetPipeline(id); err == nil {
+		prev = p
+	}
 	if err := h.svc.UpdatePipeline(r.Context(), &entry); err != nil {
 		writeServiceError(w, err)
 		return
+	}
+	// Audit: changed field names only, never values (ADR 007 §2/§5,
+	// settings.saved precedent). Entry Args values are compared in memory
+	// but never recorded.
+	if prev != nil {
+		changed := map[string]string{"id": id}
+		if prev.Name != entry.Name {
+			changed["name"] = "changed"
+		}
+		if prev.Active != entry.Active {
+			changed["active"] = "changed"
+		}
+		if pipelineModelsChanged(prev.Models, entry.Models) {
+			changed["models"] = "changed"
+		}
+		if len(changed) > 1 {
+			logAudit(h.audit, h.sess, r, audit.EventPipelineUpdate, changed)
+		}
 	}
 	saved, err := h.repo.GetPipeline(id)
 	if err != nil {
@@ -244,6 +270,30 @@ func (h *PipelineHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, newPipelineResponse(saved, h.modelName))
+}
+
+// pipelineModelsChanged reports whether two pipeline entry lists differ in
+// structure or content (entry sequence, model references, Args, AutoStart).
+// Used only for the bounded "models":"changed" audit marker — values are
+// compared in memory and never recorded.
+func pipelineModelsChanged(a, b []storage.PipelineModel) bool {
+	if len(a) != len(b) {
+		return true
+	}
+	for i := range a {
+		if a[i].ID != b[i].ID || a[i].ModelID != b[i].ModelID || a[i].AutoStart != b[i].AutoStart {
+			return true
+		}
+		if len(a[i].Args) != len(b[i].Args) {
+			return true
+		}
+		for j := range a[i].Args {
+			if a[i].Args[j] != b[i].Args[j] {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // Delete handles DELETE /api/v1/pipelines/{id}.
@@ -257,6 +307,7 @@ func (h *PipelineHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		writeServiceError(w, err)
 		return
 	}
+	logAudit(h.audit, h.sess, r, audit.EventPipelineDelete, map[string]string{"id": id})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
 

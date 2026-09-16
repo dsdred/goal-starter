@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/dsdred/goal/internal/domain"
 	"github.com/dsdred/goal/internal/process"
 	"github.com/dsdred/goal/internal/storage"
+	"github.com/dsdred/goal/internal/webui/audit"
 	apierrors "github.com/dsdred/goal/internal/webui/errors"
 	"github.com/dsdred/goal/internal/webui/security"
 )
@@ -77,6 +79,8 @@ type RuntimesHandler struct {
 	instances  *application.InstanceService
 	supervisor *process.Supervisor
 	csrf       *security.CSRF
+	audit      *audit.AuditLogger
+	sess       *security.SessionStore
 }
 
 // NewRuntimesHandler creates a new RuntimesHandler.
@@ -87,6 +91,20 @@ func NewRuntimesHandler(runtimeSvc *application.RuntimeService, instances *appli
 		supervisor: supervisor,
 		csrf:       csrf,
 	}
+}
+
+// WithAudit injects the durable audit logger (ADR 007 entity extension).
+// A nil logger disables audit emission for this handler.
+func (h *RuntimesHandler) WithAudit(logger *audit.AuditLogger) *RuntimesHandler {
+	h.audit = logger
+	return h
+}
+
+// WithSessionStore injects the session store used to resolve the
+// authenticated user for audit records.
+func (h *RuntimesHandler) WithSessionStore(sess *security.SessionStore) *RuntimesHandler {
+	h.sess = sess
+	return h
 }
 
 // List handles GET /api/v1/runtimes
@@ -139,6 +157,7 @@ func (h *RuntimesHandler) Create(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, err.Error())
 		return
 	}
+	logAudit(h.audit, h.sess, r, audit.EventRuntimeCreate, map[string]string{"id": entry.ID})
 	writeJSON(w, http.StatusCreated, newRuntimeResponse(&entry))
 }
 
@@ -195,6 +214,24 @@ func (h *RuntimesHandler) Update(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, err.Error())
 		return
 	}
+	// Audit: changed field names only, never values (ADR 007 §2/§5,
+	// settings.saved precedent).
+	changed := map[string]string{"id": id}
+	if request.Name != nil {
+		changed["name"] = "changed"
+	}
+	if request.Executable != nil {
+		changed["executable"] = "changed"
+	}
+	if request.WorkingDirectory != nil {
+		changed["working_directory"] = "changed"
+	}
+	if len(request.EnvironmentPatch) > 0 {
+		changed["environment"] = "changed"
+	}
+	if len(changed) > 1 {
+		logAudit(h.audit, h.sess, r, audit.EventRuntimeUpdate, changed)
+	}
 	entry, err := h.runtimeSvc.GetRuntime(r.Context(), id)
 	if err != nil {
 		writeError(w, 500, err.Error())
@@ -226,6 +263,7 @@ func (h *RuntimesHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, err.Error())
 		return
 	}
+	logAudit(h.audit, h.sess, r, audit.EventRuntimeDelete, map[string]string{"id": id})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
 
@@ -265,6 +303,13 @@ func (h *RuntimesHandler) Replace(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, err.Error())
 		return
 	}
+	// Cascade (option B): one top-level event + bounded moved count, never
+	// per-model events.
+	logAudit(h.audit, h.sess, r, audit.EventRuntimeReplace, map[string]string{
+		"id":             id,
+		"new_runtime_id": request.NewRuntimeID,
+		"models_moved":   strconv.Itoa(moved),
+	})
 	writeJSON(w, http.StatusOK, map[string]any{"status": "replaced", "models_moved": moved})
 }
 
@@ -293,6 +338,12 @@ func (h *RuntimesHandler) CascadeDelete(w http.ResponseWriter, r *http.Request) 
 		writeError(w, 500, err.Error())
 		return
 	}
+	// Cascade (option B): one top-level event + bounded deleted count, never
+	// per-model events.
+	logAudit(h.audit, h.sess, r, audit.EventRuntimeCascadeDel, map[string]string{
+		"id":             id,
+		"models_deleted": strconv.Itoa(deleted),
+	})
 	writeJSON(w, http.StatusOK, map[string]any{"status": "deleted", "models_deleted": deleted})
 }
 

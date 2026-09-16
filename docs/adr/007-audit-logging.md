@@ -1,6 +1,6 @@
 # ADR 007: Full Audit Logging — Structured Security Event Records
 
-**Status:** Accepted — agreed 2026-08-24, implemented 2026-08-25, shipped `d46514a9e343222e31565fbc11999670eb87d82a` (CI run 32776891778, 6/6 PASS including Linux race)
+**Status:** Accepted — agreed 2026-08-24, implemented 2026-08-25, shipped `d46514a9e343222e31565fbc11999670eb87d82a` (CI run 32776891778, 6/6 PASS including Linux race). **Entity-CRUD extension** (this ADR's §2 "future expansion" scope): accepted design 2026-09-16, implemented 2026-09-16 (13 additive events; see the extension table in §2)
 **Date:** 2026-08-24
 **Related:** ROADMAP P0 "Full audit logging"; ADR 005 (Dismiss audit commitment); ADR 006 (credential storage)
 
@@ -52,7 +52,29 @@ type AuditEvent struct {
 | `instance.kill` | `POST /api/v1/instances/{id}/kill` — every attempt that passes the state precondition, including refusals (ADR 008, additive extension) | `instance_id`, bounded `outcome` `terminated\|reconciled\|refused`, bounded `reason` (`sigterm\|sigkill\|terminateprocess\|pid-gone\|identity-unconfirmed\|insufficient-privilege\|unconfirmed`) |
 | `instance.cleanup` | `POST /api/v1/instances/cleanup` | `mode`, `deleted` count |
 
-Out of first scope (future expansion, same logger): model CRUD, runtime CRUD/replace/cascade, session expiry cleanup, health-check failures. Rationale: the ROADMAP item names login, session, settings, instance actions; model/runtime events are a bounded extension once the contract is proven.
+Remaining out of scope (future expansion, same logger): session expiry cleanup, health-check failures. Rationale: the ROADMAP item names login, session, settings, instance actions; model/runtime/pipeline events are a bounded extension once the contract is proven (implemented below).
+
+### 2a. Entity-CRUD extension (accepted design 2026-09-16, implemented 2026-09-16)
+
+Thirteen additive events close the model/runtime/pipeline CRUD gap (and fulfill the ADR 010 D6 pipeline-CRUD deferral). Same conventions as the first scope: `noun.verb` names, one event per successful durable mutation, **success-only** (no event on 400/404/409), fail-open, actor = authenticated user, `src_ip` = TCP peer. Detail carries **identifiers, bounded booleans/counts, and changed field *names* (sentinel `"changed"`)** — never entity payload values (names, args, environment, executable, working directory).
+
+| Event | Emitted on | Detail |
+|-------|-----------|--------|
+| `model.create` | `POST /api/v1/models` 201 | `id` |
+| `model.update` | `PUT /api/v1/models/{id}` 200 (only when ≥1 field targeted) | `id` + one key per changed field = `"changed"` (`name`, `runtime_id`, `args`, `active`, `autostart_delay`, `environment`) |
+| `model.delete` | `DELETE /api/v1/models/{id}` 200 | `id` |
+| `model.activate` | `POST /api/v1/models/{id}/activate` 200 | `id`, `active: "true"` |
+| `model.deactivate` | `POST /api/v1/models/{id}/deactivate` 200 | `id`, `active: "false"` |
+| `runtime.create` | `POST /api/v1/runtimes` 201 | `id` |
+| `runtime.update` | `PUT /api/v1/runtimes/{id}` 200 (only when ≥1 field targeted) | `id` + one key per changed field = `"changed"` (`name`, `executable`, `working_directory`, `environment`) |
+| `runtime.delete` | `DELETE /api/v1/runtimes/{id}` 200 | `id` |
+| `runtime.replace` | `POST /api/v1/runtimes/{id}/replace` 200 | `id`, `new_runtime_id`, `models_moved` (count) — cascade recorded as bounded metadata, never per-model events |
+| `runtime.cascade_delete` | `POST /api/v1/runtimes/{id}/cascade-delete` 200 | `id`, `models_deleted` (count) — same cascade policy |
+| `pipeline.create` | `POST /api/v1/pipelines` 201 | `id`, `entries` (count) |
+| `pipeline.update` | `PUT /api/v1/pipelines/{id}` 200 (only when content changed) | `id` + one key per changed field = `"changed"` (`name`, `active`, `models`) |
+| `pipeline.delete` | `DELETE /api/v1/pipelines/{id}` 200 | `id` |
+
+**Model-page / runtime-page process actions are NOT audited here.** `POST /api/v1/models/{id}/{start,stop,restart}` and `POST /api/v1/runtimes/{id}/action/{start,stop,restart}` operate on instances; the `instance.*` first-scope events are the sole process-lifecycle trail, and duplicate `model.start`-class events are deliberately omitted. `model.activate`/`model.deactivate` ARE audited because they persist `Model.Active` (autostart state) without touching any process.
 
 Events are emitted **only for the actions above** — not per-GET, not per-request (the request-level stdout log remains the operational record).
 

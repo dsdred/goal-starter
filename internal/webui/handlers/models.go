@@ -10,6 +10,7 @@ import (
 	"github.com/dsdred/goal/internal/domain"
 	"github.com/dsdred/goal/internal/process"
 	"github.com/dsdred/goal/internal/storage"
+	"github.com/dsdred/goal/internal/webui/audit"
 	apierrors "github.com/dsdred/goal/internal/webui/errors"
 	"github.com/dsdred/goal/internal/webui/security"
 )
@@ -52,6 +53,8 @@ type ModelsHandler struct {
 	supervisor  *process.Supervisor
 	repo        storage.Repository
 	csrf        *security.CSRF
+	audit       *audit.AuditLogger
+	sess        *security.SessionStore
 }
 
 func NewModelsHandler(modelSvc *application.ModelService, instanceSvc *application.InstanceService, supervisor *process.Supervisor, repo storage.Repository, csrf *security.CSRF) *ModelsHandler {
@@ -62,6 +65,20 @@ func NewModelsHandler(modelSvc *application.ModelService, instanceSvc *applicati
 		repo:        repo,
 		csrf:        csrf,
 	}
+}
+
+// WithAudit injects the durable audit logger (ADR 007 entity extension).
+// A nil logger disables audit emission for this handler.
+func (h *ModelsHandler) WithAudit(logger *audit.AuditLogger) *ModelsHandler {
+	h.audit = logger
+	return h
+}
+
+// WithSessionStore injects the session store used to resolve the
+// authenticated user for audit records.
+func (h *ModelsHandler) WithSessionStore(sess *security.SessionStore) *ModelsHandler {
+	h.sess = sess
+	return h
 }
 
 func (h *ModelsHandler) List(w http.ResponseWriter, r *http.Request) {
@@ -106,6 +123,7 @@ func (h *ModelsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, err.Error())
 		return
 	}
+	logAudit(h.audit, h.sess, r, audit.EventModelCreate, map[string]string{"id": entry.ID})
 	writeJSON(w, 201, newModelResponse(&entry))
 }
 
@@ -155,6 +173,30 @@ func (h *ModelsHandler) Update(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, err.Error())
 		return
 	}
+	// Audit: changed field names only, never values (ADR 007 §2/§5,
+	// settings.saved precedent).
+	changed := map[string]string{"id": id}
+	if req.Name != nil {
+		changed["name"] = "changed"
+	}
+	if req.RuntimeID != nil {
+		changed["runtime_id"] = "changed"
+	}
+	if req.Args != nil {
+		changed["args"] = "changed"
+	}
+	if req.Active != nil {
+		changed["active"] = "changed"
+	}
+	if req.AutostartDelay != nil {
+		changed["autostart_delay"] = "changed"
+	}
+	if len(req.EnvironmentPatch) > 0 {
+		changed["environment"] = "changed"
+	}
+	if len(changed) > 1 {
+		logAudit(h.audit, h.sess, r, audit.EventModelUpdate, changed)
+	}
 	entry, err := h.modelSvc.GetModel(r.Context(), id)
 	if err != nil {
 		writeError(w, 500, err.Error())
@@ -185,6 +227,7 @@ func (h *ModelsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, err.Error())
 		return
 	}
+	logAudit(h.audit, h.sess, r, audit.EventModelDelete, map[string]string{"id": id})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
 
@@ -271,6 +314,7 @@ func (h *ModelsHandler) Activate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, err.Error())
 		return
 	}
+	logAudit(h.audit, h.sess, r, audit.EventModelActivate, map[string]string{"id": id, "active": "true"})
 	writeJSON(w, http.StatusOK, newModelResponse(entry))
 }
 
@@ -290,6 +334,7 @@ func (h *ModelsHandler) Deactivate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, err.Error())
 		return
 	}
+	logAudit(h.audit, h.sess, r, audit.EventModelDeactivate, map[string]string{"id": id, "active": "false"})
 	writeJSON(w, http.StatusOK, newModelResponse(entry))
 }
 

@@ -62,6 +62,24 @@ const (
 	EventPipelineStart    = "pipeline.start"
 	EventPipelineStop     = "pipeline.stop"
 	EventPipelineRestart  = "pipeline.restart"
+
+	// Entity CRUD extension (ADR 007 §2 future expansion, accepted design
+	// 2026-09-16): success-only, emitted after the durable mutation; detail
+	// carries identifiers, bounded booleans/counts, and changed field names
+	// only — never entity payload values.
+	EventModelCreate       = "model.create"
+	EventModelUpdate       = "model.update"
+	EventModelDelete       = "model.delete"
+	EventModelActivate     = "model.activate"
+	EventModelDeactivate   = "model.deactivate"
+	EventRuntimeCreate     = "runtime.create"
+	EventRuntimeUpdate     = "runtime.update"
+	EventRuntimeDelete     = "runtime.delete"
+	EventRuntimeReplace    = "runtime.replace"
+	EventRuntimeCascadeDel = "runtime.cascade_delete"
+	EventPipelineCreate    = "pipeline.create"
+	EventPipelineUpdate    = "pipeline.update"
+	EventPipelineDelete    = "pipeline.delete"
 )
 
 // AuditEvent is a single structured security audit record.

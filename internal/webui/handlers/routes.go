@@ -91,13 +91,16 @@ func WithLiveConfig(cfg *config.Config) RouteRegistryOption {
 }
 
 // WithAuditLogger wires the durable audit logger (ADR 007) into the auth,
-// system, instance, and pipeline handlers and the login rate-limit wrapper.
+// system, instance, model, runtime, and pipeline handlers and the login
+// rate-limit wrapper.
 func WithAuditLogger(logger *audit.AuditLogger) RouteRegistryOption {
 	return func(r *RouteRegistry) {
 		r.audit = logger
 		r.authHandler.WithAudit(logger)
 		r.systemHandler.WithAudit(logger)
 		r.instanceHandler.WithAudit(logger).WithSessionStore(r.sessionStore)
+		r.modelHandler.WithAudit(logger).WithSessionStore(r.sessionStore)
+		r.runtimeHandler.WithAudit(logger).WithSessionStore(r.sessionStore)
 		if r.pipelineHandler != nil {
 			r.pipelineHandler.WithAudit(logger).WithSessionStore(r.sessionStore)
 		}
