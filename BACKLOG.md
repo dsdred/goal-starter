@@ -214,6 +214,10 @@
   - Мигрируется автоматически при загрузке старого конфига
 - [x] Runtime-specific health check config (`RuntimeHealthCheck`)
   - `Type`, `Enabled`, `Interval`, `Timeout`, `Host`, `Port`, `HTTPPath`
+- [ ] `internal/webui/handlers` -race suite структурно тяжёлый (test-performance debt; mitigation применён 2026-09-16, корневая тяжесть остаётся)
+  - Evidence (CI `go test -race ./...`, step wall ≈ handlers package): run 129 (919e3a0, pre-ADR-007-ext) 574s PASS; run 130 (3b8519e) 443s PASS; run 131 (5782e47) >600s FAIL ×2 (default per-package `-timeout` 10m0s) — сьюта систематически на границе 600s-бюджета ещё до ADR 007 entity extension
+  - Mitigation (2026-09-16): (1) dedup cost-12 bcrypt generates в audit harness — 33 full-stack env × 2 generates (~230ms each) заменены одним precomputed хэшем + `SetHash` (isolation и login-verify сохранены); handlers non-race 63s → 46s локально; (2) CI race step: явный `-timeout 20m` (measured 443-600s+ observations + >2× headroom)
+  - Остаток: 33 full-stack env + repo JSON save на мутацию + audit fsync на событие — если сьюта продолжит расти или раннеры будут медленнее, требуется структурное решение (env-reuse/parallelization) и повторное обоснование 20m-бюджета
 - [ ] Browser suite `core.cjs` check 24.1 flake в restart-окне (test-harness hardening debt; НЕ production defect; НЕ исправлен)
   - Симптом (наблюдено один раз в CI): `24.1 Auth phase: no unexpected console errors` — 3 × `net::ERR_CONNECTION_REFUSED`. Evidence: ADR 007 SHA `3b8519e`, CI run `35055731936` (first pass FAIL; same-SHA rerun 7/7 PASS); локальные попытки воспроизведения 3/3 PASS (57/57); repository-content correction не требовалась
   - Механизм: Phase B `server.stop()` (core.cjs:346) выполняется, пока auth-OFF страница (page) открыта; `watchPage` (harness.cjs:166-174) без unwatch пишет console-ошибки обеих страниц (page L62 + page2 L359) в общий `suite.consoleErrors`; запросы в окне stop→server2-accept дают connection-refused, а whitelist 24.1 (core.cjs:387-388) фильтрует только 401-уведомления

@@ -43,6 +43,21 @@ const (
 	auditTestEnvSecret   = "env-secret-value-xyz-42"
 )
 
+// auditTestOldPasswordHash is the bcrypt (cost 12) hash of
+// auditTestOldPassword, computed once per test binary. Each audit env used
+// to regenerate it twice (SetPassword + config.HashPassword, ~230ms each at
+// cost 12), which was a major share of the package's -race runtime; the
+// shared value keeps per-env isolation (own store/config/files) while
+// dropping the redundant work. Login still performs a real
+// CompareHashAndPassword against this hash in every test.
+var auditTestOldPasswordHash = func() string {
+	h, err := config.HashPassword(auditTestOldPassword)
+	if err != nil {
+		panic(err)
+	}
+	return h
+}()
+
 type auditEnv struct {
 	router    http.Handler
 	logger    *audit.AuditLogger
@@ -66,8 +81,8 @@ func newAuditEnv(t *testing.T, loginLimit int) *auditEnv {
 	sup := process.NewSupervisor(repo)
 
 	passStore := security.NewPasswordStore()
-	if err := passStore.SetPassword("admin", auditTestOldPassword); err != nil {
-		t.Fatalf("set password: %v", err)
+	if err := passStore.SetHash("admin", auditTestOldPasswordHash); err != nil {
+		t.Fatalf("set password hash: %v", err)
 	}
 
 	cfgPath := filepath.Join(dataDir, "goal.json")
@@ -75,11 +90,7 @@ func newAuditEnv(t *testing.T, loginLimit int) *auditEnv {
 	cfg.DataDir = dataDir
 	cfg.AuthEnabled = true
 	cfg.AdminUser = "admin"
-	hash, err := config.HashPassword(auditTestOldPassword)
-	if err != nil {
-		t.Fatalf("hash password: %v", err)
-	}
-	cfg.AdminPasswordHash = hash
+	cfg.AdminPasswordHash = auditTestOldPasswordHash
 	if err := config.Save(cfgPath, cfg); err != nil {
 		t.Fatalf("save config: %v", err)
 	}
@@ -677,16 +688,15 @@ func TestAuditWriteFailureIsFailOpen(t *testing.T) {
 	}
 	sup := process.NewSupervisor(repo)
 	passStore := security.NewPasswordStore()
-	if err := passStore.SetPassword("admin", auditTestOldPassword); err != nil {
-		t.Fatalf("set password: %v", err)
+	if err := passStore.SetHash("admin", auditTestOldPasswordHash); err != nil {
+		t.Fatalf("set password hash: %v", err)
 	}
 	cfgPath := filepath.Join(dataDir, "goal.json")
 	cfg := config.Default()
 	cfg.DataDir = dataDir
 	cfg.AuthEnabled = true
 	cfg.AdminUser = "admin"
-	hash, _ := config.HashPassword(auditTestOldPassword)
-	cfg.AdminPasswordHash = hash
+	cfg.AdminPasswordHash = auditTestOldPasswordHash
 	if err := config.Save(cfgPath, cfg); err != nil {
 		t.Fatalf("save config: %v", err)
 	}
