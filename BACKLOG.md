@@ -154,7 +154,7 @@
 - [x] Activate/deactivate profile endpoints
 - [x] Log filtering and pagination (server-side) — `internal/process/log_store.go`, `GET /api/v1/logs/query`
 - [x] WebSocket для log stream (`internal/webui/websocket/`)
-- [x] Metrics endpoint (Prometheus format) — `internal/webui/metrics/`
+- [x] Metrics endpoint — `GET /api/v1/metrics` (JSON system state: instance counts + server settings, requireAuth; `handlers/system.go`). Примечание (forensic 2026-09-16): пометка "Prometheus format" была неверна — dead v0.8 Prometheus-прототип `internal/webui/metrics/` (wired только в v0.8 `6759dbe`, снят в v0.8.1 `a042c11`, 0 импортеров) удалён как dead code вместе с orphan `ServeMetrics` (server.go); Prometheus-compatible monitoring остаётся open в ROADMAP (требует отдельного design/ADR и Owner-решений по exposure policy и implementation approach)
 - [ ] `DELETE /api/v1/models/{id}` на несуществующую модель возвращает 500 вместо 404 (bounded API-correctness defect, обнаружен во время ADR 007 entity-audit реализации, 2026-09-16; НЕ исправлен)
    - Доказательная цепочка: `JSONRepository.DeleteModel` (internal/storage/repository.go:965) возвращает plain `fmt.Errorf("model not found: %s", id)` — не `APIError` — поэтому в `ModelsHandler.Delete` (internal/webui/handlers/models.go:214-228) `errors.As` не срабатывает, mapping `CodeNotFound → 404` (models.go:218-223) для этого пути мёртвый, и handler падает в `writeError(w, 500, err.Error())`. Sibling-эндпоинты намеренно возвращают 404 на отсутствующую модель: `Activate`/`Deactivate` (models.go:309/329), `RuntimesHandler.Delete` (runtimes.go:257-258)
    - ADR 007 тест (audit_entity_test.go:151-154) сознательно утверждает только "rejection" (not 404) — тест на 404 не ждать, пока handler не вернёт 404
@@ -226,7 +226,7 @@
 ### P2 — Monitoring
 
 - [x] Request logging middleware (`internal/webui/middleware/logging.go`)
-- [x] Metrics endpoint (Prometheus format) — `internal/webui/metrics/`
+- [x] Metrics endpoint — `GET /api/v1/metrics` (JSON system state, requireAuth). (2026-09-16: dead Prometheus-прототип `internal/webui/metrics/` удалён как dead code — детали в P1 API-пункте; Prometheus monitoring open в ROADMAP)
 - [x] Structured JSON logger — `internal/webui/logger/`
   - `JSONLogger` — логгер с JSON-форматом вывода
   - `Level` — уровни (DEBUG, INFO, WARN, ERROR, FATAL)

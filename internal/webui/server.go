@@ -273,17 +273,3 @@ func staticEmbedded() []string {
 	entries, _ := fs.Glob(staticFS, "**")
 	return entries
 }
-
-// ServeMetrics returns Prometheus-compatible metrics.
-func ServeMetrics(w http.ResponseWriter, r *http.Request) {
-	var m runtime.MemStats
-	runtime.ReadMemStats(&m)
-
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	fmt.Fprintf(w, "# HELP go_memstats_alloc_bytes Current number of bytes allocated in the application.\n")
-	fmt.Fprintf(w, "# TYPE go_memstats_alloc_bytes gauge\n")
-	fmt.Fprintf(w, "go_memstats_alloc_bytes %d\n", m.Alloc)
-	fmt.Fprintf(w, "# HELP go_memstats_total_alloc Cumulative bytes allocated.\n")
-	fmt.Fprintf(w, "# TYPE go_memstats_total_alloc gauge\n")
-	fmt.Fprintf(w, "go_memstats_total_alloc %d\n", m.TotalAlloc)
-}

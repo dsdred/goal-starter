@@ -50,7 +50,6 @@ main
 | Безопасность | `internal/webui/security/` | Сессии, CSRF, password store (bcrypt). |
 | Ошибки | `internal/webui/errors/` | Структурированные API коды ошибок и классификация. |
 | Валидация | `internal/webui/validation/` | Валидация порта, хоста, адреса. |
-| Метрики | `internal/webui/metrics/` | Метрики приложения в формате Prometheus. |
 | Логгер | `internal/webui/logger/` | Структурированный JSON HTTP логгер. |
 | Health | `internal/webui/health/` | TCP/HTTP health checker для рантаймов. |
 

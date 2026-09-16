@@ -50,7 +50,6 @@ main
 | Security | `internal/webui/security/` | Sessions, CSRF, password store (bcrypt). |
 | Errors | `internal/webui/errors/` | Structured API error codes and classification. |
 | Validation | `internal/webui/validation/` | Port, host, address validation. |
-| Metrics | `internal/webui/metrics/` | Prometheus-format application metrics. |
 | Logging | `internal/webui/logger/` | Structured JSON HTTP logger. |
 | Health | `internal/webui/health/` | TCP/HTTP health checker for runtimes. |
 

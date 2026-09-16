@@ -81,7 +81,7 @@
   - Constraint (not a hard dependency): secret-safe export must account for Secure Credential Storage (P0) and future TLS private keys; the portable-config ADR defines the export security contract, but implementation is not blocked until both directions land
 - [ ] Persistent logs
 - [ ] Configurable log storage location
-- [ ] Prometheus-compatible monitoring
+- [ ] Prometheus-compatible monitoring — forensic (2026-09-16, verdict D): the v0.8 Prometheus prototype `internal/webui/metrics/` (wired only in v0.8 `6759dbe`, unwired in v0.8.1 `a042c11`, 0 importers per `go list`/`go mod why`) was removed as dead code along with the orphaned `ServeMetrics` (server.go); the live `GET /api/v1/metrics` is a JSON system-state endpoint (Settings UI contract, ADR 006 secret-safe scenario) — path collision noted. Implementation requires a separate design/ADR and Owner decisions: (a) exposure policy (path / auth / listener), (b) implementation approach (client_golang vs hand-rolled exposition)
 - [ ] Bruno API collections
 - [ ] Supervisor decomposition
 - [x] `internal/webui/errors`: the nested-format writers (`APIError.WriteJSON`, `WriteError`, `ErrorResponse`, the `{"error":{"error_code",...}}` block) and 10 unused predefined error vars/constructors removed from the package (technical debt, surfaced during the 2026-08-29 i18n task). Package retained because `Code`/`APIError`/`NewAPIError`/`ErrValidation`/`ErrRuntimeNotFound` are live production dependencies used by 14 importers. The shipped flat `writeError`/`writeAPIError` contract (`error` / `code` / `details`) is unchanged.
