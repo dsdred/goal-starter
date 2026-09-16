@@ -137,7 +137,6 @@ Formalized as the D2 owner contract in [ADR 010](docs/adr/010-pipeline.md) (Acce
 - [ ] Auto-update
 - [ ] Advanced Pipeline: DAG / dependencies / readiness / resource scheduling
 - [ ] ACME / automatic certificate management (depends on Native HTTPS / TLS)
-- [ ] MCP (Model Context Protocol) interface: expose GoAl management (models, runtimes, pipelines, instances, logs, settings) as MCP tools/resources so AI agents and assistants can operate GoAl programmatically; requires its own design gate (protocol mapping, tool/resource surface, auth/CSRF bridge, secret-safety for proxied operations) before implementation
 - [ ] macOS support (low priority): validate and support GoAl on darwin/amd64 and darwin/arm64; native lifecycle/service integration (launchd-specific design) and distribution/signing/notarization to be defined only when product demand justifies the platform work — **macOS is not currently supported**
 
 ## Product/UX evolution (multi-release)
@@ -183,11 +182,30 @@ Formalized as the D2 owner contract in [ADR 010](docs/adr/010-pipeline.md) (Acce
 - [ ] Configured vs effective value display
 - [ ] Secret-safe expansion (never expose stored secrets)
 
-### Pipeline & runtime future ideas (owner-logged 2026-09-09 — recorded, NOT started)
-- Each is a future product direction (A/B = D, C = E) raised during the ADR 013 owner-acceptance. **None is implemented here**; each requires its own design gate (ADR, and a contract agreement for C) before any implementation, per the `ROADMAP → ADR → contract → implementation` rule. They are logged so the ideas are not lost in chat.
+### Product direction: on-demand local AI infrastructure (owner direction agreed 2026-09-16 — direction only, NOT an implementation contract)
+
+GoAl evolves from a launcher/runtime manager toward a **manager/orchestrator of local AI infrastructure**: an application requests a model through a standard API; GoAl can start and wait for the required runtime, proxy inference, and release resources (RAM/VRAM) when the model becomes idle. **RUNNING is not READY** — the current documented contract (USER_GUIDE, state semantics) is process liveness only; waiting for actual model readiness is new. This is a **product direction**, not an approved implementation contract; every item below is open and **NOT started**, and each requires its own design gate (ADR + owner contract) before implementation per the `ROADMAP → ADR → contract → implementation` rule. Deliberately NOT decided here (future design gates): endpoint schema, exact routes, queue semantics, concurrent-start semantics, eviction policy, VRAM scheduling, model-switching policy, streaming protocol implementation, retry policy, timeout defaults, authentication design, load balancing.
+
+**Core product track** (dependency chain: Readiness → On-demand Gateway → standard inference compatibility → resource lifecycle / auto-unload):
+
+- [ ] **1 — Readiness / Health probes:** GoAl must be able to tell that a launched runtime/model is actually READY to serve — not merely RUNNING (process liveness). Probe contract per runtime type, readiness state in the API/UI, bounded probe failures/timeouts. Existing substrate (historical, see BACKLOG [x]): runtime-level health endpoint `GET /api/v1/runtimes/health/{id}` + 30 s periodic polling + `ProfileHealthCheck`/`RuntimeHealthCheck` config fields — a design gate must define what "model ready for inference" means beyond the existing process/HTTP liveness checks. Related: "Advanced Pipeline" (readiness) in Later.
+- [ ] **2 — HTTP Gateway / On-demand model activation:** expose GoAl as a gateway that launches (or reuses an already-running) model on demand and proxies to it once the model is READY (item 1) — "give me a chat/completion endpoint for model X and GoAl ensures it is up and ready". Major new direction: a new domain entity (on-demand API session), an HTTP proxy surface, lifecycle ownership (when the model is stopped), auth + secret-safety for proxied keys, and a public API. Requires a full architecture ADR before any implementation. Related to the existing "Advanced Pipeline" and "Native HTTPS / TLS" items.
+- [ ] **3 — Standard inference compatibility (OpenAI- / Anthropic-compatible):** the gateway (item 2) speaks the standard inference APIs applications already use — an OpenAI-compatible and an Anthropic-compatible request/response surface (chat/completions-class), proxied to the local runtime. Items 2 and 3 are recorded as a **dependent pair** (the pre-existing item C covered gateway + OpenAI-compatible proxy together); whether they land as one design/implementation unit or separate ones is a **design-gate decision** — no artificial split here. Streaming protocol and retry/timeout semantics: future design gates.
+- [ ] **4 — Idle timeout / automatic unload:** after a period of inactivity, GoAl stops the model's runtime to release RAM/VRAM; the next request re-triggers the on-demand chain (items 1–3). Eviction policy, timeout defaults, and concurrency semantics: future design gates.
+
+**Control plane (AI agent → GoAl management):**
+
+- [ ] MCP (Model Context Protocol) interface: expose GoAl management (candidate surface: models, runtimes, pipelines, instances, logs, settings — the exact tool/resource surface is **not decided**) as MCP tools/resources so AI agents and assistants can operate GoAl programmatically. **MCP is the control plane and is NOT the inference proxy** (that is the core product track, items 2–3). ADR 007 audit logging is the existing accountability substrate for MCP actions. Requires its own design gate (protocol mapping, auth, audit/accountability, CSRF/API boundary where applicable, secret-safety for proxied operations) before implementation. *(relocated from Later, 2026-09-16)*
+
+**Supporting UX (independent product improvements):**
+
 - [ ] **A — Clone / Duplicate (Pipeline & Model):** one-click copy of a Pipeline (all entries, order, per-entry Args, `Active` flag) or a Model (Args, env, runtime) into a new independent, editable entity. Today replication is manual re-entry via the builder/wizard. Additive, no schema change expected; a small contract is still needed (entry ids are regenerated on a pipeline copy; Args copied verbatim; the copy is fully independent).
+- [ ] **GGUF discovery / model scan:** point GoAl at a catalog directory; GoAl discovers the GGUF models present and helps add them as Models without manual path entry for each. Recursive-scan rules, metadata parsing, deduplication, and import UX: future design gate.
+
+**Observability:**
+
 - [ ] **B — Per-launch Metrics / Benchmarking:** capture per-instance launch latency, time-to-ready, tokens/s (where the runtime exposes it), and peak RSS, surfaced in the Instances/History view and optionally as a per-Pipeline aggregate. Gives the owner the "how fast / how heavy is each launch" signal the current UI lacks. Additive telemetry with no new launch semantics; needs a design note on capture points, bounded storage, and display.
-- [ ] **C — HTTP Runtime Gateway / On-demand Model API:** expose GoAl as a gateway that launches (or reuses an already-running) model on demand and proxies an HTTP endpoint (OpenAI-compatible or llama.cpp-native) to it — "give me a chat/completion endpoint for model X and GoAl ensures it is up". Major new direction: a new domain entity (on-demand API session), an HTTP proxy surface, lifecycle ownership (when the model is stopped), auth/CSRF + secret-safety for proxied keys, and a public API. Requires a full architecture ADR before any implementation. Related to the existing "Advanced Pipeline" and "Native HTTPS / TLS" items.
+- Prometheus-compatible monitoring: separate design track — the open P1 item above (forensic 2026-09-16: dead v0.8 prototype removed; live `GET /api/v1/metrics` is the existing JSON system-state contract; requires a separate design/ADR + Owner decisions on exposure policy and implementation approach). Dependency insight only, **not** a contract: once the gateway (items 2–3) exists, inference-level metrics (request latency, request/error counts, TTFT and tokens/s where technically available) become naturally measurable; VRAM/system metrics remain a separate collector concern.
 
 ## Future
 
