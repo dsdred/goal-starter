@@ -1337,8 +1337,7 @@ func (r *JSONRepository) CountActiveInstances() int {
 	defer r.mu.RUnlock()
 	count := 0
 	for _, e := range r.instances {
-		switch e.State {
-		case "running", "starting", "stopping", "pending":
+		if domain.InstanceState(e.State).IsInFlight() {
 			count++
 		}
 	}

@@ -12,10 +12,54 @@ func TestInstanceStateOrphan_IsTerminal(t *testing.T) {
 	}
 }
 
-func TestInstanceStateOrphan_IsActive(t *testing.T) {
+func TestInstanceStateOrphan_IsLive(t *testing.T) {
 	inst := &LaunchInstance{ID: "test", State: InstanceStateOrphan}
-	if inst.IsActive() {
-		t.Error("orphan must NOT be active")
+	if inst.IsLive() {
+		t.Error("orphan must NOT be live")
+	}
+}
+
+func TestInstanceStateSemantics_Matrix(t *testing.T) {
+	cases := []struct {
+		state    InstanceState
+		live     bool
+		inFlight bool
+		ros      bool
+		terminal bool
+	}{
+		{InstanceStatePending, false, true, false, false},
+		{InstanceStateStarting, true, true, true, false},
+		{InstanceStateRunning, true, true, true, false},
+		{InstanceStateStopping, true, true, false, false},
+		{InstanceStateExited, false, false, false, true},
+		{InstanceStateFailed, false, false, false, true},
+		{InstanceStateStale, false, false, false, true},
+		{InstanceStateOrphan, false, false, false, false},
+		{InstanceStateUnknown, false, false, false, false},
+	}
+	for _, c := range cases {
+		inst := &LaunchInstance{ID: "test", State: c.state}
+		if got := inst.IsLive(); got != c.live {
+			t.Errorf("%s: IsLive() = %v, want %v", c.state, got, c.live)
+		}
+		if got := inst.IsInFlight(); got != c.inFlight {
+			t.Errorf("%s: IsInFlight() = %v, want %v", c.state, got, c.inFlight)
+		}
+		if got := inst.IsRunningOrStarting(); got != c.ros {
+			t.Errorf("%s: IsRunningOrStarting() = %v, want %v", c.state, got, c.ros)
+		}
+		if got := inst.IsTerminal(); got != c.terminal {
+			t.Errorf("%s: IsTerminal() = %v, want %v", c.state, got, c.terminal)
+		}
+		if got := c.state.IsLive(); got != c.live {
+			t.Errorf("%s: InstanceState.IsLive() = %v, want %v", c.state, got, c.live)
+		}
+		if got := c.state.IsInFlight(); got != c.inFlight {
+			t.Errorf("%s: InstanceState.IsInFlight() = %v, want %v", c.state, got, c.inFlight)
+		}
+		if got := c.state.IsRunningOrStarting(); got != c.ros {
+			t.Errorf("%s: InstanceState.IsRunningOrStarting() = %v, want %v", c.state, got, c.ros)
+		}
 	}
 }
 

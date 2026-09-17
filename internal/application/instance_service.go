@@ -3,6 +3,7 @@ package application
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/dsdred/goal/internal/domain"
@@ -14,17 +15,47 @@ import (
 type InstanceService struct {
 	supervisor *process.Supervisor
 	repo       storage.Repository
+
+	startMu    sync.Mutex
+	startLocks map[string]*sync.Mutex
 }
 
 func NewInstanceService(supervisor *process.Supervisor, repo storage.Repository) *InstanceService {
 	return &InstanceService{
 		supervisor: supervisor,
 		repo:       repo,
+		startLocks: make(map[string]*sync.Mutex),
 	}
 }
 
+func (s *InstanceService) modelStartLock(modelID string) func() {
+	s.startMu.Lock()
+	m, ok := s.startLocks[modelID]
+	if !ok {
+		m = &sync.Mutex{}
+		s.startLocks[modelID] = m
+	}
+	s.startMu.Unlock()
+	m.Lock()
+	return m.Unlock
+}
+
 // StartModel starts a model by resolving runtime and calling supervisor.Start.
+// The in-flight check and the Start call are serialized per-model: concurrent
+// StartModel calls for the same model cannot both pass the guard.
 func (s *InstanceService) StartModel(ctx context.Context, modelID string) (*domain.LaunchInstance, error) {
+	unlock := s.modelStartLock(modelID)
+	defer unlock()
+
+	instances, err := s.supervisor.List()
+	if err == nil {
+		for _, inst := range instances {
+			if inst.ModelID == modelID && inst.IsInFlight() {
+				return nil, process.ErrLaunchInFlight
+			}
+		}
+	}
+
 	me, err := s.repo.GetModel(modelID)
 	if err != nil {
 		return nil, fmt.Errorf("model not found: %w", err)
@@ -199,7 +230,7 @@ func (s *InstanceService) GetModelStatus(ctx context.Context, modelID string) (*
 	}
 
 	for _, inst := range instances {
-		if inst.State == "running" || inst.State == "starting" {
+		if domain.InstanceState(inst.State).IsRunningOrStarting() {
 			summary.Running++
 			inst.Environment = nil
 			summary.ActiveInst = inst

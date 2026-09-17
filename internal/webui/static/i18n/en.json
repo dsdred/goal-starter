@@ -57,6 +57,7 @@
   "models.status.exited": "EXITED",
   "models.status.failed": "FAILED",
   "models.status.orphan": "ORPHAN",
+  "models.status.pending": "Waiting...",
   "pipelines.title": "Pipelines",
   "pipelines.add": "Add",
   "pipelines.empty": "No pipelines created yet.",

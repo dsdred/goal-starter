@@ -84,7 +84,7 @@ func TestRecovery_E2E_Orphan_Detect_Dismiss(t *testing.T) {
 
 	// Step 7: Verify orphan is NOT active.
 	dom := domain.ToDomain(classified)
-	if dom.IsActive() {
+	if dom.IsLive() {
 		t.Error("orphan must not be active")
 	}
 	if dom.IsTerminal() {

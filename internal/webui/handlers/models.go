@@ -239,8 +239,19 @@ func (h *ModelsHandler) Start(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "model ID is required")
 		return
 	}
+	instances, _ := h.instanceSvc.ListInstances(r.Context())
+	for _, inst := range instances {
+		if inst.ModelID == id && inst.IsInFlight() {
+			writeAPIError(w, http.StatusConflict, apierrors.NewAPIError(apierrors.CodeConflict, "launch_in_flight"))
+			return
+		}
+	}
 	inst, err := h.instanceSvc.StartModel(r.Context(), id)
 	if err != nil {
+		if errors.Is(err, process.ErrLaunchInFlight) {
+			writeAPIError(w, http.StatusConflict, apierrors.NewAPIError(apierrors.CodeConflict, "launch_in_flight"))
+			return
+		}
 		writeError(w, 500, err.Error())
 		return
 	}
@@ -256,7 +267,13 @@ func (h *ModelsHandler) Stop(w http.ResponseWriter, r *http.Request) {
 	}
 	instances, _ := h.instanceSvc.ListInstances(r.Context())
 	for _, inst := range instances {
-		if inst.ModelID == id && inst.IsActive() {
+		if inst.ModelID == id && inst.State == domain.InstanceStatePending {
+			writeAPIError(w, http.StatusConflict, apierrors.NewAPIError(apierrors.CodeConflict, "launch_in_flight"))
+			return
+		}
+	}
+	for _, inst := range instances {
+		if inst.ModelID == id && inst.IsLive() {
 			if err := h.instanceSvc.StopInstance(r.Context(), inst.ID); err != nil {
 				writeError(w, 500, err.Error())
 				return
@@ -274,7 +291,13 @@ func (h *ModelsHandler) Restart(w http.ResponseWriter, r *http.Request) {
 	}
 	instances, _ := h.instanceSvc.ListInstances(r.Context())
 	for _, inst := range instances {
-		if inst.ModelID == id && inst.IsActive() {
+		if inst.ModelID == id && inst.State == domain.InstanceStatePending {
+			writeAPIError(w, http.StatusConflict, apierrors.NewAPIError(apierrors.CodeConflict, "launch_in_flight"))
+			return
+		}
+	}
+	for _, inst := range instances {
+		if inst.ModelID == id && inst.IsLive() {
 			if _, err := h.instanceSvc.RestartInstance(r.Context(), inst.ID); err != nil {
 				writeError(w, 500, err.Error())
 				return

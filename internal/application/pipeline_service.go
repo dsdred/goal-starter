@@ -110,12 +110,10 @@ func (s *PipelineService) lockPipeline(id string) func() {
 	return m.Unlock
 }
 
-func isActiveInstanceState(state string) bool {
-	switch state {
-	case "running", "starting", "stopping", "pending":
-		return true
-	}
-	return false
+// isInFlightState delegates to the canonical domain predicate
+// (pending | starting | running | stopping).
+func isInFlightState(state string) bool {
+	return domain.InstanceState(state).IsInFlight()
 }
 
 // ─── CRUD (integrity rules per ADR 010 D1) ───
@@ -257,7 +255,7 @@ func (s *PipelineService) hasActiveOwnedInstances(pipelineID string) bool {
 		return false
 	}
 	for _, inst := range instances {
-		if inst.PipelineID == pipelineID && isActiveInstanceState(inst.State) {
+		if inst.PipelineID == pipelineID && isInFlightState(inst.State) {
 			return true
 		}
 	}
@@ -349,7 +347,7 @@ func (s *PipelineService) stopTargets(p *storage.PipelineEntry, pipelineID strin
 	claimed := make([]bool, len(p.Models))
 	for i, m := range p.Models {
 		for _, inst := range insts {
-			if inst.PipelineID == pipelineID && inst.PipelineEntryID == m.ID && isActiveInstanceState(inst.State) {
+			if inst.PipelineID == pipelineID && inst.PipelineEntryID == m.ID && isInFlightState(inst.State) {
 				claimed[i] = true
 				break
 			}
@@ -357,7 +355,7 @@ func (s *PipelineService) stopTargets(p *storage.PipelineEntry, pipelineID strin
 	}
 	legacyByModel := make(map[string][]string)
 	for _, inst := range insts {
-		if inst.PipelineID != pipelineID || inst.PipelineEntryID != "" || !isActiveInstanceState(inst.State) {
+		if inst.PipelineID != pipelineID || inst.PipelineEntryID != "" || !isInFlightState(inst.State) {
 			continue
 		}
 		legacyByModel[inst.ModelID] = append(legacyByModel[inst.ModelID], inst.ID)
@@ -372,7 +370,7 @@ func (s *PipelineService) stopTargets(p *storage.PipelineEntry, pipelineID strin
 	for i, m := range p.Models {
 		if claimed[i] {
 			for _, inst := range insts {
-				if inst.PipelineID == pipelineID && inst.PipelineEntryID == m.ID && isActiveInstanceState(inst.State) {
+				if inst.PipelineID == pipelineID && inst.PipelineEntryID == m.ID && isInFlightState(inst.State) {
 					targets[i] = append(targets[i], inst.ID)
 				}
 			}
@@ -447,7 +445,7 @@ func (s *PipelineService) startEntry(ctx context.Context, pipelineID string, ind
 	insts, err := s.repo.ListByModelID(entry.ModelID)
 	if err == nil {
 		for _, inst := range insts {
-			if isActiveInstanceState(inst.State) {
+			if isInFlightState(inst.State) {
 				if inst.PipelineID == pipelineID && inst.PipelineEntryID == entry.ID {
 					out.Status = OutcomeAlreadyRunning
 					return out

@@ -182,7 +182,7 @@ func (h *PipelineHandler) Get(w http.ResponseWriter, r *http.Request) {
 			consumedLegacy[m.ModelID] = true
 		}
 		for _, inst := range list {
-			if inst.IsActive() {
+			if inst.IsRunningOrStarting() {
 				st.State = string(inst.State)
 				st.InstanceID = string(inst.ID)
 				st.PID = inst.PID

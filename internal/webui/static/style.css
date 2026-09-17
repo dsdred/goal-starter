@@ -278,6 +278,7 @@ code { font-family: var(--font-mono); font-size: 0.9em; background: var(--bg-inp
 .status-badge.failed { background: rgba(231, 76, 60, 0.15); color: var(--danger); }
 .status-badge.orphan { background: rgba(155, 89, 182, 0.15); color: #9b59b6; }
 .status-badge.stale { background: rgba(154, 154, 180, 0.12); color: var(--text-muted); }
+.status-badge.pending { background: rgba(96, 165, 250, 0.10); color: var(--info); opacity: 0.8; }
 .status-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
 .status-dot.online { background: var(--success); }
 .status-dot.offline { background: var(--danger); }

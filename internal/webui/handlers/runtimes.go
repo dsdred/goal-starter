@@ -366,9 +366,13 @@ func (h *RuntimesHandler) Action(w http.ResponseWriter, r *http.Request) {
 	switch action {
 	case "start":
 		for _, inst := range instances {
-			if inst.RuntimeID == id && inst.IsActive() {
+			if inst.RuntimeID == id && inst.IsLive() {
 				inst, err := h.instances.StartModel(r.Context(), inst.ModelID)
 				if err != nil {
+					if errors.Is(err, process.ErrLaunchInFlight) {
+						writeAPIError(w, http.StatusConflict, apierrors.NewAPIError(apierrors.CodeConflict, "launch_in_flight"))
+						return
+					}
 					writeError(w, 500, err.Error())
 					return
 				}
@@ -380,7 +384,7 @@ func (h *RuntimesHandler) Action(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 404, "no running instance for this runtime")
 	case "stop":
 		for _, inst := range instances {
-			if inst.RuntimeID == id && inst.IsActive() {
+			if inst.RuntimeID == id && inst.IsLive() {
 				if err := h.instances.StopInstance(r.Context(), inst.ID); err != nil {
 					writeError(w, 500, err.Error())
 					return
@@ -392,7 +396,7 @@ func (h *RuntimesHandler) Action(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 404, "no running instance for this runtime")
 	case "restart":
 		for _, inst := range instances {
-			if inst.RuntimeID == id && inst.IsActive() {
+			if inst.RuntimeID == id && inst.IsLive() {
 				if _, err := h.instances.RestartInstance(r.Context(), inst.ID); err != nil {
 					writeError(w, 500, err.Error())
 					return
@@ -413,7 +417,7 @@ func (h *RuntimesHandler) HealthCheck(w http.ResponseWriter, r *http.Request) {
 	active := 0
 	redactedInstances := make([]*domain.LaunchInstance, 0, len(instances))
 	for _, inst := range instances {
-		if inst.IsActive() {
+		if inst.IsInFlight() {
 			active++
 		}
 		redacted := *inst
@@ -444,7 +448,7 @@ func (h *RuntimesHandler) RuntimeHealth(w http.ResponseWriter, r *http.Request) 
 	}
 
 	for _, inst := range instances {
-		if inst.RuntimeID == id && inst.IsActive() {
+		if inst.RuntimeID == id && inst.IsLive() {
 			health := map[string]any{
 				"instance_id": inst.ID,
 				"runtime_id":  id,

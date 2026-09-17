@@ -566,8 +566,8 @@ func (s *Supervisor) Recover(ctx context.Context) error {
 	for _, entry := range entries {
 		inst := domain.ToDomain(entry)
 
-		switch inst.State {
-		case domain.InstanceStateRunning, domain.InstanceStateStarting, domain.InstanceStateStopping, domain.InstanceStatePending:
+		switch {
+		case inst.State.IsInFlight():
 			newState, reason := s.classifyForRecovery(inst)
 			inst.UpdateState(newState)
 			inst.RecoveryReason = reason
@@ -774,7 +774,7 @@ func NewInstanceController(inst *domain.LaunchInstance, store InstanceStore, res
 func (ic *InstanceController) IsRunning() bool {
 	ic.mu.RLock()
 	defer ic.mu.RUnlock()
-	return ic.instance.IsActive()
+	return ic.instance.IsLive()
 }
 
 // Start launches the managed process.
@@ -873,6 +873,13 @@ func (ic *InstanceController) stop(ctx context.Context) error {
 	if ic.instance.IsTerminal() {
 		ic.mu.Unlock()
 		return nil
+	}
+	// A pending instance has no process yet: its launch is still in flight
+	// (slot acquisition / spawn). Stopping it here would be silently
+	// invalidated by the in-flight start, so refuse with a bounded error.
+	if ic.instance.State == domain.InstanceStatePending {
+		ic.mu.Unlock()
+		return ErrLaunchInFlight
 	}
 	ic.instance.UpdateState(domain.InstanceStateStopping)
 	ic.mu.Unlock()
@@ -982,7 +989,14 @@ func (ic *InstanceController) restartWithRefresh(ctx context.Context, spec *doma
 	defer ic.lifecycleMu.Unlock()
 
 	ic.mu.RLock()
-	active := ic.instance.IsActive()
+	if ic.instance.State == domain.InstanceStatePending {
+		// The launch is still in flight (slot acquisition / spawn). A restart
+		// here would race the in-flight start and double-launch; refuse with
+		// a bounded error instead of waiting or starting a second lifecycle.
+		ic.mu.RUnlock()
+		return nil, ErrLaunchInFlight
+	}
+	active := ic.instance.IsLive()
 	previousRun := ic.run
 	ic.mu.RUnlock()
 	if active {

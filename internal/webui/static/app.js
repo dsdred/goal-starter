@@ -342,6 +342,7 @@ function modelStatus(model) {
         if (states.indexOf('starting') !== -1) return 'starting';
         if (states.indexOf('stopping') !== -1) return 'stopping';
     }
+    if (instancesData.some(function (i) { return i.model_id === model.id && i.state === 'pending'; })) return 'pending';
     if (getOrphanInstances(model.id).length > 0) return 'orphan';
     return 'stopped';
 }
@@ -686,6 +687,8 @@ function pipelineEntryStatus(p, entry, idx) {
         else if (states.indexOf('starting') !== -1) st = 'starting';
         else if (states.indexOf('stopping') !== -1) st = 'stopping';
         else st = active[0].state;
+    } else if (list.some(function (i) { return i.state === 'pending'; })) {
+        st = 'pending';
     } else if (list.some(function (i) { return i.state === 'failed'; })) {
         st = 'failed';
     } else if (list.some(function (i) { return i.state === 'orphan'; })) {
@@ -720,6 +723,7 @@ function pipelineAggregateStatus(p) {
     if (sts.indexOf('running') !== -1) return 'running';
     if (sts.indexOf('starting') !== -1) return 'starting';
     if (sts.indexOf('stopping') !== -1) return 'stopping';
+    if (sts.indexOf('pending') !== -1) return 'pending';
     if (sts.indexOf('failed') !== -1) return 'failed';
     if (sts.indexOf('orphan') !== -1) return 'orphan';
     return 'stopped';

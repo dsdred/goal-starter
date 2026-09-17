@@ -89,7 +89,14 @@ func (h *InstancesHandler) StartModel(w http.ResponseWriter, r *http.Request) {
 	}
 	inst, err := h.instanceSvc.StartModel(r.Context(), body.ModelID)
 	if err != nil {
-		// Audited on failure too with a sanitized (bounded) error fragment.
+		if errors.Is(err, process.ErrLaunchInFlight) {
+			logAudit(h.audit, h.sess, r, audit.EventInstanceStart, map[string]string{
+				"model_id": body.ModelID,
+				"error":    "launch_in_flight",
+			})
+			writeAPIError(w, http.StatusConflict, apierrors.NewAPIError(apierrors.CodeConflict, "launch_in_flight"))
+			return
+		}
 		logAudit(h.audit, h.sess, r, audit.EventInstanceStart, map[string]string{
 			"model_id": body.ModelID,
 			"error":    sanitizeAuditError(err),
@@ -125,6 +132,10 @@ func (h *InstancesHandler) StopInstance(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if err := h.instanceSvc.StopInstance(r.Context(), domain.InstanceID(id)); err != nil {
+		if errors.Is(err, process.ErrLaunchInFlight) {
+			writeAPIError(w, http.StatusConflict, apierrors.NewAPIError(apierrors.CodeConflict, "launch_in_flight"))
+			return
+		}
 		writeError(w, 500, err.Error())
 		return
 	}
@@ -142,6 +153,10 @@ func (h *InstancesHandler) RestartInstance(w http.ResponseWriter, r *http.Reques
 	}
 	inst, err := h.instanceSvc.RestartInstance(r.Context(), domain.InstanceID(id))
 	if err != nil {
+		if errors.Is(err, process.ErrLaunchInFlight) {
+			writeAPIError(w, http.StatusConflict, apierrors.NewAPIError(apierrors.CodeConflict, "launch_in_flight"))
+			return
+		}
 		writeError(w, 500, err.Error())
 		return
 	}
@@ -297,7 +312,7 @@ func (h *InstancesHandler) Status(w http.ResponseWriter, r *http.Request) {
 
 	activeCount := 0
 	for _, inst := range instances {
-		if inst.IsActive() {
+		if inst.IsInFlight() {
 			activeCount++
 		}
 	}

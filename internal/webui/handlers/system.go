@@ -111,7 +111,7 @@ func (h *SystemHandler) Metrics(w http.ResponseWriter, r *http.Request) {
 	running := 0
 	stopped := 0
 	for _, inst := range instances {
-		if inst.IsActive() {
+		if inst.IsInFlight() {
 			running++
 		} else {
 			stopped++

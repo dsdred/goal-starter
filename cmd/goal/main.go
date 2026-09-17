@@ -428,8 +428,7 @@ func hasActiveInstance(repo storage.Repository, modelID string) bool {
 		return false
 	}
 	for _, inst := range instances {
-		switch inst.State {
-		case "running", "starting", "stopping", "pending":
+		if domain.InstanceState(inst.State).IsInFlight() {
 			return true
 		}
 	}

@@ -57,6 +57,7 @@
   "models.status.exited": "Завершён",
   "models.status.failed": "Ошибка",
   "models.status.orphan": "Сирота",
+  "models.status.pending": "Ожидание...",
   "pipelines.title": "Пайплайны",
   "pipelines.add": "Добавить",
   "pipelines.empty": "Пайплайны не созданы.",

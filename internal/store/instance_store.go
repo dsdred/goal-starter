@@ -165,7 +165,7 @@ func (s *InstanceStoreJSON) CountActive() int {
 
 	count := 0
 	for _, inst := range s.instances {
-		if inst.IsActive() {
+		if inst.IsInFlight() {
 			count++
 		}
 	}

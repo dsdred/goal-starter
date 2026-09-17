@@ -68,7 +68,7 @@ func activeOwnedInstance(t *testing.T, e *pipelineEnv, modelID string) *storage.
 		insts := e.instancesFor(t, modelID)
 		var active []*storage.LaunchInstanceEntry
 		for _, i := range insts {
-			if isActiveInstanceState(i.State) {
+			if isInFlightState(i.State) {
 				active = append(active, i)
 			}
 		}

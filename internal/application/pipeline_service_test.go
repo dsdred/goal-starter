@@ -100,7 +100,7 @@ func ownedActive(e *pipelineEnv, t *testing.T, pipelineID string) []*storage.Lau
 		t.Fatalf("ListInstances: %v", err)
 	}
 	for _, inst := range insts {
-		if inst.PipelineID == pipelineID && isActiveInstanceState(inst.State) {
+		if inst.PipelineID == pipelineID && isInFlightState(inst.State) {
 			out = append(out, inst)
 		}
 	}
@@ -224,7 +224,7 @@ func TestPipelineStart_BestEffortFailure(t *testing.T) {
 
 	// Entry 1 stays running; entries 3 and 4 were still processed.
 	m1Insts := e.instancesFor(t, m1)
-	if len(m1Insts) != 1 || !isActiveInstanceState(m1Insts[0].State) {
+	if len(m1Insts) != 1 || !isInFlightState(m1Insts[0].State) {
 		t.Fatalf("m1 instance not running: %+v", m1Insts)
 	}
 	if len(e.instancesFor(t, m3)) != 1 || len(e.instancesFor(t, m4)) != 1 {
@@ -444,7 +444,7 @@ func TestPipelineStop_ReverseOwnedOnly(t *testing.T) {
 	// Owned instances are stopped; the manual instance is untouched.
 	for _, modelID := range []string{m1, m2, m3} {
 		for _, inst := range e.instancesFor(t, modelID) {
-			if inst.PipelineID == pipe && isActiveInstanceState(inst.State) {
+			if inst.PipelineID == pipe && isInFlightState(inst.State) {
 				t.Fatalf("owned instance %s of %s still active after stop", inst.ID, modelID)
 			}
 		}
@@ -453,7 +453,7 @@ func TestPipelineStop_ReverseOwnedOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetInstance manual: %v", err)
 	}
-	if !isActiveInstanceState(manualEntry.State) {
+	if !isInFlightState(manualEntry.State) {
 		t.Fatalf("manual instance %s must survive pipeline stop, state=%q", manualEntry.ID, manualEntry.State)
 	}
 	if manualEntry.PipelineID != "" {
@@ -571,7 +571,7 @@ func TestPipelineRestart_Contract(t *testing.T) {
 		if err != nil {
 			t.Fatalf("GetInstance %s: %v", old, err)
 		}
-		if isActiveInstanceState(oe.State) {
+		if isInFlightState(oe.State) {
 			t.Fatalf("old instance %s still active after restart", old)
 		}
 	}

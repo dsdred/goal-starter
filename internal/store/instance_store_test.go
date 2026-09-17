@@ -448,19 +448,19 @@ func TestInstanceStoreJSON_EnvironmentToList(t *testing.T) {
 }
 
 func TestInstanceStoreJSON_InstanceState(t *testing.T) {
-	// Test IsActive.
+	// Test IsLive.
 	running := &domain.LaunchInstance{
 		State: domain.InstanceStateRunning,
 	}
-	if !running.IsActive() {
-		t.Error("running instance should be active")
+	if !running.IsLive() {
+		t.Error("running instance should be live")
 	}
 
 	exited := &domain.LaunchInstance{
 		State: domain.InstanceStateExited,
 	}
-	if exited.IsActive() {
-		t.Error("exited instance should not be active")
+	if exited.IsLive() {
+		t.Error("exited instance should not be live")
 	}
 
 	// Test IsTerminal.

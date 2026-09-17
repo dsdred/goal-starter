@@ -20,6 +20,47 @@ const (
 	InstanceStateOrphan   InstanceState = "orphan"
 )
 
+// Canonical instance state semantics (single source of truth):
+//
+//   - IsLive:              starting | running | stopping — GoAl currently
+//     supervises a live lifecycle for this state (process exists or is being
+//     started/stopped).
+//   - IsInFlight:          pending | starting | running | stopping — a launch
+//     is in flight: the process exists OR the launch has not completed slot
+//     acquisition / spawn yet (pending).
+//   - IsRunningOrStarting: starting | running — the process has been spawned
+//     (or is being spawned); narrower "launched" semantic.
+//   - IsTerminal:          exited | failed | stale.
+//
+// Process aliveness is owned by the process Manager and MUST NOT be inferred
+// from any lifecycle state. pending is never terminal and never live.
+func (s InstanceState) IsLive() bool {
+	switch s {
+	case InstanceStateStarting, InstanceStateRunning, InstanceStateStopping:
+		return true
+	default:
+		return false
+	}
+}
+
+func (s InstanceState) IsInFlight() bool {
+	switch s {
+	case InstanceStatePending, InstanceStateStarting, InstanceStateRunning, InstanceStateStopping:
+		return true
+	default:
+		return false
+	}
+}
+
+func (s InstanceState) IsRunningOrStarting() bool {
+	switch s {
+	case InstanceStateStarting, InstanceStateRunning:
+		return true
+	default:
+		return false
+	}
+}
+
 // InstanceExitClass describes why an instance ended.
 type InstanceExitClass string
 
@@ -74,14 +115,23 @@ type LaunchInstance struct {
 	RecoveryReason string    `json:"recovery_reason,omitempty"`
 }
 
-// IsActive returns true if the instance is in a live state.
-func (i *LaunchInstance) IsActive() bool {
-	switch i.State {
-	case InstanceStateRunning, InstanceStateStarting, InstanceStateStopping:
-		return true
-	default:
-		return false
-	}
+// IsLive returns true if the instance is in a live lifecycle state
+// (starting | running | stopping). It does NOT include pending: a pending
+// instance has no process yet and is not supervised.
+func (i *LaunchInstance) IsLive() bool {
+	return i.State.IsLive()
+}
+
+// IsInFlight returns true while a launch is in flight
+// (pending | starting | running | stopping).
+func (i *LaunchInstance) IsInFlight() bool {
+	return i.State.IsInFlight()
+}
+
+// IsRunningOrStarting returns true if the process has been or is being spawned
+// (starting | running).
+func (i *LaunchInstance) IsRunningOrStarting() bool {
+	return i.State.IsRunningOrStarting()
 }
 
 // IsTerminal returns true if the instance has reached a terminal state.

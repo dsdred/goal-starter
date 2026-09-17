@@ -114,8 +114,8 @@ Instances are running processes created from models.
 | `GET` | `/api/v1/instances/{id}` | Yes | — | Instance detail. |
 | `GET` | `/api/v1/history` | Yes | — | List terminal instances (repository-backed, persists across restart). |
 | `POST` | `/api/v1/instances/start` | Yes | Yes | Start a new instance from a model. |
-| `POST` | `/api/v1/instances/{id}/stop` | Yes | Yes | Stop an instance. |
-| `POST` | `/api/v1/instances/{id}/restart` | Yes | Yes | Restart an instance: the old process is stopped and a new one is started under the **same InstanceID** (pipeline attribution preserved). Restart re-resolves the **current** launch configuration — `Model.Args` + `Model.Environment`, the runtime (executable/working directory/environment) of the current `Model.RuntimeID`, and, for pipeline-owned instances, the owning entry's `Args` override (all-or-nothing). If the model, runtime, or owning pipeline/entry can no longer be resolved (including legacy instances without entry attribution), the request fails with a bounded `500` error and the frozen launch snapshot is never relaunched. |
+| `POST` | `/api/v1/instances/{id}/stop` | Yes | Yes | Stop an instance. Returns `409` with `code=conflict`, `error=launch_in_flight` if the instance is in `pending` state (launch not yet complete). |
+| `POST` | `/api/v1/instances/{id}/restart` | Yes | Yes | Restart an instance: the old process is stopped and a new one is started under the **same InstanceID** (pipeline attribution preserved). Restart re-resolves the **current** launch configuration — `Model.Args` + `Model.Environment`, the runtime (executable/working directory/environment) of the current `Model.RuntimeID`, and, for pipeline-owned instances, the owning entry's `Args` override (all-or-nothing). If the model, runtime, or owning pipeline/entry can no longer be resolved (including legacy instances without entry attribution), the request fails with a bounded `500` error and the frozen launch snapshot is never relaunched. Returns `409` with `code=conflict`, `error=launch_in_flight` if the instance is in `pending` state. |
 | `POST` | `/api/v1/instances/{id}/dismiss` | Yes | Yes | Dismiss an orphan instance (transitions `orphan` → `stale`). No process is touched. |
 | `POST` | `/api/v1/instances/{id}/kill` | Yes | Yes | Terminate an orphan process (destructive, ADR 008). Strict identity re-verification before every signal; `orphan`-only. |
 
@@ -146,6 +146,23 @@ Refusals (the `orphan` state is preserved with a persisted `last_error` diagnost
 | `500` | `internal_server_error` | `unconfirmed` | The termination outcome could not be confirmed (process still visible). |
 
 Case G (no audit event): `409` if the instance is not in `orphan` state, `404` if not found, `400` if the ID is missing.
+
+### Launch-in-flight guard
+
+When an instance is in `pending` state (slot acquisition or spawn not yet complete), lifecycle operations that would race the in-flight launch are refused with `409`:
+
+```json
+{ "error": "launch_in_flight", "code": "conflict" }
+```
+
+Affected endpoints:
+- `POST /api/v1/instances/{id}/stop` — refuses to stop a pending instance.
+- `POST /api/v1/instances/{id}/restart` — refuses to restart a pending instance.
+- `POST /api/v1/models/{id}/start` — refuses to start a model that already has an in-flight instance (any instance in `pending|starting|running|stopping` state).
+- `POST /api/v1/models/{id}/stop` — refuses if a pending instance of the model exists.
+- `POST /api/v1/models/{id}/restart` — refuses if a pending instance of the model exists.
+
+The `pending` state is never terminal. A pending instance transitions to `starting` once the concurrency slot is acquired and the process spawn begins.
 
 ### Instance logs
 
@@ -228,9 +245,9 @@ Models are configured launch definitions combining a runtime with launch argumen
 | POST | /api/v1/models | Create a model |
 | PUT | /api/v1/models/{id} | Update a model |
 | DELETE | /api/v1/models/{id} | Delete a model |
-| POST | /api/v1/models/{id}/start | Start an instance |
-| POST | /api/v1/models/{id}/stop | Stop active instances |
-| POST | /api/v1/models/{id}/restart | Restart |
+| POST | /api/v1/models/{id}/start | Start an instance. Returns `409` with `code=conflict`, `error=launch_in_flight` if an in-flight instance of this model already exists. |
+| POST | /api/v1/models/{id}/stop | Stop active instances. Returns `409` with `code=conflict`, `error=launch_in_flight` if a pending instance of this model exists. |
+| POST | /api/v1/models/{id}/restart | Restart. Returns `409` with `code=conflict`, `error=launch_in_flight` if a pending instance of this model exists. |
 | GET | /api/v1/models/{id}/status | Get instance status |
 | POST | /api/v1/models/{id}/activate | Enable autostart |
 | POST | /api/v1/models/{id}/deactivate | Disable autostart |

@@ -476,7 +476,7 @@ func TestRecover_OrphanNeverBecomesActive(t *testing.T) {
 		t.Errorf("orphan must not become active, got %s", entry.State)
 	}
 	dom := domain.ToDomain(entry)
-	if dom.IsActive() {
+	if dom.IsLive() {
 		t.Error("orphan must not be active")
 	}
 }
