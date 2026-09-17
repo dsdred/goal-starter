@@ -42,12 +42,14 @@ async function main() {
 
   const api = (method, urlPath, body) => H.api(BASE, method, urlPath, body);
 
-  // One model, three simultaneous instances (fake-runtime "infinite" mode).
-  const m = await api('POST', '/api/v1/models', { name: 'Id Model', runtime_id: 'rt-fake', args: ['infinite'] });
-  const modelId = m.data && m.data.id;
+  // Three models, one instance each (fake-runtime "infinite" mode).
+  // Contract: at most one IsInFlight() instance per model (C3 guard).
+  const models = [];
   const ids = [];
   for (let i = 0; i < 3; i++) {
-    const s = await api('POST', `/api/v1/models/${modelId}/start`);
+    const m = await api('POST', '/api/v1/models', { name: `Id Model ${i + 1}`, runtime_id: 'rt-fake', args: ['infinite'] });
+    models.push(m.data && m.data.id);
+    const s = await api('POST', `/api/v1/models/${models[i]}/start`);
     if (s.status === 200 && s.data && s.data.id) ids.push(s.data.id);
     await sleep(300);
   }
@@ -63,7 +65,7 @@ async function main() {
 
   let ok = false;
   try {
-    suite.log('Seed: model created', m.status === 201, `status=${m.status}`);
+    suite.log('Seed: 3 models created', models.every(id => !!id), `models=${JSON.stringify(models)}`);
     suite.log('Seed: 3 simultaneous instances running with distinct full ids',
       ids.length === 3 && distinct(ids), `ids=${JSON.stringify(ids)}`);
 
@@ -149,7 +151,7 @@ async function main() {
       });
       return out;
     }, ids);
-    suite.log('3b.1 Per-line badges rendered for all 3 same-model instances', badges.length === 3,
+    suite.log('3b.1 Per-line badges rendered for all 3 instances', badges.length === 3,
       `badges=${JSON.stringify(badges)}`);
     suite.log('3b.2 Visible per-line badges are pairwise distinct', distinct(badges.map(b => b.text)),
       `texts=${JSON.stringify(badges.map(b => b.text))}`);
@@ -206,10 +208,10 @@ async function main() {
       suite.consoleErrors.slice(0, 3).join('; ') || 'clean');
     suite.log('6.2 No server 5xx errors', suite.serverErrors.length === 0, JSON.stringify(suite.serverErrors.slice(0, 3)));
 
-    // Cleanup: stop remaining instances, delete the model.
+    // Cleanup: stop remaining instances, delete all models.
     for (const id of ids) await api('POST', `/api/v1/instances/${id}/stop`);
     await sleep(500);
-    await api('DELETE', `/api/v1/models/${modelId}`);
+    for (const mid of models) await api('DELETE', `/api/v1/models/${mid}`);
 
     ok = await suite.finish();
   } catch (err) {

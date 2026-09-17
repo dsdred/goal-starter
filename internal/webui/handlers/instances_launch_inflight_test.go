@@ -62,11 +62,6 @@ func newPendingWindowFixture(t *testing.T) (*InstancesHandler, *ModelsHandler, *
 
 	cfg := process.SupervisorConfig{MaxConcurrent: 1, LogBufferSize: 64}
 	sup := process.NewSupervisorWithConfig(insStore, cfg)
-	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		defer cancel()
-		_ = sup.Shutdown(ctx)
-	})
 
 	fakePath := fakeruntime.Path(t)
 	rt := &domain.Runtime{ID: "rt", Name: "rt", Executable: fakePath}
@@ -94,9 +89,26 @@ func newPendingWindowFixture(t *testing.T) (*InstancesHandler, *ModelsHandler, *
 	}
 
 	// Start B in a goroutine (blocks on slot acquisition).
+	// The pendingStartCtx is cancelled before Shutdown so the goroutine
+	// cannot spawn a process after cleanup begins.
+	pendingStartCtx, cancelPendingStart := context.WithCancel(ctx)
+	pendingDone := make(chan struct{})
 	go func() {
-		_, _ = sup.Start(ctx, modelB, rt, []string{"-sleep", "60"}, nil)
+		defer close(pendingDone)
+		_, _ = sup.Start(pendingStartCtx, modelB, rt, []string{"-sleep", "60"}, nil)
 	}()
+
+	t.Cleanup(func() {
+		cancelPendingStart()
+		select {
+		case <-pendingDone:
+		case <-time.After(5 * time.Second):
+			t.Errorf("timeout waiting for pending start goroutine to finish")
+		}
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		_ = sup.Shutdown(shutdownCtx)
+	})
 
 	// Wait for B to reach pending.
 	var instBID domain.InstanceID

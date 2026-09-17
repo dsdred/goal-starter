@@ -149,20 +149,25 @@ Case G (no audit event): `409` if the instance is not in `orphan` state, `404` i
 
 ### Launch-in-flight guard
 
-When an instance is in `pending` state (slot acquisition or spawn not yet complete), lifecycle operations that would race the in-flight launch are refused with `409`:
+Two related rules use the `launch_in_flight` error:
+
+1. **Pending-state protection:** When an instance is in `pending` state (slot acquisition or spawn not yet complete), lifecycle operations that would race the in-flight launch are refused.
+2. **Single-in-flight-per-model contract:** A model may have at most one instance in an in-flight state (`pending`, `starting`, `running`, or `stopping`) at any time. Attempting to start a model that already has any in-flight instance is refused.
+
+Both return:
 
 ```json
 { "error": "launch_in_flight", "code": "conflict" }
 ```
 
 Affected endpoints:
-- `POST /api/v1/instances/{id}/stop` — refuses to stop a pending instance.
-- `POST /api/v1/instances/{id}/restart` — refuses to restart a pending instance.
-- `POST /api/v1/models/{id}/start` — refuses to start a model that already has an in-flight instance (any instance in `pending|starting|running|stopping` state).
-- `POST /api/v1/models/{id}/stop` — refuses if a pending instance of the model exists.
-- `POST /api/v1/models/{id}/restart` — refuses if a pending instance of the model exists.
+- `POST /api/v1/instances/{id}/stop` — refuses to stop a pending instance (rule 1).
+- `POST /api/v1/instances/{id}/restart` — refuses to restart a pending instance (rule 1).
+- `POST /api/v1/models/{id}/start` — refuses if the model already has any instance in `pending|starting|running|stopping` state (rule 2).
+- `POST /api/v1/models/{id}/stop` — refuses if a pending instance of the model exists (rule 1).
+- `POST /api/v1/models/{id}/restart` — refuses if a pending instance of the model exists (rule 1).
 
-The `pending` state is never terminal. A pending instance transitions to `starting` once the concurrency slot is acquired and the process spawn begins.
+The `pending` state is never terminal. A pending instance transitions to `starting` once the concurrency slot is acquired and the process spawn begins. Multi-instance/replica-per-model semantics are a future product decision and are not supported by the current contract.
 
 ### Instance logs
 

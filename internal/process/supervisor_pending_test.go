@@ -12,7 +12,9 @@ import (
 
 // startInFlight starts an instance in a background goroutine (the call
 // blocks on slot acquisition) and returns the instance ID once it reaches
-// the pending state.
+// the pending state. The goroutine is owned by the fixture: a t.Cleanup is
+// registered that cancels the pending start and joins the goroutine before
+// the supervisor Shutdown runs.
 func startInFlight(t *testing.T, sup *Supervisor, ctx context.Context, model *domain.Model, rt *domain.Runtime, args []string) domain.InstanceID {
 	t.Helper()
 	type result struct {
@@ -20,14 +22,27 @@ func startInFlight(t *testing.T, sup *Supervisor, ctx context.Context, model *do
 		err error
 	}
 	ch := make(chan result, 1)
+
+	startCtx, cancelStart := context.WithCancel(ctx)
+	done := make(chan struct{})
 	go func() {
-		inst, err := sup.Start(ctx, model, rt, args, nil)
+		defer close(done)
+		inst, err := sup.Start(startCtx, model, rt, args, nil)
 		if err != nil {
 			ch <- result{err: err}
 			return
 		}
 		ch <- result{id: inst.ID}
 	}()
+
+	t.Cleanup(func() {
+		cancelStart()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Errorf("timeout waiting for pending start goroutine to finish")
+		}
+	})
 
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
