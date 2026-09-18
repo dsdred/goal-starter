@@ -89,6 +89,19 @@ func (h *InstancesHandler) StartModel(w http.ResponseWriter, r *http.Request) {
 	}
 	inst, err := h.instanceSvc.StartModel(r.Context(), body.ModelID)
 	if err != nil {
+		var rej *process.AdmissionRejection
+		if errors.As(err, &rej) {
+			code := "launch_in_flight"
+			if rej.Reason == process.RejOrphan {
+				code = "orphan"
+			}
+			logAudit(h.audit, h.sess, r, audit.EventInstanceStart, map[string]string{
+				"model_id": body.ModelID,
+				"error":    code,
+			})
+			writeAPIError(w, http.StatusConflict, apierrors.NewAPIError(apierrors.CodeConflict, code))
+			return
+		}
 		if errors.Is(err, process.ErrLaunchInFlight) {
 			logAudit(h.audit, h.sess, r, audit.EventInstanceStart, map[string]string{
 				"model_id": body.ModelID,

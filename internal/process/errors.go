@@ -1,6 +1,11 @@
 package process
 
-import "errors"
+import (
+	"errors"
+	"fmt"
+
+	"github.com/dsdred/goal/internal/domain"
+)
 
 // ErrLaunchInFlight is returned when a lifecycle operation (Stop, Restart)
 // targets an instance whose launch is still in flight (state pending: slot
@@ -25,3 +30,48 @@ var ErrTerminationUnconfirmed = errors.New("rollback kill accepted but process t
 // Slot and run ownership are held by the wait() goroutine until exit is
 // confirmed.
 var ErrRollbackFailed = errors.New("rollback kill refused by OS; process may be alive")
+
+// RejectionReason classifies why admission was denied (ADR 017).
+type RejectionReason int
+
+const (
+	RejInFlight RejectionReason = iota
+	RejOrphan
+	RejShuttingDown
+)
+
+func (r RejectionReason) String() string {
+	switch r {
+	case RejInFlight:
+		return "in_flight"
+	case RejOrphan:
+		return "orphan"
+	case RejShuttingDown:
+		return "shutting_down"
+	default:
+		return "unknown"
+	}
+}
+
+// AdmissionRejection is the structured rejection returned by AdmitAndStart
+// when the launch is not admitted (ADR 017).
+type AdmissionRejection struct {
+	Reason     RejectionReason
+	ModelID    string
+	ConflictID domain.InstanceID
+	PipelineID string
+	EntryID    string
+}
+
+func (a *AdmissionRejection) Error() string {
+	switch a.Reason {
+	case RejInFlight:
+		return fmt.Sprintf("launch rejected: in-flight instance %s of model %s", a.ConflictID, a.ModelID)
+	case RejOrphan:
+		return fmt.Sprintf("launch rejected: orphan instance %s of model %s", a.ConflictID, a.ModelID)
+	case RejShuttingDown:
+		return "launch rejected: system is shutting down"
+	default:
+		return "launch rejected"
+	}
+}

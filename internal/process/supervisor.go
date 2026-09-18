@@ -105,6 +105,9 @@ type Supervisor struct {
 	broker        *LogBroker
 	prober        platform.RecoveryProber
 	killer        platform.ProcessKiller
+
+	arbMu    sync.Mutex
+	arbLocks map[string]*sync.Mutex
 }
 
 // InstanceStore persists and retrieves launch instances.
@@ -134,6 +137,7 @@ func NewSupervisor(store InstanceStore) *Supervisor {
 		broker:    NewLogBroker(4096),
 		prober:    platform.NewRecoveryProber(),
 		killer:    platform.NewProcessKiller(),
+		arbLocks:  make(map[string]*sync.Mutex),
 	}
 }
 
@@ -216,6 +220,45 @@ func (s *Supervisor) acquireSlot(ctx context.Context) (*slotReservation, error) 
 	}
 }
 
+// arbitrationLock returns (and lazily creates) the per-ModelID arbitration
+// lock. The lock is never removed (bounded by the number of distinct ModelIDs).
+func (s *Supervisor) arbitrationLock(modelID string) *sync.Mutex {
+	s.arbMu.Lock()
+	m, ok := s.arbLocks[modelID]
+	if !ok {
+		m = &sync.Mutex{}
+		s.arbLocks[modelID] = m
+	}
+	s.arbMu.Unlock()
+	return m
+}
+
+// compatible reports whether a new claim with the given owner is admissible
+// against an existing in-flight instance (ADR 017 compatibility matrix).
+func compatible(newOwner domain.LaunchOwner, existing *domain.LaunchInstance) bool {
+	existingPipeline := existing.PipelineID != ""
+	switch {
+	case newOwner.Kind == domain.OwnerManual:
+		if existingPipeline {
+			return false
+		}
+		return false
+	case newOwner.Kind == domain.OwnerPipeline:
+		if !existingPipeline {
+			return false
+		}
+		if existing.PipelineID != newOwner.PipelineID {
+			return false
+		}
+		if existing.PipelineEntryID == newOwner.PipelineEntryID {
+			return false
+		}
+		return true
+	default:
+		return false
+	}
+}
+
 // LogBroker returns the log broker for multi-instance subscriptions.
 // Returns nil if broker was not configured.
 func (s *Supervisor) LogBroker() *LogBroker {
@@ -278,34 +321,67 @@ func (r *slotReservation) Release() {
 	})
 }
 
-// Start creates a new launch instance and starts its process.
-// Uses a buffered semaphore channel as the single source of truth for
-// concurrency limiting. A slotReservation is created atomically with the
-// semaphore acquire and guaranteed to be released exactly once via sync.Once.
+// AdmitAndStart is the authoritative launch admission + start operation
+// (ADR 017). It atomically checks for conflicting in-flight instances and
+// orphans, materializes the pending claim in s.instances (the linearization
+// point), and proceeds through the full start lifecycle (slot, persist,
+// spawn, ADR 016).
 //
-// Slot lifecycle:
-//   - Acquired before Start() proceeds
-//   - Released on: Start failure, persistence failure, natural exit, stop,
-//     restart, remove, or supervisor shutdown
-//   - Restart releases the old run's reservation and acquires a fresh one
-//   - No double release (sync.Once)
-func (s *Supervisor) Start(ctx context.Context, model *domain.Model, runtime *domain.Runtime, customArgs []string, customEnv map[string]string) (*domain.LaunchInstance, error) {
+// The per-ModelID arbitration lock serializes check+claim for the same model.
+// It is released before slot acquisition, persistence, or spawn.
+func (s *Supervisor) AdmitAndStart(ctx context.Context, model *domain.Model, runtime *domain.Runtime, owner domain.LaunchOwner, customArgs []string, customEnv map[string]string) (*domain.LaunchInstance, error) {
 	inst, err := s.resolver.ResolveToInstance(model, runtime, customArgs, customEnv)
 	if err != nil {
 		return nil, fmt.Errorf("resolve instance: %w", err)
 	}
 
-	// Create controller immediately (before reservation) so that RemoveTerminal
-	// can find it and persist its state even if reservation is not yet acquired.
 	ctrl := NewInstanceController(inst, s.store, s.resolver, s.broker)
 	ctrl.supervisorRef = s
+
+	arbLock := s.arbitrationLock(model.ID)
+	arbLock.Lock()
+
+	if err := s.lifecycleContext().Err(); err != nil {
+		arbLock.Unlock()
+		return nil, &AdmissionRejection{Reason: RejShuttingDown, ModelID: model.ID}
+	}
+
+	s.mu.RLock()
+	for id, c := range s.instances {
+		snap := c.Snapshot()
+		if snap.ModelID == model.ID && snap.IsInFlight() && !compatible(owner, &snap) {
+			s.mu.RUnlock()
+			arbLock.Unlock()
+			return nil, &AdmissionRejection{Reason: RejInFlight, ModelID: model.ID, ConflictID: id, PipelineID: snap.PipelineID, EntryID: snap.PipelineEntryID}
+		}
+	}
+	s.mu.RUnlock()
+
+	if s.store != nil {
+		entries, err := s.store.ListByModelID(model.ID)
+		if err == nil {
+			for _, e := range entries {
+				if e.State == string(domain.InstanceStateOrphan) {
+					arbLock.Unlock()
+					return nil, &AdmissionRejection{Reason: RejOrphan, ModelID: model.ID, ConflictID: domain.InstanceID(e.ID)}
+				}
+			}
+		}
+	}
 
 	s.mu.Lock()
 	s.instances[inst.ID] = ctrl
 	s.mu.Unlock()
 
-	// Acquire a concurrency slot via buffered channel. This blocks until a slot
-	// is available or ctx is cancelled. Wrap in slotReservation for exactly-once release.
+	arbLock.Unlock()
+
+	return s.startPostAdmit(ctx, inst, ctrl)
+}
+
+// startPostAdmit performs the post-admission launch sequence: slot acquisition,
+// pending persistence, startCore, and ADR 016 lifecycle. The instance MUST
+// already be in s.instances (admission linearized).
+func (s *Supervisor) startPostAdmit(ctx context.Context, inst *domain.LaunchInstance, ctrl *InstanceController) (*domain.LaunchInstance, error) {
 	reservation, err := s.acquireSlot(ctx)
 	if err != nil {
 		s.mu.Lock()
@@ -314,13 +390,11 @@ func (s *Supervisor) Start(ctx context.Context, model *domain.Model, runtime *do
 		return nil, err
 	}
 
-	// Persist initial pending instance.
 	if s.store != nil {
 		entry := domain.ToStorageEntry(inst)
 		if err := s.store.Create(entry); err != nil {
 			if reservation != nil {
 				reservation.Release()
-				reservation = nil
 			}
 			s.mu.Lock()
 			delete(s.instances, inst.ID)
@@ -329,24 +403,15 @@ func (s *Supervisor) Start(ctx context.Context, model *domain.Model, runtime *do
 		}
 	}
 
-	// Start process using the supervisor lifecycle context (not HTTP request ctx).
 	ctrlInst, err := ctrl.startWithReservation(s.lifecycleContext(), reservation)
 	if err != nil {
 		if ctrlInst != nil {
-			// ADR 016 outcomes C/D: startCore kept the instance in the
-			// supervisor's instances map; slot/run ownership is held by the
-			// wait() goroutine until it confirms exit.
 			return ctrlInst, fmt.Errorf("start instance %s: %w", inst.ID, err)
 		}
 		if !errors.Is(err, ErrPersistenceFailure) {
-			// startCore did not finalize this failure itself (persist-starting
-			// or spawn failure): record the failure durably best-effort.
-			// ADR 016 outcomes A/B already finalized the instance (failed
-			// state + LastError + best-effort persist) — do not overwrite.
 			inst.Fail(err.Error(), domain.InstanceExitError)
 			if s.store != nil {
 				if uerr := s.store.Update(domain.ToStorageEntry(inst)); uerr != nil {
-					// Join process error and persistence error — caller gets both.
 					err = errors.Join(err, fmt.Errorf("persist start error: %w", uerr))
 				}
 			}
@@ -359,6 +424,26 @@ func (s *Supervisor) Start(ctx context.Context, model *domain.Model, runtime *do
 
 	snapshot := ctrl.Snapshot()
 	return &snapshot, nil
+}
+
+// Start creates a new launch instance and starts its process without admission
+// arbitration (transitional entry point for callers not yet migrated to
+// AdmitAndStart in ADR 017 Slices B/C). New production code MUST use
+// AdmitAndStart.
+func (s *Supervisor) Start(ctx context.Context, model *domain.Model, runtime *domain.Runtime, customArgs []string, customEnv map[string]string) (*domain.LaunchInstance, error) {
+	inst, err := s.resolver.ResolveToInstance(model, runtime, customArgs, customEnv)
+	if err != nil {
+		return nil, fmt.Errorf("resolve instance: %w", err)
+	}
+
+	ctrl := NewInstanceController(inst, s.store, s.resolver, s.broker)
+	ctrl.supervisorRef = s
+
+	s.mu.Lock()
+	s.instances[inst.ID] = ctrl
+	s.mu.Unlock()
+
+	return s.startPostAdmit(ctx, inst, ctrl)
 }
 
 // Stop stops a specific instance by ID.

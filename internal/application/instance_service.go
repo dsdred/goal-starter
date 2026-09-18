@@ -3,7 +3,6 @@ package application
 import (
 	"context"
 	"fmt"
-	"sync"
 	"time"
 
 	"github.com/dsdred/goal/internal/domain"
@@ -15,47 +14,19 @@ import (
 type InstanceService struct {
 	supervisor *process.Supervisor
 	repo       storage.Repository
-
-	startMu    sync.Mutex
-	startLocks map[string]*sync.Mutex
 }
 
 func NewInstanceService(supervisor *process.Supervisor, repo storage.Repository) *InstanceService {
 	return &InstanceService{
 		supervisor: supervisor,
 		repo:       repo,
-		startLocks: make(map[string]*sync.Mutex),
 	}
 }
 
-func (s *InstanceService) modelStartLock(modelID string) func() {
-	s.startMu.Lock()
-	m, ok := s.startLocks[modelID]
-	if !ok {
-		m = &sync.Mutex{}
-		s.startLocks[modelID] = m
-	}
-	s.startMu.Unlock()
-	m.Lock()
-	return m.Unlock
-}
-
-// StartModel starts a model by resolving runtime and calling supervisor.Start.
-// The in-flight check and the Start call are serialized per-model: concurrent
-// StartModel calls for the same model cannot both pass the guard.
+// StartModel starts a model via the authoritative AdmitAndStart boundary
+// (ADR 017). Admission arbitration is owned by the Supervisor; this method
+// performs only resolution and delegates.
 func (s *InstanceService) StartModel(ctx context.Context, modelID string) (*domain.LaunchInstance, error) {
-	unlock := s.modelStartLock(modelID)
-	defer unlock()
-
-	instances, err := s.supervisor.List()
-	if err == nil {
-		for _, inst := range instances {
-			if inst.ModelID == modelID && inst.IsInFlight() {
-				return nil, process.ErrLaunchInFlight
-			}
-		}
-	}
-
 	me, err := s.repo.GetModel(modelID)
 	if err != nil {
 		return nil, fmt.Errorf("model not found: %w", err)
@@ -72,7 +43,7 @@ func (s *InstanceService) StartModel(ctx context.Context, modelID string) (*doma
 		rte.Environment,
 	)
 
-	return s.supervisor.Start(ctx, domainModel, domainRuntime, nil, nil)
+	return s.supervisor.AdmitAndStart(ctx, domainModel, domainRuntime, domain.ManualOwner, nil, nil)
 }
 
 func (s *InstanceService) StopInstance(ctx context.Context, id domain.InstanceID) error {

@@ -369,6 +369,15 @@ func (h *RuntimesHandler) Action(w http.ResponseWriter, r *http.Request) {
 			if inst.RuntimeID == id && inst.IsLive() {
 				inst, err := h.instances.StartModel(r.Context(), inst.ModelID)
 				if err != nil {
+					var rej *process.AdmissionRejection
+					if errors.As(err, &rej) {
+						code := "launch_in_flight"
+						if rej.Reason == process.RejOrphan {
+							code = "orphan"
+						}
+						writeAPIError(w, http.StatusConflict, apierrors.NewAPIError(apierrors.CodeConflict, code))
+						return
+					}
 					if errors.Is(err, process.ErrLaunchInFlight) {
 						writeAPIError(w, http.StatusConflict, apierrors.NewAPIError(apierrors.CodeConflict, "launch_in_flight"))
 						return
