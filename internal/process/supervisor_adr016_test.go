@@ -218,8 +218,16 @@ func TestStartCore_RunningPersistFail_FailedPersistFails(t *testing.T) {
 	}
 	waitForSlotFree(t, sup, 1, 5*time.Second)
 
-	// Repository retains starting (no PID): recovery classifies the dead
-	// process as stale (pid-not-found) — the correct ADR 016 §5 residual.
+	// The durable record is either:
+	//   - starting/0: the initial persist succeeded, running+failed were
+	//     rejected, and wait() has not yet persisted the terminal state.
+	//   - exited/PID>0: wait() has confirmed the killed process exit and
+	//     persisted the terminal state (the store rejects running/failed
+	//     but accepts exited).
+	// Both are valid ADR 016 Outcome B observations: the running identity
+	// was never durable, and the failed rollback persist was rejected.
+	// The wait() goroutine's terminal persist is a legal concurrent
+	// postcondition, not a contract violation.
 	entries, err := store.List()
 	if err != nil {
 		t.Fatalf("store list: %v", err)
@@ -227,8 +235,14 @@ func TestStartCore_RunningPersistFail_FailedPersistFails(t *testing.T) {
 	if len(entries) != 1 {
 		t.Fatalf("durable entries = %d, want 1", len(entries))
 	}
-	if entries[0].State != string(domain.InstanceStateStarting) || entries[0].PID != 0 {
-		t.Fatalf("durable record = state %q pid %d, want starting/0 (Outcome B)", entries[0].State, entries[0].PID)
+	st := domain.InstanceState(entries[0].State)
+	switch {
+	case st == domain.InstanceStateStarting && entries[0].PID == 0:
+		// Pre-wait(): the repository retains the initial starting record.
+	case st == domain.InstanceStateExited && entries[0].PID > 0:
+		// Post-wait(): the killed process exit was persisted terminally.
+	default:
+		t.Fatalf("durable record = state %q pid %d; want starting/0 or exited/PID>0 (Outcome B)", entries[0].State, entries[0].PID)
 	}
 }
 
