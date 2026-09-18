@@ -69,6 +69,18 @@ async function main() {
     const rawNav = await page.evaluate(() =>
       [...document.querySelectorAll('.nav-item span[data-i18n]')].map(e => e.textContent.trim()));
     suite.log('1.3 RU nav: no item shows raw "Runtime"', !rawNav.includes('Runtime'), `navs=${JSON.stringify(rawNav)}`);
+    const navGroups = await page.evaluate(() => {
+      const groups = document.querySelectorAll('.sidebar-nav');
+      return [...groups].map(g => [...g.querySelectorAll('.nav-item')].map(b => b.dataset.view));
+    });
+    const expectedMain = ['models', 'adv-runtimes', 'pipelines'];
+    const expectedAdv = ['logs', 'history', 'adv-instances', 'adv-settings'];
+    suite.log('1.4 RU nav: main group order is models→runtimes→pipelines',
+      JSON.stringify(navGroups[0]) === JSON.stringify(expectedMain), `got=${JSON.stringify(navGroups[0])}`);
+    suite.log('1.5 RU nav: additional group order is logs→history→instances→settings',
+      JSON.stringify(navGroups[1]) === JSON.stringify(expectedAdv), `got=${JSON.stringify(navGroups[1])}`);
+    const advLabel = (await page.locator('.sidebar-label[data-i18n="nav.advanced"]').textContent() || '').trim();
+    suite.log('1.6 RU nav: group label is "ДОПОЛНИТЕЛЬНО"', advLabel === 'ДОПОЛНИТЕЛЬНО', `text=${JSON.stringify(advLabel)}`);
     await H.screenshot(page, ws, '01-rw-nav-ru');
 
     // ═══ SECTION 2: RU login failure is localized, not the raw server string ═══
@@ -113,6 +125,8 @@ async function main() {
     suite.log('4.3 EN correct credentials: login succeeds (app shell visible)', shellVisible);
     suite.log('4.4 EN nav: runtimes item is "Runtimes"', (await navText('adv-runtimes')) === 'Runtimes', `text=${JSON.stringify(await navText('adv-runtimes'))}`);
     suite.log('4.5 EN nav: instances item is "Instances"', (await navText('adv-instances')) === 'Instances', `text=${JSON.stringify(await navText('adv-instances'))}`);
+    const enAdvLabel = (await page.locator('.sidebar-label[data-i18n="nav.advanced"]').textContent() || '').trim();
+    suite.log('4.6 EN nav: group label is "ADVANCED"', enAdvLabel === 'ADVANCED', `text=${JSON.stringify(enAdvLabel)}`);
     await H.screenshot(page, ws, '05-logged-in-en');
 
     // ═══ SECTION 5: server-message mapping (RU) ═══
