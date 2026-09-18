@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -79,6 +80,11 @@ func newAuditEnv(t *testing.T, loginLimit int) *auditEnv {
 		t.Fatalf("create repository: %v", err)
 	}
 	sup := process.NewSupervisor(repo)
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		_ = sup.ShutdownWithPersistence(ctx)
+	})
 
 	passStore := security.NewPasswordStore()
 	if err := passStore.SetHash("admin", auditTestOldPasswordHash); err != nil {
