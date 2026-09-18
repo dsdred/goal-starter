@@ -456,3 +456,304 @@ func TestStart_PostAdmitError_CleansInstances(t *testing.T) {
 	}
 	res.Release()
 }
+
+// TestAdmitAndStart_Pipeline_SamePipeline_DifferentEntries_SameModel verifies
+// ADR 013: repeated ModelID entries inside ONE pipeline remain independently
+// launchable.
+func TestAdmitAndStart_Pipeline_SamePipeline_DifferentEntries_SameModel(t *testing.T) {
+	store := newMockStore()
+	cfg := SupervisorConfig{MaxConcurrent: 4, LogBufferSize: 64}
+	sup := newTestSupervisor(t, store, cfg)
+	model := &domain.Model{ID: "m1", Name: "m1", RuntimeID: "rt", PipelineID: "p1", PipelineEntryID: "e1"}
+	rt := &domain.Runtime{ID: "rt", Name: "rt", Executable: buildFakeRuntimeForTest(t)}
+
+	owner1 := domain.PipelineOwner("p1", "e1")
+	inst1, err := sup.AdmitAndStart(context.Background(), model, rt, owner1, []string{"-sleep", "30"}, nil)
+	if err != nil {
+		t.Fatalf("entry e1: %v", err)
+	}
+	if inst1 == nil {
+		t.Fatal("entry e1: nil instance")
+	}
+
+	model2 := &domain.Model{ID: "m1", Name: "m1", RuntimeID: "rt", PipelineID: "p1", PipelineEntryID: "e2"}
+	owner2 := domain.PipelineOwner("p1", "e2")
+	inst2, err := sup.AdmitAndStart(context.Background(), model2, rt, owner2, []string{"-sleep", "30"}, nil)
+	if err != nil {
+		t.Fatalf("entry e2 (same pipeline, different entry): expected success, got: %v", err)
+	}
+	if inst2 == nil {
+		t.Fatal("entry e2: nil instance")
+	}
+}
+
+// TestAdmitAndStart_Pipeline_SameEntry_Rejected verifies that a second
+// admission for the same pipeline+entry is rejected.
+func TestAdmitAndStart_Pipeline_SameEntry_Rejected(t *testing.T) {
+	store := newMockStore()
+	cfg := SupervisorConfig{MaxConcurrent: 4, LogBufferSize: 64}
+	sup := newTestSupervisor(t, store, cfg)
+	model := &domain.Model{ID: "m1", Name: "m1", RuntimeID: "rt", PipelineID: "p1", PipelineEntryID: "e1"}
+	rt := &domain.Runtime{ID: "rt", Name: "rt", Executable: buildFakeRuntimeForTest(t)}
+	owner := domain.PipelineOwner("p1", "e1")
+
+	inst1, err := sup.AdmitAndStart(context.Background(), model, rt, owner, []string{"-sleep", "30"}, nil)
+	if err != nil {
+		t.Fatalf("first: %v", err)
+	}
+
+	_, err = sup.AdmitAndStart(context.Background(), model, rt, owner, nil, nil)
+	if err == nil {
+		t.Fatal("second same-entry: expected rejection")
+	}
+	var rej *AdmissionRejection
+	if !errors.As(err, &rej) {
+		t.Fatalf("expected *AdmissionRejection, got %T: %v", err, err)
+	}
+	if rej.Reason != RejInFlight {
+		t.Fatalf("reason = %v, want RejInFlight", rej.Reason)
+	}
+	if rej.PipelineID != "p1" || rej.EntryID != "e1" {
+		t.Fatalf("conflict owner = (%q, %q), want (p1, e1)", rej.PipelineID, rej.EntryID)
+	}
+	_ = inst1
+}
+
+// TestAdmitAndStart_Pipeline_CrossPipeline_SameModel verifies that two
+// different pipelines launching the same model result in exactly one
+// admission and one rejection.
+func TestAdmitAndStart_Pipeline_CrossPipeline_SameModel(t *testing.T) {
+	store := newMockStore()
+	cfg := SupervisorConfig{MaxConcurrent: 4, LogBufferSize: 64}
+	sup := newTestSupervisor(t, store, cfg)
+	model := &domain.Model{ID: "m1", Name: "m1", RuntimeID: "rt"}
+	rt := &domain.Runtime{ID: "rt", Name: "rt", Executable: buildFakeRuntimeForTest(t)}
+
+	owner1 := domain.PipelineOwner("p1", "e1")
+	owner2 := domain.PipelineOwner("p2", "e2")
+
+	var wg sync.WaitGroup
+	type result struct {
+		inst *domain.LaunchInstance
+		err  error
+	}
+	results := make([]result, 2)
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		inst, err := sup.AdmitAndStart(context.Background(), model, rt, owner1, []string{"-sleep", "30"}, nil)
+		results[0] = result{inst: inst, err: err}
+	}()
+	go func() {
+		defer wg.Done()
+		inst, err := sup.AdmitAndStart(context.Background(), model, rt, owner2, []string{"-sleep", "30"}, nil)
+		results[1] = result{inst: inst, err: err}
+	}()
+	wg.Wait()
+
+	var successes, rejections int
+	for _, r := range results {
+		if r.err == nil {
+			successes++
+		} else {
+			rejections++
+			var rej *AdmissionRejection
+			if errors.As(r.err, &rej) && rej.Reason != RejInFlight {
+				t.Fatalf("unexpected rejection reason: %v", rej.Reason)
+			}
+		}
+	}
+	if successes != 1 {
+		t.Fatalf("successes = %d, want 1", successes)
+	}
+	if rejections != 1 {
+		t.Fatalf("rejections = %d, want 1", rejections)
+	}
+}
+
+// TestAdmitAndStart_Manual_Pipeline_SameModel verifies the manual × pipeline
+// race: exactly one incompatible owner passes admission.
+func TestAdmitAndStart_Manual_Pipeline_SameModel(t *testing.T) {
+	store := newMockStore()
+	cfg := SupervisorConfig{MaxConcurrent: 4, LogBufferSize: 64}
+	sup := newTestSupervisor(t, store, cfg)
+	model := &domain.Model{ID: "m1", Name: "m1", RuntimeID: "rt"}
+	rt := &domain.Runtime{ID: "rt", Name: "rt", Executable: buildFakeRuntimeForTest(t)}
+
+	ownerPipeline := domain.PipelineOwner("p1", "e1")
+
+	var wg sync.WaitGroup
+	type result struct {
+		inst *domain.LaunchInstance
+		err  error
+	}
+	results := make([]result, 2)
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		inst, err := sup.AdmitAndStart(context.Background(), model, rt, domain.ManualOwner, []string{"-sleep", "30"}, nil)
+		results[0] = result{inst: inst, err: err}
+	}()
+	go func() {
+		defer wg.Done()
+		inst, err := sup.AdmitAndStart(context.Background(), model, rt, ownerPipeline, []string{"-sleep", "30"}, nil)
+		results[1] = result{inst: inst, err: err}
+	}()
+	wg.Wait()
+
+	var successes, rejections int
+	for _, r := range results {
+		if r.err == nil {
+			successes++
+		} else {
+			rejections++
+			var rej *AdmissionRejection
+			if errors.As(r.err, &rej) && rej.Reason != RejInFlight {
+				t.Fatalf("unexpected rejection reason: %v", rej.Reason)
+			}
+		}
+	}
+	if successes != 1 {
+		t.Fatalf("successes = %d, want 1", successes)
+	}
+	if rejections != 1 {
+		t.Fatalf("rejections = %d, want 1", rejections)
+	}
+}
+
+// TestAdmitAndStart_Pipeline_Orphan verifies that a pipeline launch is
+// rejected when an unresolved orphan exists for the model.
+func TestAdmitAndStart_Pipeline_Orphan(t *testing.T) {
+	store := newMockStore()
+	orphan := &domain.LaunchInstanceEntry{
+		ID: "orphan-p", ModelID: "m1", State: string(domain.InstanceStateOrphan),
+	}
+	if err := store.Create(orphan); err != nil {
+		t.Fatalf("seed orphan: %v", err)
+	}
+
+	cfg := SupervisorConfig{MaxConcurrent: 2, LogBufferSize: 64}
+	sup := newTestSupervisor(t, store, cfg)
+	model := &domain.Model{ID: "m1", Name: "m1", RuntimeID: "rt", PipelineID: "p1", PipelineEntryID: "e1"}
+	rt := &domain.Runtime{ID: "rt", Name: "rt", Executable: buildFakeRuntimeForTest(t)}
+	owner := domain.PipelineOwner("p1", "e1")
+
+	_, err := sup.AdmitAndStart(context.Background(), model, rt, owner, nil, nil)
+	if err == nil {
+		t.Fatal("expected orphan rejection")
+	}
+	var rej *AdmissionRejection
+	if !errors.As(err, &rej) {
+		t.Fatalf("expected *AdmissionRejection, got %T: %v", err, err)
+	}
+	if rej.Reason != RejOrphan {
+		t.Fatalf("reason = %v, want RejOrphan", rej.Reason)
+	}
+	if rej.ConflictID != "orphan-p" {
+		t.Fatalf("ConflictID = %q, want orphan-p", rej.ConflictID)
+	}
+}
+
+// TestAdmitAndStart_Pipeline_ResidualStarting verifies that a pipeline
+// admission is rejected while a residual starting instance exists.
+func TestAdmitAndStart_Pipeline_ResidualStarting(t *testing.T) {
+	store := newMockStore()
+	cfg := SupervisorConfig{MaxConcurrent: 2, LogBufferSize: 64}
+	sup := newTestSupervisor(t, store, cfg)
+	model := &domain.Model{ID: "m1", Name: "m1", RuntimeID: "rt", PipelineID: "p1", PipelineEntryID: "e1"}
+	rt := &domain.Runtime{ID: "rt", Name: "rt", Executable: buildFakeRuntimeForTest(t)}
+	owner := domain.PipelineOwner("p1", "e1")
+
+	residualID := domain.InstanceID("residual-p")
+	residual := &domain.LaunchInstance{
+		ID: residualID, ModelID: "m1", State: domain.InstanceStateStarting,
+		PipelineID: "p1", PipelineEntryID: "e1",
+	}
+	ctrl := NewInstanceController(residual, store, sup.resolver, sup.broker)
+	ctrl.supervisorRef = sup
+	sup.mu.Lock()
+	sup.instances[residualID] = ctrl
+	sup.mu.Unlock()
+
+	_, err := sup.AdmitAndStart(context.Background(), model, rt, owner, nil, nil)
+	if err == nil {
+		t.Fatal("expected rejection for residual")
+	}
+	var rej *AdmissionRejection
+	if !errors.As(err, &rej) {
+		t.Fatalf("expected *AdmissionRejection, got %T: %v", err, err)
+	}
+	if rej.Reason != RejInFlight {
+		t.Fatalf("reason = %v, want RejInFlight", rej.Reason)
+	}
+}
+
+// TestAdmitAndStart_Pipeline_LegacyUnattributed verifies that a legacy
+// unattributed pipeline instance (empty PipelineEntryID) blocks a new
+// pipeline entry admission for the same model.
+func TestAdmitAndStart_Pipeline_LegacyUnattributed(t *testing.T) {
+	store := newMockStore()
+	cfg := SupervisorConfig{MaxConcurrent: 2, LogBufferSize: 64}
+	sup := newTestSupervisor(t, store, cfg)
+	model := &domain.Model{ID: "m1", Name: "m1", RuntimeID: "rt", PipelineID: "p1", PipelineEntryID: "e1"}
+	rt := &domain.Runtime{ID: "rt", Name: "rt", Executable: buildFakeRuntimeForTest(t)}
+	owner := domain.PipelineOwner("p1", "e1")
+
+	legacyID := domain.InstanceID("legacy-1")
+	legacy := &domain.LaunchInstance{
+		ID: legacyID, ModelID: "m1", State: domain.InstanceStateRunning,
+		PipelineID: "p1", PipelineEntryID: "",
+	}
+	ctrl := NewInstanceController(legacy, store, sup.resolver, sup.broker)
+	ctrl.supervisorRef = sup
+	sup.mu.Lock()
+	sup.instances[legacyID] = ctrl
+	sup.mu.Unlock()
+
+	_, err := sup.AdmitAndStart(context.Background(), model, rt, owner, nil, nil)
+	if err == nil {
+		t.Fatal("expected rejection for legacy unattributed instance")
+	}
+	var rej *AdmissionRejection
+	if !errors.As(err, &rej) {
+		t.Fatalf("expected *AdmissionRejection, got %T: %v", err, err)
+	}
+	if rej.Reason != RejInFlight {
+		t.Fatalf("reason = %v, want RejInFlight", rej.Reason)
+	}
+	if rej.ConflictID != legacyID {
+		t.Fatalf("ConflictID = %q, want %q", rej.ConflictID, legacyID)
+	}
+}
+
+// TestCompatible_Symmetry verifies that compatible(A, B) == compatible(B, A)
+// for all relevant owner combinations.
+func TestCompatible_Symmetry(t *testing.T) {
+	owners := []domain.LaunchOwner{
+		domain.ManualOwner,
+		domain.PipelineOwner("p1", "e1"),
+		domain.PipelineOwner("p1", "e2"),
+		domain.PipelineOwner("p2", "e1"),
+	}
+	for i, a := range owners {
+		for j, b := range owners {
+			// Build a fake existing instance for owner b.
+			existing := &domain.LaunchInstance{ID: "x", ModelID: "m"}
+			if b.Kind == domain.OwnerPipeline {
+				existing.PipelineID = b.PipelineID
+				existing.PipelineEntryID = b.PipelineEntryID
+			}
+			// For symmetry, also build existing for a.
+			existingA := &domain.LaunchInstance{ID: "x", ModelID: "m"}
+			if a.Kind == domain.OwnerPipeline {
+				existingA.PipelineID = a.PipelineID
+				existingA.PipelineEntryID = a.PipelineEntryID
+			}
+			ab := compatible(a, existing)
+			ba := compatible(b, existingA)
+			if ab != ba {
+				t.Errorf("compatible not symmetric: owners[%d]=%+v, owners[%d]=%+v: a->b=%v b->a=%v", i, a, j, b, ab, ba)
+			}
+		}
+	}
+}

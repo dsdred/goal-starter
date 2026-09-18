@@ -239,15 +239,15 @@ func compatible(newOwner domain.LaunchOwner, existing *domain.LaunchInstance) bo
 	existingPipeline := existing.PipelineID != ""
 	switch {
 	case newOwner.Kind == domain.OwnerManual:
-		if existingPipeline {
-			return false
-		}
 		return false
 	case newOwner.Kind == domain.OwnerPipeline:
 		if !existingPipeline {
 			return false
 		}
 		if existing.PipelineID != newOwner.PipelineID {
+			return false
+		}
+		if existing.PipelineEntryID == "" {
 			return false
 		}
 		if existing.PipelineEntryID == newOwner.PipelineEntryID {
@@ -363,7 +363,7 @@ func (s *Supervisor) AdmitAndStart(ctx context.Context, model *domain.Model, run
 			for _, e := range entries {
 				if e.State == string(domain.InstanceStateOrphan) {
 					arbLock.Unlock()
-					return nil, &AdmissionRejection{Reason: RejOrphan, ModelID: model.ID, ConflictID: domain.InstanceID(e.ID)}
+					return nil, &AdmissionRejection{Reason: RejOrphan, ModelID: model.ID, ConflictID: domain.InstanceID(e.ID), PipelineID: e.PipelineID, EntryID: e.PipelineEntryID}
 				}
 			}
 		}

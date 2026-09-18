@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 
@@ -413,21 +414,9 @@ func (s *PipelineService) Restart(ctx context.Context, pipelineID string) (*Pipe
 }
 
 // startEntry launches one pipeline entry with the D2 all-or-nothing Args
-// override (pre-substitution; the persisted Model.Args is never modified)
-// and the ADR 013 D3 per-entry launch gate:
-//
-//   - per-entry idempotency: an active instance already attributed to this
-//     entry (pipeline_id + pipeline_entry_id) → already-running;
-//   - model-owner rule: an active instance owned by another pipeline or by
-//     a manual launch (empty pipeline_id) → already-running, never adopted;
-//     active instances owned by THIS pipeline (any of its entries, or a
-//     legacy unattributed one) do not block this entry — within-pipeline
-//     repeatable models launch independently;
-//   - orphan gate: an orphan of this pipeline (or a legacy unattributed
-//     orphan of it) → orphan-skipped; an orphan owned by someone else →
-//     already-running (an out-of-GoAl process may hold the model's ports).
-//
-// Skip outcomes create no instance record; only started/failed do.
+// override (pre-substitution; the persisted Model.Args is never modified).
+// Admission arbitration is delegated to Supervisor.AdmitAndStart (ADR 017);
+// the structured AdmissionRejection is mapped to per-entry pipeline outcomes.
 func (s *PipelineService) startEntry(ctx context.Context, pipelineID string, index int, entry domain.PipelineModel) PipelineEntryStart {
 	out := PipelineEntryStart{ModelID: entry.ModelID, EntryID: entry.ID, Index: index}
 
@@ -442,45 +431,6 @@ func (s *PipelineService) startEntry(ctx context.Context, pipelineID string, ind
 		return out
 	}
 
-	insts, err := s.repo.ListByModelID(entry.ModelID)
-	if err == nil {
-		for _, inst := range insts {
-			if isInFlightState(inst.State) {
-				if inst.PipelineID == pipelineID && inst.PipelineEntryID == entry.ID {
-					out.Status = OutcomeAlreadyRunning
-					return out
-				}
-				if inst.PipelineID != pipelineID {
-					// Foreign owner (another pipeline or manual): no second
-					// copy, never adopted.
-					out.Status = OutcomeAlreadyRunning
-					return out
-				}
-				if inst.PipelineEntryID == "" {
-					// Legacy (pre-ADR 013) unattributed instance owned by
-					// this pipeline: the owning entry cannot be determined —
-					// conservative, no second copy. It is still stopped by
-					// the D4 legacy fallback.
-					out.Status = OutcomeAlreadyRunning
-					return out
-				}
-				// Attributed to another entry of this pipeline:
-				// within-pipeline independence — this entry may launch its
-				// own instance (ADR 013 D3).
-			}
-			if inst.State == "orphan" {
-				if inst.PipelineID == pipelineID || inst.PipelineID == "" {
-					// Consistent with the Models-page contract: no Start
-					// while an out-of-GoAl process may be running.
-					out.Status = OutcomeOrphanSkipped
-					return out
-				}
-				out.Status = OutcomeAlreadyRunning
-				return out
-			}
-		}
-	}
-
 	dm := domain.ModelEntryToDomain(me)
 	if len(entry.Args) > 0 {
 		dm.Args = entry.Args
@@ -492,10 +442,22 @@ func (s *PipelineService) startEntry(ctx context.Context, pipelineID string, ind
 		rte.Environment,
 	)
 
-	inst, err := s.supervisor.Start(ctx, dm, rt, nil, nil)
+	inst, err := s.supervisor.AdmitAndStart(ctx, dm, rt, domain.PipelineOwner(pipelineID, entry.ID), nil, nil)
 	if err != nil {
-		// Standard Supervisor failure semantics apply: a terminal failed
-		// instance record is persisted. The reason stays a bounded class.
+		var rej *process.AdmissionRejection
+		if errors.As(err, &rej) {
+			switch rej.Reason {
+			case process.RejOrphan:
+				if rej.PipelineID == pipelineID || rej.PipelineID == "" {
+					out.Status = OutcomeOrphanSkipped
+				} else {
+					out.Status = OutcomeAlreadyRunning
+				}
+			default:
+				out.Status = OutcomeAlreadyRunning
+			}
+			return out
+		}
 		out.Status = OutcomeFailed
 		if strings.Contains(err.Error(), "resolve instance") {
 			out.Error = ReasonResolveFailed

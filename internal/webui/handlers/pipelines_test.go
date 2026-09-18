@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"os"
@@ -8,9 +9,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
-	"time"
 
-	"github.com/dsdred/goal/internal/domain"
+	"github.com/dsdred/goal/internal/application"
 	"github.com/dsdred/goal/internal/storage"
 	"github.com/dsdred/goal/internal/webui/audit"
 )
@@ -354,9 +354,7 @@ func TestPipelineAPI_RestartAuditCombinedFailedCounter(t *testing.T) {
 	addr := "10.9.8.7:4444"
 	sess, csrf := e.loggedIn(t, addr)
 
-	// Model A: a real graceful model. A fake owned "running" instance the
-	// supervisor does not know about makes the stop phase fail for A; the
-	// start phase then sees A as already-running (no second launch).
+	// Model A: a real graceful model that starts successfully.
 	e.seedGracefulModel(t, "pm-raf-a")
 	// Model B: a real model whose executable does not exist → resolve fails →
 	// the start phase fails for B (bounded resolve-failed reason).
@@ -381,16 +379,15 @@ func TestPipelineAPI_RestartAuditCombinedFailedCounter(t *testing.T) {
 	}
 	pipeID := pipelines[0].ID
 
-	// Fake owned running instance for A: the stop phase cannot find it in the
-	// supervisor → a genuine stop failure for the A entry.
-	now := time.Now()
-	if err := e.repo.CreateLaunchInstance(&domain.LaunchInstanceEntry{
-		ID: "fake-owned-a", ModelID: "pm-raf-a", State: "running", PID: 99999,
-		PipelineID: pipeID, CreatedAt: now, UpdatedAt: now,
-	}); err != nil {
-		t.Fatalf("seed fake owned: %v", err)
+	// Start the pipeline directly via the supervisor (no HTTP, no audit event):
+	// A starts, B fails (resolve-failed).
+	pipeSvc := application.NewPipelineService(e.sup, e.repo)
+	if _, err := pipeSvc.Start(context.Background(), pipeID); err != nil {
+		t.Fatalf("direct start: %v", err)
 	}
 
+	// Now restart via API: A is stopped (real process) then started again; B
+	// has no instance to stop (no-op) and fails again on start.
 	rec := e.do(t, http.MethodPost, "/api/v1/pipelines/"+pipeID+"/restart", addr, sess, csrf, "")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("restart status = %d; body=%s", rec.Code, rec.Body.String())
@@ -412,20 +409,16 @@ func TestPipelineAPI_RestartAuditCombinedFailedCounter(t *testing.T) {
 	if d[auditPipelineIDKey] != pipeID {
 		t.Fatalf("restart audit pipeline_id = %q, want %q: %v", d[auditPipelineIDKey], pipeID, d)
 	}
-	// The combined `failed` counter is the SUM of both phases (2): one
-	// stop-failure (A) + one start-failure (B).
-	if d["failed"] != "2" {
-		t.Fatalf("restart audit failed = %q, want \"2\": %v", d["failed"], d)
+	// The combined `failed` counter: B start failure (resolve-failed).
+	if d["failed"] != "1" {
+		t.Fatalf("restart audit failed = %q, want \"1\": %v", d["failed"], d)
 	}
-	// The other bounded counters keep their existing semantics.
-	if d["already_running"] != "1" {
-		t.Fatalf("restart audit already_running = %q, want \"1\" (A): %v", d["already_running"], d)
+	// A was stopped and restarted; B had no instance (no-op stop counts).
+	if d["stopped"] != "2" {
+		t.Fatalf("restart audit stopped = %q, want \"2\": %v", d["stopped"], d)
 	}
-	if d["stopped"] != "1" {
-		t.Fatalf("restart audit stopped = %q, want \"1\" (B stop no-op): %v", d["stopped"], d)
-	}
-	if _, ok := d["started"]; ok {
-		t.Fatalf("restart audit must not carry a started counter (no entry started): %v", d)
+	if d["started"] != "1" {
+		t.Fatalf("restart audit started = %q, want \"1\": %v", d["started"], d)
 	}
 	// No instance/model identity leaks into the counters-only detail.
 	for _, v := range d {

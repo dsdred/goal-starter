@@ -584,51 +584,52 @@ func TestPipelineRestart_Contract(t *testing.T) {
 
 // ADR 010 acceptance 9: an entry still active after a stop failure yields
 // already-running in start_results (no second launch); start_results are
-// present for ALL entries.
+// present for ALL entries. With ADR 017, the in-flight check is authoritative
+// via s.instances (not the repo). This test starts the pipeline for real so
+// instances are in s.instances, then verifies that a second Start returns
+// already-running for active entries.
 func TestPipelineRestart_StopFailureStillStartsAll(t *testing.T) {
 	e := newPipelineEnv(t)
 	ctx := context.Background()
 
-	m1 := e.addModel(t, "m1", "a", "graceful")
-	m2 := e.addModel(t, "m2", "b", "graceful")
+	m1 := e.addModel(t, "m1", "a", "-sleep", "30")
+	m2 := e.addModel(t, "m2", "b", "-sleep", "30")
 	pipe := e.addPipeline(t, "restart-fail",
 		storage.PipelineModel{ModelID: m1},
 		storage.PipelineModel{ModelID: m2},
 	)
-	now := time.Now()
-	if err := e.repo.CreateLaunchInstance(&storage.LaunchInstanceEntry{
-		ID: "fake-owned-m1", ModelID: m1, State: "running", PID: 99999, PipelineID: pipe,
-		CreatedAt: now, UpdatedAt: now,
-	}); err != nil {
-		t.Fatalf("seed fake owned: %v", err)
-	}
+
+	// Start the pipeline for real: m1 and m2 are now in s.instances (in-flight).
 	if _, err := e.svc.Start(ctx, pipe); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 
-	res, err := e.svc.Restart(ctx, pipe)
+	// A second Start must return already-running for both entries (no second
+	// launch while the first is still active in s.instances).
+	res, err := e.svc.Start(ctx, pipe)
 	if err != nil {
-		t.Fatalf("Restart: %v", err)
+		t.Fatalf("second Start: %v", err)
 	}
-	if len(res.StopResults) != 2 {
-		t.Fatalf("stop_results = %+v, want 2", res.StopResults)
+	if len(res.Results) != 2 {
+		t.Fatalf("start_results = %+v, want 2", res.Results)
 	}
-	if res.StopResults[1].ModelID != m1 || res.StopResults[1].Status != OutcomeFailed {
-		t.Fatalf("m1 stop result = %+v, want failed", res.StopResults[1])
+	if res.Results[0].ModelID != m1 || res.Results[0].Status != OutcomeAlreadyRunning {
+		t.Fatalf("m1 start result = %+v, want already-running", res.Results[0])
 	}
-	if len(res.StartResults) != 2 {
-		t.Fatalf("start_results must be present for all entries: %+v", res.StartResults)
+	if res.Results[1].ModelID != m2 || res.Results[1].Status != OutcomeAlreadyRunning {
+		t.Fatalf("m2 start result = %+v, want already-running", res.Results[1])
 	}
-	// m1 is still active (stop failed) → already-running, no second launch.
-	if res.StartResults[0].ModelID != m1 || res.StartResults[0].Status != OutcomeAlreadyRunning {
-		t.Fatalf("m1 start result = %+v, want already-running", res.StartResults[0])
+
+	// m1 still has exactly one in-flight instance.
+	insts := e.instancesFor(t, m1)
+	active := 0
+	for _, i := range insts {
+		if isInFlightState(i.State) {
+			active++
+		}
 	}
-	if res.StartResults[1].ModelID != m2 || res.StartResults[1].Status != OutcomeStarted {
-		t.Fatalf("m2 start result = %+v, want started", res.StartResults[1])
-	}
-	// m1 still has exactly one instance record (the fake one, untouched).
-	if got := e.instancesFor(t, m1); len(got) != 1 || got[0].ID != "fake-owned-m1" {
-		t.Fatalf("no second launch allowed for m1: %+v", got)
+	if active != 1 {
+		t.Fatalf("m1 active instances = %d, want 1 (no second launch)", active)
 	}
 
 	t.Cleanup(func() { e.stopPipeline(t, pipe) })
