@@ -27,7 +27,7 @@ func startInFlight(t *testing.T, sup *Supervisor, ctx context.Context, model *do
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		inst, err := sup.Start(startCtx, model, rt, args, nil)
+		inst, err := sup.start(startCtx, model, rt, args, nil)
 		if err != nil {
 			ch <- result{err: err}
 			return
@@ -73,7 +73,7 @@ func TestSupervisor_PendingWindow_StopRefused(t *testing.T) {
 
 	ctx := context.Background()
 
-	instA, err := sup.Start(ctx, modelA, rt, []string{"-sleep", "60"}, nil)
+	instA, err := sup.start(ctx, modelA, rt, []string{"-sleep", "60"}, nil)
 	if err != nil {
 		t.Fatalf("start A: %v", err)
 	}
@@ -123,7 +123,7 @@ func TestSupervisor_PendingWindow_RestartRefused(t *testing.T) {
 
 	ctx := context.Background()
 
-	instA, err := sup.Start(ctx, modelA, rt, []string{"-sleep", "60"}, nil)
+	instA, err := sup.start(ctx, modelA, rt, []string{"-sleep", "60"}, nil)
 	if err != nil {
 		t.Fatalf("start A: %v", err)
 	}
@@ -176,7 +176,7 @@ func TestSupervisor_PendingWindow_RecoveryAfterSlotRelease(t *testing.T) {
 
 	ctx := context.Background()
 
-	instA, err := sup.Start(ctx, modelA, rt, []string{"-sleep", "60"}, nil)
+	instA, err := sup.start(ctx, modelA, rt, []string{"-sleep", "60"}, nil)
 	if err != nil {
 		t.Fatalf("start A: %v", err)
 	}

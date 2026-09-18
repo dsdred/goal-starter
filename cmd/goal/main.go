@@ -376,7 +376,7 @@ func autostartModels(ctx context.Context, repo storage.Repository, supervisor *p
 			WorkingDirectory: runtimeEntry.WorkingDirectory,
 			Environment:      runtimeEntry.Environment,
 		}
-		if _, err := supervisor.Start(ctx, domainModel, domainRuntime, nil, nil); err != nil {
+		if _, err := supervisor.AdmitAndStart(ctx, domainModel, domainRuntime, domain.ManualOwner, nil, nil); err != nil {
 			slog.Error("autostart: start failed", "model", m.Name, "error", err)
 		}
 	}

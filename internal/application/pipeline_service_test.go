@@ -294,8 +294,8 @@ func TestPipelineStart_AlreadyRunningManual(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetRuntime: %v", err)
 	}
-	if _, err := e.sup.Start(ctx, domain.ModelEntryToDomain(me),
-		process.RuntimeToDomain(rte.ID, rte.Name, rte.Executable, rte.WorkingDirectory, rte.Environment), nil, nil); err != nil {
+	if _, err := e.sup.AdmitAndStart(ctx, domain.ModelEntryToDomain(me),
+		process.RuntimeToDomain(rte.ID, rte.Name, rte.Executable, rte.WorkingDirectory, rte.Environment), domain.ManualOwner, nil, nil); err != nil {
 		t.Fatalf("manual Start: %v", err)
 	}
 
@@ -400,19 +400,21 @@ func TestPipelineStop_ReverseOwnedOnly(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 
-	// A manually started second instance of m2 (no pipeline_id).
-	me, err := e.repo.GetModel(m2)
+	// A manually started instance of a DIFFERENT model (m4) — verifies pipeline
+	// stop does not affect non-pipeline-owned instances.
+	m4 := e.addModel(t, "m4", "d", "graceful")
+	me4, err := e.repo.GetModel(m4)
 	if err != nil {
-		t.Fatalf("GetModel: %v", err)
+		t.Fatalf("GetModel m4: %v", err)
 	}
-	rte, err := e.repo.GetRuntime(me.RuntimeID)
+	rte4, err := e.repo.GetRuntime(me4.RuntimeID)
 	if err != nil {
-		t.Fatalf("GetRuntime: %v", err)
+		t.Fatalf("GetRuntime m4: %v", err)
 	}
-	manual, err := e.sup.Start(ctx, domain.ModelEntryToDomain(me),
-		process.RuntimeToDomain(rte.ID, rte.Name, rte.Executable, rte.WorkingDirectory, rte.Environment), nil, nil)
+	manual, err := e.sup.AdmitAndStart(ctx, domain.ModelEntryToDomain(me4),
+		process.RuntimeToDomain(rte4.ID, rte4.Name, rte4.Executable, rte4.WorkingDirectory, rte4.Environment), domain.ManualOwner, nil, nil)
 	if err != nil {
-		t.Fatalf("manual Start m2: %v", err)
+		t.Fatalf("manual Start m4: %v", err)
 	}
 
 	now := time.Now()
@@ -441,7 +443,7 @@ func TestPipelineStop_ReverseOwnedOnly(t *testing.T) {
 		}
 	}
 
-	// Owned instances are stopped; the manual instance is untouched.
+	// Owned instances are stopped; the manual m4 instance is untouched.
 	for _, modelID := range []string{m1, m2, m3} {
 		for _, inst := range e.instancesFor(t, modelID) {
 			if inst.PipelineID == pipe && isInFlightState(inst.State) {

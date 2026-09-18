@@ -419,7 +419,7 @@ func TestStart_TransitionalStillWorks(t *testing.T) {
 	model := &domain.Model{ID: "m1", Name: "m1", RuntimeID: "rt"}
 	rt := &domain.Runtime{ID: "rt", Name: "rt", Executable: buildFakeRuntimeForTest(t)}
 
-	inst, err := sup.Start(context.Background(), model, rt, []string{"-sleep", "30"}, nil)
+	inst, err := sup.start(context.Background(), model, rt, []string{"-sleep", "30"}, nil)
 	if err != nil {
 		t.Fatalf("transitional Start: %v", err)
 	}
@@ -443,7 +443,7 @@ func TestStart_PostAdmitError_CleansInstances(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
-	_, err := sup.Start(ctx, model, rt, nil, nil)
+	_, err := sup.start(ctx, model, rt, nil, nil)
 	if err == nil {
 		t.Fatal("expected slot timeout error")
 	}

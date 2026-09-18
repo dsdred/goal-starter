@@ -210,8 +210,8 @@ func TestPipelineRepeat_ModelOwnerRule(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetRuntime: %v", err)
 	}
-	if _, err := e.sup.Start(ctx, domain.ModelEntryToDomain(me),
-		process.RuntimeToDomain(rte.ID, rte.Name, rte.Executable, rte.WorkingDirectory, rte.Environment), nil, nil); err != nil {
+	if _, err := e.sup.AdmitAndStart(ctx, domain.ModelEntryToDomain(me),
+		process.RuntimeToDomain(rte.ID, rte.Name, rte.Executable, rte.WorkingDirectory, rte.Environment), domain.ManualOwner, nil, nil); err != nil {
 		t.Fatalf("manual Start: %v", err)
 	}
 	res, err = e.svc.Start(ctx, pipeOther)
@@ -278,8 +278,8 @@ func TestPipelineRepeat_StopLegacyFallback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetRuntime: %v", err)
 	}
-	legacy, err := e.sup.Start(ctx, domain.ModelEntryToDomain(me),
-		process.RuntimeToDomain(rte.ID, rte.Name, rte.Executable, rte.WorkingDirectory, rte.Environment), nil, nil)
+	legacy, err := e.sup.AdmitAndStart(ctx, domain.ModelEntryToDomain(me),
+		process.RuntimeToDomain(rte.ID, rte.Name, rte.Executable, rte.WorkingDirectory, rte.Environment), domain.ManualOwner, nil, nil)
 	if err != nil {
 		t.Fatalf("Start legacy: %v", err)
 	}

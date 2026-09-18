@@ -24,7 +24,7 @@ func TestSupervisorRestartWithLaunch_FreshSpec(t *testing.T) {
 	rt := &domain.Runtime{ID: "rt1", Name: "test-rt", Executable: buildFakeRuntimeForTest(t)}
 	ctx := context.Background()
 
-	inst, err := sup.Start(ctx, modelA, rt, nil, nil)
+	inst, err := sup.start(ctx, modelA, rt, nil, nil)
 	if err != nil {
 		t.Fatalf("start failed: %v", err)
 	}
@@ -92,7 +92,7 @@ func TestSupervisorRestartWithLaunch_ResolveFailure(t *testing.T) {
 	rt := &domain.Runtime{ID: "rt1", Name: "test-rt", Executable: buildFakeRuntimeForTest(t)}
 	ctx := context.Background()
 
-	inst, err := sup.Start(ctx, model, rt, nil, nil)
+	inst, err := sup.start(ctx, model, rt, nil, nil)
 	if err != nil {
 		t.Fatalf("start failed: %v", err)
 	}

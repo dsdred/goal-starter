@@ -159,7 +159,7 @@ func TestStartCore_RunningPersistFail_KillConfirmed(t *testing.T) {
 	model := &domain.Model{ID: "adr016-a", Name: "a", RuntimeID: "rt"}
 	rt := &domain.Runtime{ID: "rt", Name: "rt", Executable: buildFakeRuntimeForTest(t)}
 
-	inst, err := sup.Start(context.Background(), model, rt, []string{"-sleep", "30"}, nil)
+	inst, err := sup.start(context.Background(), model, rt, []string{"-sleep", "30"}, nil)
 	if err == nil {
 		t.Fatal("expected fail-closed error, got nil")
 	}
@@ -206,7 +206,7 @@ func TestStartCore_RunningPersistFail_FailedPersistFails(t *testing.T) {
 	model := &domain.Model{ID: "adr016-b", Name: "b", RuntimeID: "rt"}
 	rt := &domain.Runtime{ID: "rt", Name: "rt", Executable: buildFakeRuntimeForTest(t)}
 
-	inst, err := sup.Start(context.Background(), model, rt, []string{"-sleep", "30"}, nil)
+	inst, err := sup.start(context.Background(), model, rt, []string{"-sleep", "30"}, nil)
 	if err == nil {
 		t.Fatal("expected fail-closed error, got nil")
 	}
@@ -262,7 +262,7 @@ func TestStartCore_RunningPersistFail_KillUnconfirmed(t *testing.T) {
 	model := &domain.Model{ID: "adr016-c", Name: "c", RuntimeID: "rt"}
 	rt := &domain.Runtime{ID: "rt", Name: "rt", Executable: buildFakeRuntimeForTest(t)}
 
-	inst, err := sup.Start(context.Background(), model, rt, []string{"-sleep", "2"}, nil)
+	inst, err := sup.start(context.Background(), model, rt, []string{"-sleep", "2"}, nil)
 	if err == nil {
 		t.Fatal("expected fail-closed error, got nil")
 	}
@@ -316,7 +316,7 @@ func TestStartCore_RunningPersistFail_KillFailed(t *testing.T) {
 	model := &domain.Model{ID: "adr016-d", Name: "d", RuntimeID: "rt"}
 	rt := &domain.Runtime{ID: "rt", Name: "rt", Executable: buildFakeRuntimeForTest(t)}
 
-	inst, err := sup.Start(context.Background(), model, rt, []string{"-sleep", "60"}, nil)
+	inst, err := sup.start(context.Background(), model, rt, []string{"-sleep", "60"}, nil)
 	if err == nil {
 		t.Fatal("expected fail-closed error, got nil")
 	}
@@ -376,7 +376,7 @@ func TestStartCore_RunningPersistFail_KillProcessAlreadyGone(t *testing.T) {
 	model := &domain.Model{ID: "adr016-gone", Name: "gone", RuntimeID: "rt"}
 	rt := &domain.Runtime{ID: "rt", Name: "rt", Executable: buildFakeRuntimeForTest(t)}
 
-	inst, err := sup.Start(context.Background(), model, rt, []string{"-sleep", "30"}, nil)
+	inst, err := sup.start(context.Background(), model, rt, []string{"-sleep", "30"}, nil)
 	if err == nil {
 		t.Fatal("expected fail-closed error, got nil")
 	}
@@ -424,7 +424,7 @@ func TestStartCore_RunningPersistRetry_SucceedsOnSecondAttempt(t *testing.T) {
 	model := &domain.Model{ID: "adr016-retry", Name: "retry", RuntimeID: "rt"}
 	rt := &domain.Runtime{ID: "rt", Name: "rt", Executable: buildFakeRuntimeForTest(t)}
 
-	inst, err := sup.Start(context.Background(), model, rt, []string{"-sleep", "30"}, nil)
+	inst, err := sup.start(context.Background(), model, rt, []string{"-sleep", "30"}, nil)
 	if err != nil {
 		t.Fatalf("start with transient retry failure: %v", err)
 	}
@@ -474,7 +474,7 @@ func TestStartCore_RunningPersistRetry_BoundedAttempts(t *testing.T) {
 	rt := &domain.Runtime{ID: "rt", Name: "rt", Executable: buildFakeRuntimeForTest(t)}
 
 	start := time.Now()
-	inst, err := sup.Start(context.Background(), model, rt, []string{"-sleep", "30"}, nil)
+	inst, err := sup.start(context.Background(), model, rt, []string{"-sleep", "30"}, nil)
 	elapsed := time.Since(start)
 	if err == nil {
 		t.Fatal("expected fail-closed error, got nil")
@@ -514,7 +514,7 @@ func TestWait_TerminalPersistRetry_SucceedsOnSecondAttempt(t *testing.T) {
 	model := &domain.Model{ID: "adr016-wait-retry", Name: "w", RuntimeID: "rt"}
 	rt := &domain.Runtime{ID: "rt", Name: "rt", Executable: buildFakeRuntimeForTest(t)}
 
-	inst, err := sup.Start(context.Background(), model, rt, []string{"exit-code", "0"}, nil)
+	inst, err := sup.start(context.Background(), model, rt, []string{"exit-code", "0"}, nil)
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -558,7 +558,7 @@ func TestWait_TerminalPersistFail_SlotReleased_RunCompleted(t *testing.T) {
 	model := &domain.Model{ID: "adr016-wait-exhaust", Name: "w", RuntimeID: "rt"}
 	rt := &domain.Runtime{ID: "rt", Name: "rt", Executable: buildFakeRuntimeForTest(t)}
 
-	inst, err := sup.Start(context.Background(), model, rt, []string{"exit-code", "0"}, nil)
+	inst, err := sup.start(context.Background(), model, rt, []string{"exit-code", "0"}, nil)
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -630,7 +630,7 @@ func TestStart_RunningPersistRetryCancelledByShutdown(t *testing.T) {
 	model := &domain.Model{ID: "adr016-lc", Name: "lc", RuntimeID: "rt"}
 	rt := &domain.Runtime{ID: "rt", Name: "rt", Executable: buildFakeRuntimeForTest(t)}
 
-	inst, err := sup.Start(context.Background(), model, rt, []string{"-sleep", "30"}, nil)
+	inst, err := sup.start(context.Background(), model, rt, []string{"-sleep", "30"}, nil)
 	if err == nil {
 		t.Fatal("expected fail-closed error, got nil")
 	}
@@ -672,7 +672,7 @@ func TestShutdown_ResidualOwnership(t *testing.T) {
 	model := &domain.Model{ID: "adr016-shutdown", Name: "s", RuntimeID: "rt"}
 	rt := &domain.Runtime{ID: "rt", Name: "rt", Executable: buildFakeRuntimeForTest(t)}
 
-	inst, err := sup.Start(context.Background(), model, rt, []string{"-sleep", "60"}, nil)
+	inst, err := sup.start(context.Background(), model, rt, []string{"-sleep", "60"}, nil)
 	if err == nil || !errors.Is(err, ErrTerminationUnconfirmed) {
 		t.Fatalf("expected Outcome C, got inst=%v err=%v", inst, err)
 	}

@@ -80,7 +80,7 @@ func newPendingWindowFixture(t *testing.T) (*InstancesHandler, *ModelsHandler, *
 		t.Fatalf("create model B: %v", err)
 	}
 
-	instA, err := sup.Start(ctx, modelA, rt, []string{"-sleep", "60"}, nil)
+	instA, err := sup.AdmitAndStart(ctx, modelA, rt, domain.ManualOwner, []string{"-sleep", "60"}, nil)
 	if err != nil {
 		t.Fatalf("start A: %v", err)
 	}
@@ -95,7 +95,7 @@ func newPendingWindowFixture(t *testing.T) (*InstancesHandler, *ModelsHandler, *
 	pendingDone := make(chan struct{})
 	go func() {
 		defer close(pendingDone)
-		_, _ = sup.Start(pendingStartCtx, modelB, rt, []string{"-sleep", "60"}, nil)
+		_, _ = sup.AdmitAndStart(pendingStartCtx, modelB, rt, domain.ManualOwner, []string{"-sleep", "60"}, nil)
 	}()
 
 	t.Cleanup(func() {
@@ -415,7 +415,7 @@ func TestModelsHandler_Stop_NonPending_Running_OK(t *testing.T) {
 	ctx := context.Background()
 	rt := &domain.Runtime{ID: "rt", Name: "rt", Executable: fakePath}
 	model := &domain.Model{ID: "mR", Name: "R", RuntimeID: "rt"}
-	inst, err := sup.Start(ctx, model, rt, []string{"-sleep", "60"}, nil)
+	inst, err := sup.AdmitAndStart(ctx, model, rt, domain.ManualOwner, []string{"-sleep", "60"}, nil)
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}

@@ -426,11 +426,10 @@ func (s *Supervisor) startPostAdmit(ctx context.Context, inst *domain.LaunchInst
 	return &snapshot, nil
 }
 
-// Start creates a new launch instance and starts its process without admission
-// arbitration (transitional entry point for callers not yet migrated to
-// AdmitAndStart in ADR 017 Slices B/C). New production code MUST use
-// AdmitAndStart.
-func (s *Supervisor) Start(ctx context.Context, model *domain.Model, runtime *domain.Runtime, customArgs []string, customEnv map[string]string) (*domain.LaunchInstance, error) {
+// start creates a new launch instance and starts its process without admission
+// arbitration. Package-internal test helper only. Production code MUST use
+// AdmitAndStart (ADR 017).
+func (s *Supervisor) start(ctx context.Context, model *domain.Model, runtime *domain.Runtime, customArgs []string, customEnv map[string]string) (*domain.LaunchInstance, error) {
 	inst, err := s.resolver.ResolveToInstance(model, runtime, customArgs, customEnv)
 	if err != nil {
 		return nil, fmt.Errorf("resolve instance: %w", err)
