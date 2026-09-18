@@ -1,6 +1,6 @@
 # ADR 016: Durable Lifecycle Ownership Contract
 
-**Status:** Proposed (revision 3 — final gap resolution)
+**Status:** Accepted — implemented and published 2026-09-18
 **Date:** 2026-09-17
 **Related:** ADR 001 (Process Ownership), ADR 002 (Supervisor & Instance Model), ADR 005 (Recovery — Identity-Verified Orphan Detection), ADR 008 (Recovery Kill Orphan)
 **Remediates:** RB-001 (CONFIRMED HIGH), RB-003 (CONFIRMED MEDIUM)
