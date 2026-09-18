@@ -80,6 +80,8 @@ type Manager struct {
 	logSubs  map[chan LogEvent]struct{}
 	logStore *LogStore
 	stopReq  atomic.Bool
+	// killOverride replaces the force-kill operation (test seam, ADR 016).
+	killOverride func() error
 }
 
 // NewManager creates a Manager already in the stopped state.
@@ -251,6 +253,36 @@ func (m *Manager) Stop(ctx context.Context) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+}
+
+// Kill force-terminates the managed process (SIGKILL to the process group /
+// Job Object TerminateProcess, ADR 016 §4 rollback step 1).
+//
+// It returns nil when the OS accepted the kill. A nil result is NOT an exit
+// confirmation: the process exit is confirmed only when the Manager's
+// done channel closes (the single cmd.Wait() owner). It returns
+// platform.ErrKillAlreadyGone when the process no longer existed (reclassify
+// as confirmed dead per ADR 016 §2.1), or a genuine OS refusal error
+// (Outcome D) otherwise.
+func (m *Manager) Kill() error {
+	m.mu.Lock()
+	kill := m.killOverride
+	control := m.control
+	m.mu.Unlock()
+	if kill != nil {
+		return kill()
+	}
+	if control == nil {
+		return platform.ErrKillAlreadyGone
+	}
+	return control.ForceKill()
+}
+
+// SetKillOverride replaces the force-kill operation (test seam, ADR 016).
+func (m *Manager) SetKillOverride(fn func() error) {
+	m.mu.Lock()
+	m.killOverride = fn
+	m.mu.Unlock()
 }
 
 // Status returns a snapshot of the current managed process status.

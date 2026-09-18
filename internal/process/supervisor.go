@@ -4,16 +4,73 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/dsdred/goal/internal/domain"
 	"github.com/dsdred/goal/internal/platform"
 )
+
+// ADR 016 §8: bounded persistence retry parameters. They are implementation
+// parameters (not architectural invariants): the total retry budget stays
+// under 2 seconds so slot release and run completion are never blocked
+// indefinitely. Exposed as constants (not inlined in the retry loop) for
+// testability.
+const (
+	persistRetryAttempts = 3
+	persistRetryBackoff  = 200 * time.Millisecond
+)
+
+// persistWithRetry performs the bounded, synchronous, cancellable persist
+// retry of ADR 016 §8. Retries are owned by the caller (startCore / wait),
+// run while lifecycle/slot ownership is held, are bounded to
+// persistRetryAttempts total attempts, and exit immediately when ctx is
+// cancelled (supervisor shutdown). Permanent store errors (permission, disk
+// full) skip the remaining attempts.
+func persistWithRetry(ctx context.Context, persist func() error) error {
+	var lastErr error
+	for attempt := 1; attempt <= persistRetryAttempts; attempt++ {
+		if err := ctx.Err(); err != nil {
+			if lastErr != nil {
+				return errors.Join(lastErr, err)
+			}
+			return err
+		}
+		lastErr = persist()
+		if lastErr == nil || isPermanentStoreError(lastErr) {
+			return lastErr
+		}
+		if attempt < persistRetryAttempts {
+			select {
+			case <-ctx.Done():
+				return errors.Join(lastErr, ctx.Err())
+			case <-time.After(persistRetryBackoff):
+			}
+		}
+	}
+	return lastErr
+}
+
+// isPermanentStoreError classifies persistence errors that will not succeed
+// on retry (ADR 016 §8): permission errors and disk-full conditions.
+// Transient I/O errors (EAGAIN/EIO/lock contention) are not permanent and
+// are retried.
+func isPermanentStoreError(err error) bool {
+	switch {
+	case errors.Is(err, fs.ErrPermission),
+		errors.Is(err, syscall.EACCES),
+		errors.Is(err, syscall.EPERM),
+		errors.Is(err, syscall.ENOSPC):
+		return true
+	}
+	return false
+}
 
 // SupervisorStatus describes the overall supervisor state.
 type SupervisorStatus struct {
@@ -276,8 +333,16 @@ func (s *Supervisor) Start(ctx context.Context, model *domain.Model, runtime *do
 	ctrlInst, err := ctrl.startWithReservation(s.lifecycleContext(), reservation)
 	if err != nil {
 		if ctrlInst != nil {
-			// Rollback returned an instance — it's in the supervisor's instances map.
-		} else {
+			// ADR 016 outcomes C/D: startCore kept the instance in the
+			// supervisor's instances map; slot/run ownership is held by the
+			// wait() goroutine until it confirms exit.
+			return ctrlInst, fmt.Errorf("start instance %s: %w", inst.ID, err)
+		}
+		if !errors.Is(err, ErrPersistenceFailure) {
+			// startCore did not finalize this failure itself (persist-starting
+			// or spawn failure): record the failure durably best-effort.
+			// ADR 016 outcomes A/B already finalized the instance (failed
+			// state + LastError + best-effort persist) — do not overwrite.
 			inst.Fail(err.Error(), domain.InstanceExitError)
 			if s.store != nil {
 				if uerr := s.store.Update(domain.ToStorageEntry(inst)); uerr != nil {
@@ -285,14 +350,11 @@ func (s *Supervisor) Start(ctx context.Context, model *domain.Model, runtime *do
 					err = errors.Join(err, fmt.Errorf("persist start error: %w", uerr))
 				}
 			}
-			s.mu.Lock()
-			delete(s.instances, inst.ID)
-			s.mu.Unlock()
-			return nil, fmt.Errorf("start instance %s: %w", inst.ID, err)
 		}
-		// Rollback returned instance — it's already in the supervisor's instances map.
-		// Clean up reservation from the map if present.
-		return ctrlInst, fmt.Errorf("start instance %s: %w", inst.ID, err)
+		s.mu.Lock()
+		delete(s.instances, inst.ID)
+		s.mu.Unlock()
+		return nil, fmt.Errorf("start instance %s: %w", inst.ID, err)
 	}
 
 	snapshot := ctrl.Snapshot()
@@ -400,7 +462,15 @@ func (s *Supervisor) ListByModelID(modelID string) ([]*domain.LaunchInstance, er
 	return result, nil
 }
 
-// Shutdown stops all active instances gracefully.
+// Shutdown stops all active instances gracefully. This includes instances in
+// the ADR 016 residual-ownership outcomes (C/D): they remain live-state
+// (starting) and stoppable until wait() confirms exit.
+//
+// A kill request accepted (or refused) by the OS during shutdown is NOT an
+// exit confirmation: if termination remains unconfirmed, the instance keeps
+// its residual ownership (slot/run held by wait(), non-terminal state) and
+// Stop's error is surfaced — Shutdown never manufactures a terminal
+// confirmation.
 func (s *Supervisor) Shutdown(ctx context.Context) error {
 	s.mu.Lock()
 	controllers := make([]*InstanceController, 0, len(s.instances))
@@ -779,9 +849,17 @@ func (ic *InstanceController) IsRunning() bool {
 
 // Start launches the managed process.
 // The operationCtx parameter is used only for the Start() operation timeout.
-// The process lifecycle uses the instance-specific context (supervisor lifecycle).
-// Returns the instance and error if persistence fails after process started —
-// the instance is left in a degraded (running) state with LastError set.
+// Post-spawn lifecycle operations (running persist + retry, rollback kill,
+// exit confirmation, failure persistence) use the supervisor lifecycle
+// context, never the caller's request context (ADR 016 §8.1).
+//
+// ADR 016 S1/F1: Start returns a nil error ONLY after the full running
+// identity (state=running, PID, StartedAt) is durably persisted. On running
+// persist failure the fail-closed rollback applies: confirmed-dead outcomes
+// (A/B) return (nil, ErrPersistenceFailure); residual outcomes (C/D,
+// termination unconfirmed / kill refused) return (instance, error) with the
+// instance kept in the supervisor registry and slot/run ownership held by
+// the wait() goroutine until it confirms exit.
 func (ic *InstanceController) Start(operationCtx context.Context) (*domain.LaunchInstance, error) {
 	return ic.startWithReservation(operationCtx, nil)
 }
@@ -835,14 +913,37 @@ func (ic *InstanceController) startCore(operationCtx context.Context, reservatio
 	ic.instance.StartedAt = status.StartedAt
 	ic.instance.UpdateState(domain.InstanceStateRunning)
 
-	// Persist running state with PID.
-	if err := ic.persistStateLocked(); err != nil {
-		if ic.instance.LastError == "" {
-			ic.instance.LastError = fmt.Sprintf("persist running state: %v", err)
-		} else {
-			ic.instance.LastError = ic.instance.LastError + "; persist running state: " + err.Error()
+	// Persist running state with the full running identity (state=running,
+	// PID, StartedAt) — ADR 016 S1/S2: Start() may return success ONLY after
+	// this record is durable. Bounded synchronous retry on the supervisor
+	// lifecycle context (ADR 016 §8/§8.1); the caller's request context is
+	// NOT used for post-spawn operations.
+	if persistErr := persistWithRetry(ic.lifecycleContext(), ic.persistStateLocked); persistErr != nil {
+		// Fail-closed (ADR 016 §2/§4): degraded success is rejected. If the
+		// full running identity is not durable, Start() returns an error and
+		// the rollback contract applies.
+		slog.Error("failed to persist running state; failing closed",
+			"instance_id", string(ic.instance.ID),
+			"model_id", ic.instance.ModelID,
+			"pid", ic.instance.PID,
+			"executable", ic.instance.Executable,
+			"error", persistErr)
+		residual, rollbackErr := ic.rollbackRunningPersistenceLocked(persistErr)
+		ic.mu.Unlock()
+		go ic.forwardLogs(logCh)
+		go ic.wait(run, cancelLogs)
+		if !residual {
+			// Outcome A/B: exit is confirmed. startCore releases the slot
+			// and completes the run (ADR 016 §9). The wait() goroutine
+			// detects the already-dead process; its release/complete are
+			// no-ops (sync.Once).
+			run.releaseSlot()
+			run.complete()
+			return nil, rollbackErr
 		}
-		slog.Error("failed to persist running state", "instance_id", string(ic.instance.ID), "error", err)
+		// Outcome C/D: slot and run ownership stay with the wait()
+		// goroutine until it confirms exit (exactly once, sync.Once).
+		return ic.instance, rollbackErr
 	}
 
 	// Publish start event via broker.
@@ -859,6 +960,83 @@ func (ic *InstanceController) startCore(operationCtx context.Context, reservatio
 	go ic.wait(run, cancelLogs)
 
 	return ic.instance, nil
+}
+
+// rollbackRunningPersistenceLocked implements the ADR 016 §4 fail-closed
+// rollback: the process was spawned but persist(running+PID) exhausted its
+// bounded retry, so the running identity is NOT durable. The caller MUST
+// hold ic.mu, and the caller performs the unlock and starts the wait()
+// goroutine after this returns.
+//
+// Outcome matrix (ADR 016 §2.1). The boolean result reports whether slot
+// and run ownership is residual (held by the wait() goroutine until it
+// confirms exit):
+//   - A/B (residual=false): kill accepted (or the process was already gone)
+//     and exit is CONFIRMED. The state becomes failed, the failed state is
+//     persisted best-effort. Returns ErrPersistenceFailure.
+//   - C (residual=true): kill accepted by the OS, termination NOT confirmed.
+//     State stays starting; nothing is persisted. Returns
+//     ErrPersistenceFailure + ErrTerminationUnconfirmed.
+//   - D (residual=true): kill refused by the OS (genuine refusal; the
+//     process may be alive). Same residual ownership as C. Returns
+//     ErrPersistenceFailure + ErrRollbackFailed.
+//
+// Kill() returning nil is NEVER treated as a confirmed process exit: exit is
+// confirmed only when the Manager's done channel closes (the single
+// cmd.Wait() owner), checked through confirmExit.
+func (ic *InstanceController) rollbackRunningPersistenceLocked(persistErr error) (residual bool, rollbackErr error) {
+	lcCtx := ic.lifecycleContext()
+
+	killErr := ic.manager.Kill()
+	var confirmed bool
+	switch {
+	case killErr == nil:
+		// Kill accepted by the OS: wait for CONFIRMED exit within a bounded
+		// window (ADR 016 §4 step 2, §8.1).
+		confirmed = ic.confirmExit(lcCtx, rollbackExitConfirmWindow)
+	case errors.Is(killErr, platform.ErrKillAlreadyGone):
+		// The process exited between the persist failure and the kill
+		// attempt: reclassified as confirmed dead (ADR 016 §2.1 note),
+		// NOT Outcome D.
+		confirmed = true
+	}
+
+	if confirmed {
+		// Outcome A/B.
+		ic.instance.UpdateState(domain.InstanceStateFailed)
+		ic.instance.LastError = fmt.Sprintf("persist running state failed: %v; rollback: terminated", persistErr)
+		if ferr := ic.persistStateLocked(); ferr != nil {
+			// Outcome B: the failed state is not durable either. The
+			// repository retains starting (no PID); recovery classifies
+			// the dead process as stale (pid-not-found) — correct.
+			slog.Error("failed to persist rolled-back failed state",
+				"instance_id", string(ic.instance.ID), "error", ferr)
+		}
+		return false, errors.Join(ErrPersistenceFailure, persistErr)
+	}
+
+	// Outcomes C/D (unified residual-ownership contract, ADR 016 §2.1):
+	// termination is not confirmed, so the process may be alive. Do NOT set
+	// a terminal state, do NOT persist, do NOT release the slot, do NOT
+	// complete the run. The running identity was never durable, so the
+	// in-memory state is reverted to starting (ADR §2.1 matrix: Controller
+	// Memory = starting); the PID is retained in memory for the wait()
+	// goroutine and the ERROR log. Ownership moves to the wait() goroutine,
+	// which releases the slot and completes the run exactly once when it
+	// confirms exit.
+	ic.instance.UpdateState(domain.InstanceStateStarting)
+	if killErr == nil {
+		ic.instance.UpdateError(fmt.Sprintf("persist running state failed: %v; rollback: unconfirmed", persistErr), "")
+		slog.Error("rollback: kill accepted but termination unconfirmed; holding slot and run ownership",
+			"instance_id", string(ic.instance.ID), "model_id", ic.instance.ModelID,
+			"pid", ic.instance.PID, "executable", ic.instance.Executable)
+		return true, errors.Join(ErrPersistenceFailure, persistErr, ErrTerminationUnconfirmed)
+	}
+	ic.instance.UpdateError(fmt.Sprintf("persist running state failed: %v; rollback: failed: %v", persistErr, killErr), "")
+	slog.Error("rollback: kill refused by OS; holding slot and run ownership",
+		"instance_id", string(ic.instance.ID), "model_id", ic.instance.ModelID,
+		"pid", ic.instance.PID, "executable", ic.instance.Executable, "kill_error", killErr)
+	return true, errors.Join(ErrPersistenceFailure, persistErr, ErrRollbackFailed, killErr)
 }
 
 // Stop requests graceful shutdown of the instance process.
@@ -1147,12 +1325,29 @@ func (ic *InstanceController) wait(run *instanceRunState, cancelLogs func()) {
 	ic.instance.UpdatedAt = ic.instance.StoppedAt
 
 	if ic.store != nil {
+		// The terminal state in memory is authoritative (ADR 016 T3): the
+		// entry is captured under the lock above and is not re-derived after
+		// a persist failure.
 		entry := domain.ToStorageEntry(ic.instance)
 		ic.mu.Unlock()
 
-		// Persist final state OUTSIDE the lock to avoid holding mutex during I/O.
-		if err := ic.store.Update(entry); err != nil {
+		// Persist final state OUTSIDE the lock to avoid holding mutex during
+		// I/O, with bounded retry on the supervisor lifecycle context
+		// (ADR 016 §8, RB-003). A cancelled context (shutdown) exits the
+		// retry immediately; ShutdownWithPersistence retries later
+		// best-effort (T4).
+		if err := persistWithRetry(ic.lifecycleContext(), func() error {
+			return ic.store.Update(entry)
+		}); err != nil {
+			// Explicit terminal persistence exhaustion (ADR 016 RB-003):
+			// the run is STILL fully finalized below (T1/T2/T3). The durable
+			// record stays at the last successful state (typically running
+			// with PID); after a crash, Recover classifies the dead PID as
+			// stale (T5) — recovery reconciliation, not a persisted
+			// fallback.
 			persistErr := fmt.Errorf("persist final state: %w", err)
+			slog.Error("terminal state persistence failed after retry; run finalizes with stale durable record",
+				"instance_id", string(ic.instance.ID), "state", string(targetState), "error", err)
 			// Update LastError — caller has already seen the snapshot,
 			// but we record it for monitoring.
 			ic.mu.Lock()
@@ -1223,6 +1418,48 @@ const (
 	processExitError    = ExitClass("error")
 	processExitSignaled = ExitClass("signaled")
 )
+
+// rollbackExitConfirmWindow is the bounded window to confirm process exit
+// after a rollback kill (ADR 016 §4 step 2). Implementation parameter,
+// overridable in tests.
+var rollbackExitConfirmWindow = 5 * time.Second
+
+// SetRollbackConfirmWindow overrides the rollback exit-confirmation window
+// (test hook, ADR 016).
+func SetRollbackConfirmWindow(window time.Duration) {
+	rollbackExitConfirmWindow = window
+}
+
+// lifecycleContext returns the supervisor lifecycle context that owns this
+// controller's post-spawn operations (ADR 016 §8.1). The caller's request
+// context must never be used for post-spawn lifecycle operations: a
+// disconnected/cancelled HTTP request must not abandon ownership of an
+// already-spawned process.
+func (ic *InstanceController) lifecycleContext() context.Context {
+	if ic.supervisorRef != nil {
+		return ic.supervisorRef.lifecycleContext()
+	}
+	return context.Background()
+}
+
+// confirmExit reports whether the managed process has CONFIRMED its exit —
+// i.e. the Manager's single cmd.Wait() owner closed the done channel — within
+// window, or before ctx is cancelled. A kill that returned nil is never
+// treated as an exit confirmation (ADR 016 §2.1, §8.1).
+func (ic *InstanceController) confirmExit(ctx context.Context, window time.Duration) bool {
+	done := ic.manager.GetDoneChannel()
+	if done == nil {
+		return true
+	}
+	select {
+	case <-done:
+		return true
+	case <-time.After(window):
+		return false
+	case <-ctx.Done():
+		return false
+	}
+}
 
 // persistStateLocked persists the current instance state to the store.
 // The caller MUST hold ic.mu.

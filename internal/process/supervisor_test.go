@@ -817,10 +817,13 @@ func TestStartFailureJoinsPersistenceFailure(t *testing.T) {
 	}
 }
 
-// TestRunningPersistenceFailureRollsBackOrDegrades verifies degraded success on running persist failure.
-// When persist running state fails but process is running, the instance continues
-// in a degraded state with LastError set. Start() returns nil error (degraded success).
-func TestRunningPersistenceFailureRollsBackOrDegrades(t *testing.T) {
+// TestRunningPersistenceFailureFailsClosed replaces the old
+// TestRunningPersistenceFailureRollsBackOrDegrades, which encoded the rejected
+// degraded-success contract (ADR 016 §3). When persist(running+PID) fails and
+// the rollback kill is confirmed dead (Outcome A), Start() MUST return a
+// non-nil error containing ErrPersistenceFailure, the instance is NOT
+// returned (nil), and the concurrency slot is released.
+func TestRunningPersistenceFailureFailsClosed(t *testing.T) {
 	store := newMockStore()
 	store.updateFn = func(e *domain.LaunchInstanceEntry) error {
 		if e.State == string(domain.InstanceStateRunning) {
@@ -828,65 +831,56 @@ func TestRunningPersistenceFailureRollsBackOrDegrades(t *testing.T) {
 		}
 		return nil
 	}
-	cfg := SupervisorConfig{MaxConcurrent: 0, LogBufferSize: 64}
+	cfg := SupervisorConfig{MaxConcurrent: 1, LogBufferSize: 64}
 	sup := newTestSupervisor(t, store, cfg)
 	model := &domain.Model{ID: "m1", Name: "test", RuntimeID: "rt1"}
 	rt := &domain.Runtime{ID: "rt1", Name: "test-rt", Executable: buildFakeRuntimeForTest(t)}
 	ctx := context.Background()
-	// With degraded success, Start returns nil error but sets LastError.
-	startInst, err := sup.Start(ctx, model, rt, []string{"-sleep", "1"}, nil)
-	if err != nil {
-		t.Fatalf("start failed: %v", err)
+
+	inst, err := sup.Start(ctx, model, rt, []string{"-sleep", "30"}, nil)
+	if err == nil {
+		t.Fatal("expected fail-closed error on running persist failure, got nil (degraded success is rejected)")
 	}
-	// Degraded success: LastError should be set immediately.
-	if startInst.LastError == "" {
-		t.Fatal("expected degraded success with LastError set immediately after Start")
+	if !errors.Is(err, ErrPersistenceFailure) {
+		t.Fatalf("expected errors.Is(err, ErrPersistenceFailure), got: %v", err)
 	}
-	if !strings.Contains(startInst.LastError, "update") {
-		t.Errorf("expected LastError to contain persistence error, got: %q", startInst.LastError)
+	if inst != nil {
+		t.Fatalf("Outcome A/B returns a nil instance, got %q", string(inst.ID))
 	}
-	// Process should still be running (degraded success = no rollback).
-	// Wait for it to exit naturally.
-	done := make(chan struct{})
-	go func() {
-		sup.mu.RLock()
-		ctrl, ok := sup.instances[startInst.ID]
-		sup.mu.RUnlock()
-		if ok {
-			waitForProcess(ctx, ctrl, 5*time.Second)
-		}
-		close(done)
-	}()
-	select {
-	case <-done:
-	case <-time.After(6 * time.Second):
-		t.Fatal("process did not exit in time")
+	// Slot released after the confirmed-dead rollback.
+	if got := len(sup.semaphore); got != 1 {
+		t.Fatalf("available slots after fail-closed = %d, want 1", got)
 	}
-	// After exit, verify LastError is still visible in snapshot.
-	instances, _ := sup.List()
-	if len(instances) == 0 {
-		t.Fatal("expected at least one instance in snapshot")
-	}
-	if instances[0].LastError == "" {
-		t.Fatal("expected LastError visible in snapshot after exit")
+	// The instance was cleaned up from the registry.
+	sup.mu.RLock()
+	count := len(sup.instances)
+	sup.mu.RUnlock()
+	if count != 0 {
+		t.Fatalf("instances in registry after fail-closed = %d, want 0", count)
 	}
 }
 
-// TestNaturalExitPersistenceFailureObservable verifies persistence error is observable.
+// TestNaturalExitPersistenceFailureObservable verifies persistence error is
+// observable (ADR 016 T1-T5, adapted): the running identity persists
+// successfully (so Start() succeeds with a durable record), then the terminal
+// (exited) persistence fails after bounded retry. The run is STILL finalized:
+// LastError is set, the instance remains in List() as terminal, the slot is
+// released, the run completes — while the repository still has `running`.
 func TestNaturalExitPersistenceFailureObservable(t *testing.T) {
 	store := newMockStore()
 	store.updateFn = func(e *domain.LaunchInstanceEntry) error {
-		if e.State == "running" || e.State == "exited" {
+		if e.State == "exited" {
 			return testUpdateErr
 		}
+		store.storeAccepted(e)
 		return nil
 	}
-	cfg := SupervisorConfig{MaxConcurrent: 0, LogBufferSize: 64}
+	cfg := SupervisorConfig{MaxConcurrent: 1, LogBufferSize: 64}
 	sup := newTestSupervisor(t, store, cfg)
 	model := &domain.Model{ID: "m1", Name: "test", RuntimeID: "rt1"}
 	rt := &domain.Runtime{ID: "rt1", Name: "test-rt", Executable: buildFakeRuntimeForTest(t)}
 	ctx := context.Background()
-	inst, err := sup.Start(ctx, model, rt, []string{"-sleep", "0"}, nil)
+	inst, err := sup.Start(ctx, model, rt, []string{"exit-code", "0"}, nil)
 	if err != nil {
 		t.Fatalf("start failed: %v", err)
 	}
@@ -918,6 +912,22 @@ func TestNaturalExitPersistenceFailureObservable(t *testing.T) {
 	}
 	if !strings.Contains(snap.LastError, "update") {
 		t.Errorf("expected LastError to contain persistence error, got: %q", snap.LastError)
+	}
+	// T2: the instance remains in List() as terminal.
+	if !snap.IsTerminal() {
+		t.Fatalf("expected terminal state in List(), got %q", snap.State)
+	}
+	// T1: the slot is released after terminal persist exhaustion.
+	if got := len(sup.semaphore); got != 1 {
+		t.Fatalf("available slots after terminal persist exhaustion = %d, want 1", got)
+	}
+	// The durable record still has the running identity (the terminal state
+	// was never persisted): recovery will classify the dead PID as stale.
+	store.mu.RLock()
+	durable := store.instances[string(inst.ID)]
+	store.mu.RUnlock()
+	if durable == nil || durable.State != string(domain.InstanceStateRunning) {
+		t.Fatalf("durable state = %v, want running (terminal persist failed)", durable)
 	}
 }
 
