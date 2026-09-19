@@ -57,8 +57,8 @@
   - Slice B (shipped `a55e673` + CI 7/7 PASS): pipeline start/restart/autostart → `AdmitAndStart`; per-PipelineID mutex is operation serialization only.
   - Slice C (shipped `1d37918` + CI 7/7 PASS): model autostart → `AdmitAndStart`; old exported `Supervisor.Start` unexported (package-private test seam); final caller audit: zero production bypasses. RB-002 RESOLVED.
   - Same-pipeline distinct `PipelineEntryID` entries for the same ModelID remain intentionally supported (ADR 013 D3).
-- [ ] **RB-004 — Legacy runtime start endpoint disposition**
-  - `/api/v1/runtimes/{id}/action/start` currently has no valid success path: with live state it reaches conflicting launch semantics / 409; without live state it resolves to 404. Reconcile or remove. NOT STARTED.
+- [x] **RB-004 — Legacy runtime start endpoint disposition**
+  - RESOLVED: the legacy `POST /api/v1/runtimes/{id}/action/start` action was **retired** — it now deterministically returns `410 Gone` (code `gone`) before any instance lookup/launch, directing callers to the canonical `POST /api/v1/models/{id}/start`. `stop`/`restart` actions unchanged. Forensic: no reachable success path existed (live state → ADR 017 duplicate rejection / 409; no live state → 404), and a runtime is a launch template with no unambiguous ModelID. Shipped `8307f20` + CI 35434215393 (7/7 PASS).
 - [ ] **RB-015b — Shutdown admission for already-admitted work**
   - Already-admitted work blocked on `acquireSlot` when shutdown begins. Requires `acquireSlot` to observe the lifecycle context. NOT STARTED.
 - [ ] **Focused remediation review**

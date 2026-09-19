@@ -74,7 +74,7 @@ Thirteen additive events close the model/runtime/pipeline CRUD gap (and fulfill 
 | `pipeline.update` | `PUT /api/v1/pipelines/{id}` 200 (only when content changed) | `id` + one key per changed field = `"changed"` (`name`, `active`, `models`) |
 | `pipeline.delete` | `DELETE /api/v1/pipelines/{id}` 200 | `id` |
 
-**Model-page / runtime-page process actions are NOT audited here.** `POST /api/v1/models/{id}/{start,stop,restart}` and `POST /api/v1/runtimes/{id}/action/{start,stop,restart}` operate on instances; the `instance.*` first-scope events are the sole process-lifecycle trail, and duplicate `model.start`-class events are deliberately omitted. `model.activate`/`model.deactivate` ARE audited because they persist `Model.Active` (autostart state) without touching any process.
+**Model-page / runtime-page process actions are NOT audited here.** `POST /api/v1/models/{id}/{start,stop,restart}` and `POST /api/v1/runtimes/{id}/action/{stop,restart}` operate on instances (the retired `POST /api/v1/runtimes/{id}/action/start` returns `410 Gone` and performs no instance operation); the `instance.*` first-scope events are the sole process-lifecycle trail, and duplicate `model.start`-class events are deliberately omitted. `model.activate`/`model.deactivate` ARE audited because they persist `Model.Active` (autostart state) without touching any process.
 
 Events are emitted **only for the actions above** — not per-GET, not per-request (the request-level stdout log remains the operational record).
 
