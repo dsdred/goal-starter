@@ -82,6 +82,11 @@ type Manager struct {
 	stopReq  atomic.Bool
 	// killOverride replaces the force-kill operation (test seam, ADR 016).
 	killOverride func() error
+	// startOverride, if set, is invoked in place of the real process spawn.
+	// A nil return lets the real spawn proceed (used to count attempts); a
+	// non-nil return fails Start without spawning (test seam, RB-015b).
+	// It is nil in production.
+	startOverride func(spec CommandSpec) error
 }
 
 // NewManager creates a Manager already in the stopped state.
@@ -114,6 +119,12 @@ func (m *Manager) Start(ctx context.Context, spec CommandSpec) error {
 	}
 	if spec.Executable == "" {
 		return errors.New("executable is required")
+	}
+
+	if m.startOverride != nil {
+		if err := m.startOverride(spec); err != nil {
+			return err
+		}
 	}
 
 	// Validate executable exists.
@@ -282,6 +293,13 @@ func (m *Manager) Kill() error {
 func (m *Manager) SetKillOverride(fn func() error) {
 	m.mu.Lock()
 	m.killOverride = fn
+	m.mu.Unlock()
+}
+
+// SetStartOverride installs the spawn override (test seam, RB-015b).
+func (m *Manager) SetStartOverride(fn func(spec CommandSpec) error) {
+	m.mu.Lock()
+	m.startOverride = fn
 	m.mu.Unlock()
 }
 

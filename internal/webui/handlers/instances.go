@@ -110,6 +110,14 @@ func (h *InstancesHandler) StartModel(w http.ResponseWriter, r *http.Request) {
 			writeAPIError(w, http.StatusConflict, apierrors.NewAPIError(apierrors.CodeConflict, "launch_in_flight"))
 			return
 		}
+		if errors.Is(err, process.ErrLaunchAbortedByShutdown) {
+			logAudit(h.audit, h.sess, r, audit.EventInstanceStart, map[string]string{
+				"model_id": body.ModelID,
+				"error":    "launch_aborted",
+			})
+			writeAPIError(w, http.StatusServiceUnavailable, apierrors.NewAPIError(apierrors.CodeServiceUnavailable, "launch_aborted"))
+			return
+		}
 		logAudit(h.audit, h.sess, r, audit.EventInstanceStart, map[string]string{
 			"model_id": body.ModelID,
 			"error":    sanitizeAuditError(err),

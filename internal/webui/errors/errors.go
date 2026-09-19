@@ -4,19 +4,20 @@ package errors
 type Code string
 
 const (
-	CodeBadRequest     Code = "bad_request"
-	CodeUnauthorized   Code = "unauthorized"
-	CodeForbidden      Code = "forbidden"
-	CodeNotFound       Code = "not_found"
-	CodeGone           Code = "gone"
-	CodeConflict       Code = "conflict"
-	CodeRateLimited    Code = "rate_limited"
-	CodeInvalidPort    Code = "invalid_port"
-	CodeInvalidHost    Code = "invalid_host"
-	CodeInvalidAddress Code = "invalid_address"
-	CodeInvalidRuntime Code = "invalid_runtime"
-	CodeInvalidModel   Code = "invalid_model"
-	CodeInternalServer Code = "internal_server_error"
+	CodeBadRequest         Code = "bad_request"
+	CodeUnauthorized       Code = "unauthorized"
+	CodeForbidden          Code = "forbidden"
+	CodeNotFound           Code = "not_found"
+	CodeGone               Code = "gone"
+	CodeConflict           Code = "conflict"
+	CodeServiceUnavailable Code = "service_unavailable"
+	CodeRateLimited        Code = "rate_limited"
+	CodeInvalidPort        Code = "invalid_port"
+	CodeInvalidHost        Code = "invalid_host"
+	CodeInvalidAddress     Code = "invalid_address"
+	CodeInvalidRuntime     Code = "invalid_runtime"
+	CodeInvalidModel       Code = "invalid_model"
+	CodeInternalServer     Code = "internal_server_error"
 )
 
 // APIError represents a structured API error.

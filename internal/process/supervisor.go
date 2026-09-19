@@ -108,6 +108,25 @@ type Supervisor struct {
 
 	arbMu    sync.Mutex
 	arbLocks map[string]*sync.Mutex
+
+	// RB-015b pre-spawn shutdown drain. launchMu serializes admission
+	// registration (A), shutdown drain-start (D), and spawn commit (C).
+	// draining is a one-way latch; preSpawnInFlight counts admitted launches
+	// that have not yet committed (C) or been aborted; both are accessed only
+	// under launchMu. zeroSig is closed exactly once (drainClosedOnce) when
+	// draining && preSpawnInFlight == 0, letting Shutdown's lock-free drain
+	// wait complete.
+	launchMu         sync.Mutex
+	draining         bool
+	preSpawnInFlight int
+	zeroSig          chan struct{}
+	drainClosedOnce  sync.Once
+
+	// managerStartHook is a test seam (nil in production) that installs a
+	// Manager start override on every newly created controller, so tests can
+	// deterministically count spawn attempts for the "no manager.Start after
+	// successful shutdown" contract.
+	managerStartHook func(m *Manager)
 }
 
 // InstanceStore persists and retrieves launch instances.
@@ -138,6 +157,7 @@ func NewSupervisor(store InstanceStore) *Supervisor {
 		prober:    platform.NewRecoveryProber(),
 		killer:    platform.NewProcessKiller(),
 		arbLocks:  make(map[string]*sync.Mutex),
+		zeroSig:   make(chan struct{}),
 	}
 }
 
@@ -198,6 +218,54 @@ func NewSupervisorWithConfig(store InstanceStore, cfg SupervisorConfig) *Supervi
 	return s
 }
 
+// signalPreSpawnZeroLocked closes zeroSig exactly once if the drain is armed
+// and no pre-spawn launches remain. The caller MUST hold launchMu.
+func (s *Supervisor) signalPreSpawnZeroLocked() {
+	if s.draining && s.preSpawnInFlight == 0 {
+		s.drainClosedOnce.Do(func() { close(s.zeroSig) })
+	}
+}
+
+// beginDrain sets the one-way draining latch and, if no pre-spawn launches
+// remain, signals drain-complete immediately. It acquires launchMu itself so
+// D is linearizable against admission registration (A) and spawn commit (C).
+func (s *Supervisor) beginDrain() {
+	s.launchMu.Lock()
+	s.draining = true
+	s.signalPreSpawnZeroLocked()
+	s.launchMu.Unlock()
+}
+
+// abortPreSpawnCleanup finalizes an admitted launch that is aborted PRE-SPAWN
+// (before manager.Start). It releases the reservation (if any), optionally
+// terminalizes + persists the controller (terminalize=true when a durable
+// pending record exists), removes it from the registry, and consumes the
+// PRE-SPAWN token exactly once as ABORTED (the final safe point). The caller
+// MUST NOT hold launchMu (this acquires it only for the final decrement).
+func (s *Supervisor) abortPreSpawnCleanup(instID domain.InstanceID, ctrl *InstanceController, reservation *slotReservation, terminalize bool) {
+	if reservation != nil {
+		reservation.Release()
+	}
+	if terminalize && ctrl != nil {
+		ctrl.mu.Lock()
+		ctrl.instance.Fail(ErrLaunchAbortedByShutdown.Error(), domain.InstanceExitError)
+		if s.store != nil {
+			s.store.Update(domain.ToStorageEntry(ctrl.instance))
+		}
+		ctrl.mu.Unlock()
+	}
+	s.mu.Lock()
+	delete(s.instances, instID)
+	s.mu.Unlock()
+	s.launchMu.Lock()
+	if ctrl != nil && ctrl.preSpawnToken {
+		s.preSpawnInFlight--
+		ctrl.preSpawnToken = false
+		s.signalPreSpawnZeroLocked()
+	}
+	s.launchMu.Unlock()
+}
+
 // concurrentCount returns the number of currently held slots.
 // For a buffered semaphore, this is len(semaphore) which counts unacquired tokens.
 // Held = maxConcurrent - len(semaphore).
@@ -212,9 +280,15 @@ func (s *Supervisor) acquireSlot(ctx context.Context) (*slotReservation, error) 
 	if s.maxConcurrent <= 0 {
 		return nil, nil
 	}
+	lc := s.lifecycleContext()
 	select {
 	case <-s.semaphore:
 		return newSlotReservation(s.semaphore), nil
+	case <-lc.Done():
+		// Already-admitted launch: shutdown won the pre-spawn window. This is
+		// NOT an admission rejection (admission already occurred) — the launch
+		// is aborted PRE-SPAWN by the caller (RB-015b).
+		return nil, ErrLaunchAbortedByShutdown
 	case <-ctx.Done():
 		return nil, fmt.Errorf("acquire concurrency slot: %w", ctx.Err())
 	}
@@ -335,8 +409,7 @@ func (s *Supervisor) AdmitAndStart(ctx context.Context, model *domain.Model, run
 		return nil, fmt.Errorf("resolve instance: %w", err)
 	}
 
-	ctrl := NewInstanceController(inst, s.store, s.resolver, s.broker)
-	ctrl.supervisorRef = s
+	ctrl := s.newController(inst)
 
 	arbLock := s.arbitrationLock(model.ID)
 	arbLock.Lock()
@@ -369,9 +442,24 @@ func (s *Supervisor) AdmitAndStart(ctx context.Context, model *domain.Model, run
 		}
 	}
 
+	// RB-015b registration A: serialize admission linearization against
+	// shutdown drain-start (D) on launchMu. The s.instances insertion remains
+	// the ADR 017 linearization point; the pre-spawn token (preSpawnInFlight)
+	// is registered atomically with it. If draining already won, the launch is
+	// never admitted: no insertion, no token, and the existing RejShuttingDown
+	// rejection is returned.
+	s.launchMu.Lock()
+	if s.draining {
+		s.launchMu.Unlock()
+		arbLock.Unlock()
+		return nil, &AdmissionRejection{Reason: RejShuttingDown, ModelID: model.ID}
+	}
 	s.mu.Lock()
 	s.instances[inst.ID] = ctrl
+	s.preSpawnInFlight++
+	ctrl.preSpawnToken = true
 	s.mu.Unlock()
+	s.launchMu.Unlock()
 
 	arbLock.Unlock()
 
@@ -384,30 +472,38 @@ func (s *Supervisor) AdmitAndStart(ctx context.Context, model *domain.Model, run
 func (s *Supervisor) startPostAdmit(ctx context.Context, inst *domain.LaunchInstance, ctrl *InstanceController) (*domain.LaunchInstance, error) {
 	reservation, err := s.acquireSlot(ctx)
 	if err != nil {
-		s.mu.Lock()
-		delete(s.instances, inst.ID)
-		s.mu.Unlock()
+		// PRE-SLOT abort: no reservation held, no durable record yet. Consume
+		// the PRE-SPAWN token ABORTED and remove the admitted controller. The
+		// returned error is preserved (ErrLaunchAbortedByShutdown when the
+		// supervisor lifecycle shutdown won; the caller-ctx error otherwise).
+		s.abortPreSpawnCleanup(inst.ID, ctrl, nil, false)
 		return nil, err
 	}
 
 	if s.store != nil {
 		entry := domain.ToStorageEntry(inst)
 		if err := s.store.Create(entry); err != nil {
-			if reservation != nil {
-				reservation.Release()
-			}
-			s.mu.Lock()
-			delete(s.instances, inst.ID)
-			s.mu.Unlock()
+			// POST-SLOT / POST-Create PRE-C abort: release the slot, no durable
+			// pending record to terminalize, consume token ABORTED.
+			s.abortPreSpawnCleanup(inst.ID, ctrl, reservation, false)
 			return nil, fmt.Errorf("persist instance: %w", err)
 		}
 	}
 
 	ctrlInst, err := ctrl.startWithReservation(s.lifecycleContext(), reservation)
 	if err != nil {
+		if errors.Is(err, ErrLaunchAbortedByShutdown) {
+			// Commit-C (D<C) abort: startCore already terminalized, deleted,
+			// released the slot, and consumed the token ABORTED. No further
+			// cleanup or accounting here.
+			return nil, err
+		}
 		if ctrlInst != nil {
 			return ctrlInst, fmt.Errorf("start instance %s: %w", inst.ID, err)
 		}
+		// Post-C failure (PRE-SPAWN token already COMMITTED at C): the existing
+		// ADR 016 cleanup below is authoritative and MUST NOT touch
+		// preSpawnInFlight.
 		if !errors.Is(err, ErrPersistenceFailure) {
 			inst.Fail(err.Error(), domain.InstanceExitError)
 			if s.store != nil {
@@ -435,8 +531,7 @@ func (s *Supervisor) start(ctx context.Context, model *domain.Model, runtime *do
 		return nil, fmt.Errorf("resolve instance: %w", err)
 	}
 
-	ctrl := NewInstanceController(inst, s.store, s.resolver, s.broker)
-	ctrl.supervisorRef = s
+	ctrl := s.newController(inst)
 
 	s.mu.Lock()
 	s.instances[inst.ID] = ctrl
@@ -555,7 +650,31 @@ func (s *Supervisor) ListByModelID(modelID string) ([]*domain.LaunchInstance, er
 // its residual ownership (slot/run held by wait(), non-terminal state) and
 // Stop's error is surfaced — Shutdown never manufactures a terminal
 // confirmation.
+//
+// RB-015b: before enumerating and stopping lifecycle-visible controllers,
+// Shutdown first starts the pre-spawn drain (D) and waits for every already
+// admitted PRE-SPAWN launch to either commit (C) or abort. Only then is a
+// successful return possible, which guarantees no admitted PRE-SPAWN launch
+// can subsequently reach manager.Start. The drain wait holds no mutex and
+// Shutdown never holds launchMu while stopping controllers.
 func (s *Supervisor) Shutdown(ctx context.Context) error {
+	// 1. Drain-start (D): set the one-way draining latch (linearized on
+	// launchMu against admission A and commit C). From now on, any new
+	// admission is rejected and any in-flight pre-spawn commit aborts.
+	s.beginDrain()
+
+	// 2. Wait for pre-spawn drain to complete (lock-free). Bounded by the
+	// shutdown context deadline; if it wins, Shutdown reports an error and
+	// does NOT assert the successful-return guarantee.
+	select {
+	case <-s.zeroSig:
+	case <-ctx.Done():
+		return fmt.Errorf("shutdown pre-spawn drain: %w", ctx.Err())
+	}
+
+	// 3. Snapshot the lifecycle-visible controllers AFTER the drain: every
+	// committed launch is now starting/running (stoppable) and no admitted
+	// pre-spawn launch remains.
 	s.mu.Lock()
 	controllers := make([]*InstanceController, 0, len(s.instances))
 	for _, ctrl := range s.instances {
@@ -881,6 +1000,12 @@ type InstanceController struct {
 	broker      *LogBroker
 	// supervisorRef points back to the parent Supervisor for reservation release.
 	supervisorRef *Supervisor
+	// preSpawnToken is true iff this launch went through AdmitAndStart
+	// registration A (a PRE-SPAWN token was registered in
+	// preSpawnInFlight). It is read/cleared only under launchMu, so the token
+	// is consumed exactly once. Transitional launches (startWithReservation
+	// without admission) never set it, so they never touch the counter.
+	preSpawnToken bool
 }
 
 // instanceRunState owns all synchronization primitives that belong to one
@@ -909,6 +1034,18 @@ func (run *instanceRunState) releaseSlot() {
 	if run.reservation != nil {
 		run.reservation.Release()
 	}
+}
+
+// newController constructs the controller for an admitted launch and wires the
+// supervisor back-reference. It is the single production path for controller
+// creation so the optional test managerStartHook (RB-015b) applies uniformly.
+func (s *Supervisor) newController(inst *domain.LaunchInstance) *InstanceController {
+	ctrl := NewInstanceController(inst, s.store, s.resolver, s.broker)
+	ctrl.supervisorRef = s
+	if s.managerStartHook != nil {
+		s.managerStartHook(ctrl.manager)
+	}
+	return ctrl
 }
 
 // NewInstanceController creates a controller for an instance.
@@ -954,16 +1091,63 @@ func (ic *InstanceController) startWithReservation(operationCtx context.Context,
 	return ic.startCore(operationCtx, reservation)
 }
 
+// abortPreSpawn is the commit-C (D<C) pre-spawn abort: shutdown drain won
+// before the spawn commit. It terminalizes the controller (a durable pending
+// record exists), removes it, releases the slot, and consumes the PRE-SPAWN
+// token ABORTED. It is called with launchMu already released and
+// ic.lifecycleMu still held.
+func (ic *InstanceController) abortPreSpawn(reservation *slotReservation) {
+	ic.supervisorRef.abortPreSpawnCleanup(ic.instanceID, ic, reservation, true)
+}
+
 func (ic *InstanceController) startCore(operationCtx context.Context, reservation *slotReservation) (*domain.LaunchInstance, error) {
+	s := ic.supervisorRef
+	if s != nil {
+		// RB-015b commit C: acquire launchMu BEFORE ic.mu. This is the
+		// spawn-commit linearization point against shutdown drain-start (D).
+		s.launchMu.Lock()
+		if s.draining {
+			// D < C: shutdown won. Do NOT publish starting, do NOT call
+			// manager.Start; abort PRE-SPAWN (cleanup releases launchMu
+			// before any I/O / s.mu / reservation work).
+			s.launchMu.Unlock()
+			ic.abortPreSpawn(reservation)
+			return nil, ErrLaunchAbortedByShutdown
+		}
+		// C < D: publish the pending->starting transition while launchMu is
+		// still held so the starting publication happens-before the counter
+		// handoff, and consume the PRE-SPAWN token as COMMITTED. After this
+		// point the token no longer exists: no later startCore/ADR 016
+		// failure path may touch preSpawnInFlight.
+		ic.mu.Lock()
+		ic.instance.UpdateState(domain.InstanceStateStarting)
+		if ic.preSpawnToken {
+			s.preSpawnInFlight--
+			ic.preSpawnToken = false
+			s.signalPreSpawnZeroLocked()
+		}
+		s.launchMu.Unlock()
+	} else {
+		// Transitional path (no supervisor): no admission/token accounting.
+		ic.mu.Lock()
+		ic.instance.UpdateState(domain.InstanceStateStarting)
+	}
+
 	run := newInstanceRunState(reservation)
-	ic.mu.Lock()
 	ic.run = run
-	ic.instance.UpdateState(domain.InstanceStateStarting)
 	// Persist the starting state while ic.mu is held so wait() reads consistent ic.instance.
 	if err := ic.persistStateLocked(); err != nil {
 		ic.mu.Unlock()
 		run.releaseSlot()
 		run.complete()
+		if s != nil {
+			// C already committed the token: removing the not-yet-spawned
+			// controller keeps the registry consistent. No token accounting
+			// here — the token was consumed at C.
+			s.mu.Lock()
+			delete(s.instances, ic.instanceID)
+			s.mu.Unlock()
+		}
 		return nil, fmt.Errorf("persist starting state: %w", err)
 	}
 

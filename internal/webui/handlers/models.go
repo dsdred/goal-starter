@@ -261,6 +261,10 @@ func (h *ModelsHandler) Start(w http.ResponseWriter, r *http.Request) {
 			writeAPIError(w, http.StatusConflict, apierrors.NewAPIError(apierrors.CodeConflict, "launch_in_flight"))
 			return
 		}
+		if errors.Is(err, process.ErrLaunchAbortedByShutdown) {
+			writeAPIError(w, http.StatusServiceUnavailable, apierrors.NewAPIError(apierrors.CodeServiceUnavailable, "launch_aborted"))
+			return
+		}
 		writeError(w, 500, err.Error())
 		return
 	}

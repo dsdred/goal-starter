@@ -20,6 +20,15 @@ var ErrLaunchInFlight = errors.New("launch in flight: instance launch is not com
 // the running identity is NOT durable in the repository (ADR 016 F1).
 var ErrPersistenceFailure = errors.New("durable persistence of running identity failed")
 
+// ErrLaunchAbortedByShutdown is returned when a launch crossed ADR 017
+// admission linearization but was aborted PRE-SPAWN because Supervisor
+// shutdown began. It is distinct from AdmissionRejection{RejShuttingDown},
+// which means shutdown won BEFORE admission linearization (the launch was
+// never admitted). Here admission already occurred, so the launch is cleaned
+// up as a PRE-SPAWN abort rather than rejected. HTTP handlers map it to
+// 503 Service Unavailable.
+var ErrLaunchAbortedByShutdown = errors.New("launch aborted: supervisor shutdown in progress")
+
 // ErrTerminationUnconfirmed reports ADR 016 Outcome C: the rollback kill was
 // accepted by the OS but process exit is not yet confirmed. Slot and run
 // ownership are held by the wait() goroutine until exit is confirmed.
