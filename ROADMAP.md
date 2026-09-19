@@ -59,8 +59,8 @@
   - Same-pipeline distinct `PipelineEntryID` entries for the same ModelID remain intentionally supported (ADR 013 D3).
 - [x] **RB-004 — Legacy runtime start endpoint disposition**
   - RESOLVED: the legacy `POST /api/v1/runtimes/{id}/action/start` action was **retired** — it now deterministically returns `410 Gone` (code `gone`) before any instance lookup/launch, directing callers to the canonical `POST /api/v1/models/{id}/start`. `stop`/`restart` actions unchanged. Forensic: no reachable success path existed (live state → ADR 017 duplicate rejection / 409; no live state → 404), and a runtime is a launch template with no unambiguous ModelID. Shipped `8307f20` + CI 35434215393 (7/7 PASS).
-- [ ] **RB-015b — Shutdown admission for already-admitted work**
-  - Already-admitted work blocked on `acquireSlot` when shutdown begins. Requires `acquireSlot` to observe the lifecycle context. NOT STARTED.
+- [x] **RB-015b — Shutdown admission for already-admitted work**
+  - RESOLVED: already-admitted work blocked on `acquireSlot` when shutdown begins is now aborted PRE-SPAWN via a lifecycle-aware drain (one-way `draining` latch + `preSpawnInFlight` counter + `launchMu`-linearized admission/commit/drain); a successful `Shutdown` return guarantees no admitted PRE-SPAWN launch can subsequently reach `manager.Start`. Shipped `f13bae8` + CI 35467099833 (7/7 PASS including Linux race).
 - [ ] **Focused remediation review**
   - Validates the completed remediation batch (RB-002, RB-004, RB-015b) before Manual Owner Acceptance. No implementation work.
 - [ ] **Manual Owner Acceptance (pre-Readiness gate)**

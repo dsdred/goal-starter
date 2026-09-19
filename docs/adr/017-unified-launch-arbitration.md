@@ -229,7 +229,7 @@ Restart paths (`RestartInstance` → `Supervisor.RestartWithLaunch`) operate on 
 ### Shutdown / RB-015b Boundary
 
 - **RB-002 (this ADR):** `AdmitAndStart` checks `s.lifecycleCtx.Err()` inside the arbitration critical section. If cancelled → reject with `RejShuttingDown`. No new admission after shutdown begins.
-- **RB-015b (separate task):** Already-admitted work blocked on `acquireSlot` when shutdown begins. Requires `acquireSlot` to use the lifecycle context. Not implemented by this ADR.
+- **RB-015b (separate task, subsequently resolved):** Already-admitted work blocked on `acquireSlot` when shutdown begins. Originally deferred by this ADR; resolved by a dedicated shutdown drain correction (lifecycle-aware pre-spawn abort + `launchMu`-linearized admission/commit/drain) ensuring no admitted PRE-SPAWN launch spawns after a successful `Shutdown`. Implementation: `f13bae8`; CI 35467099833 (7/7 PASS).
 
 ### RB-004 Boundary
 
