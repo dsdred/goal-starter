@@ -357,6 +357,16 @@ func (h *RuntimesHandler) Action(w http.ResponseWriter, r *http.Request) {
 	}
 	id, action := parts[0], parts[1]
 
+	// RB-004: runtime-level start is retired. A Runtime is a launch template
+	// (one runtime may serve many models), so no unambiguous ModelID can be
+	// derived from a RuntimeID, and the old branch had no reachable success
+	// path. Callers must use the canonical model start endpoint. This rejects
+	// before any instance lookup or launch operation.
+	if action == "start" {
+		writeAPIError(w, http.StatusGone, apierrors.NewAPIError(apierrors.CodeGone, "runtime-level start is retired; use POST /api/v1/models/{id}/start"))
+		return
+	}
+
 	instances, err := h.instances.ListInstances(r.Context())
 	if err != nil {
 		writeError(w, 500, err.Error())
@@ -364,33 +374,6 @@ func (h *RuntimesHandler) Action(w http.ResponseWriter, r *http.Request) {
 	}
 
 	switch action {
-	case "start":
-		for _, inst := range instances {
-			if inst.RuntimeID == id && inst.IsLive() {
-				inst, err := h.instances.StartModel(r.Context(), inst.ModelID)
-				if err != nil {
-					var rej *process.AdmissionRejection
-					if errors.As(err, &rej) {
-						code := "launch_in_flight"
-						if rej.Reason == process.RejOrphan {
-							code = "orphan"
-						}
-						writeAPIError(w, http.StatusConflict, apierrors.NewAPIError(apierrors.CodeConflict, code))
-						return
-					}
-					if errors.Is(err, process.ErrLaunchInFlight) {
-						writeAPIError(w, http.StatusConflict, apierrors.NewAPIError(apierrors.CodeConflict, "launch_in_flight"))
-						return
-					}
-					writeError(w, 500, err.Error())
-					return
-				}
-				inst.Environment = nil
-				writeJSON(w, http.StatusOK, inst)
-				return
-			}
-		}
-		writeError(w, 404, "no running instance for this runtime")
 	case "stop":
 		for _, inst := range instances {
 			if inst.RuntimeID == id && inst.IsLive() {

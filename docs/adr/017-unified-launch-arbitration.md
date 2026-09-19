@@ -233,7 +233,7 @@ Restart paths (`RestartInstance` → `Supervisor.RestartWithLaunch`) operate on 
 
 ### RB-004 Boundary
 
-The legacy `/api/v1/runtimes/{id}/action/start` routes through `InstanceService.StartModel` and will automatically be protected by `AdmitAndStart` once Slice A migrates the manual path. Its disposition (retire/deprecate) is a separate tracked task.
+The legacy `/api/v1/runtimes/{id}/action/start` was retired (RB-004): it now returns `410 Gone` before any instance lookup or launch, directing callers to the canonical `POST /api/v1/models/{id}/start`. It no longer routes through `InstanceService.StartModel`/`AdmitAndStart` (a runtime is a launch template with no unambiguous ModelID). The `stop`/`restart` actions are unchanged.
 
 ### Source-of-Truth Table
 

@@ -8,6 +8,7 @@ const (
 	CodeUnauthorized   Code = "unauthorized"
 	CodeForbidden      Code = "forbidden"
 	CodeNotFound       Code = "not_found"
+	CodeGone           Code = "gone"
 	CodeConflict       Code = "conflict"
 	CodeRateLimited    Code = "rate_limited"
 	CodeInvalidPort    Code = "invalid_port"

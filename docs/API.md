@@ -235,7 +235,7 @@ Runtime environment values remain available internally for process launch.
 | `POST` | `/api/v1/runtimes` | Yes | Yes | Create runtime. |
 | `PUT` | `/api/v1/runtimes/{id}` | Yes | Yes | Update runtime. |
 | `DELETE` | `/api/v1/runtimes/{id}` | Yes | Yes | Delete runtime. |
-| `POST` | `/api/v1/runtimes/{id}/action/{action}` | Yes | Yes | Legacy action endpoint. |
+| `POST` | `/api/v1/runtimes/{id}/action/{action}` | Yes | Yes | Legacy action endpoint. `start` is **retired** — it returns `410 Gone` (callers must use `POST /api/v1/models/{id}/start`). `stop` and `restart` remain supported. |
 | `GET` | `/api/v1/runtimes/health` | Yes | — | Health of all runtimes (instance-based). |
 | `GET` | `/api/v1/runtimes/health/{id}` | Yes | — | Health of specific runtime. |
 

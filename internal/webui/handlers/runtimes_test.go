@@ -178,3 +178,35 @@ func TestRuntimesHandler_CascadeDelete(t *testing.T) {
 		t.Errorf("CascadeDelete empty ID: expected 400, got %d", w.Code)
 	}
 }
+
+// TestRuntimesHandler_ActionStartRetired proves RB-004: the legacy runtime-level
+// start action is retired and returns 410 Gone before any instance lookup or
+// launch. The handler from newV23RuntimeHandler has a nil instance service and
+// no supervisor, so any code path that still attempted the old
+// ListInstances / IsLive / StartModel logic would panic; the clean 410 also
+// demonstrates the result does not depend on an existing runtime, model, or
+// live instance.
+func TestRuntimesHandler_ActionStartRetired(t *testing.T) {
+	_, handler := newV23RuntimeHandler(t)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/runtimes/does-not-exist/action/start", nil)
+	w := httptest.NewRecorder()
+	handler.Action(w, req)
+
+	if w.Code != http.StatusGone {
+		t.Fatalf("action/start: expected 410, got %d, body %s", w.Code, w.Body.String())
+	}
+	var errResp struct {
+		Code    string `json:"code"`
+		Message string `json:"error"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &errResp); err != nil {
+		t.Fatalf("decode 410 response: %v", err)
+	}
+	if errResp.Code != "gone" {
+		t.Errorf("action/start code = %q, want %q", errResp.Code, "gone")
+	}
+	if !strings.Contains(errResp.Message, "/api/v1/models/{id}/start") {
+		t.Errorf("action/start message should point to the canonical model start endpoint: %q", errResp.Message)
+	}
+}
