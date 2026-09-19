@@ -51,11 +51,11 @@
 - [x] **ADR 016 — Durable Lifecycle Ownership (RB-001 + RB-003)**
   - Design gate: [ADR 016](docs/adr/016-durable-lifecycle-ownership.md) (**Accepted** — implemented and published 2026-09-18) defines the durable state ownership contract for the Start and Terminal transitions, eliminating the crash windows where durable and in-memory state diverged.
   - Shipped: `3f67cd7` + CI 7/7 PASS (including Linux race). RB-001 RESOLVED. RB-003 RESOLVED.
-- [ ] **ADR 017 — Unified Owner-Aware Launch Arbitration (RB-002)**
-  - Design gate: [ADR 017](docs/adr/017-unified-launch-arbitration.md) (**Accepted** — design published 2026-09-18; Slices A+B published 2026-09-19) defines a single atomic admission boundary (`Supervisor.AdmitAndStart`) with an owner-aware compatibility matrix replacing all caller-side duplicate-prevention.
+- [x] **ADR 017 — Unified Owner-Aware Launch Arbitration (RB-002)**
+  - Design gate: [ADR 017](docs/adr/017-unified-launch-arbitration.md) (**Accepted** — fully implemented and published 2026-09-19) defines a single atomic admission boundary (`Supervisor.AdmitAndStart`) with an owner-aware compatibility matrix replacing all caller-side duplicate-prevention.
   - Slice A (shipped `b377c46` + CI 7/7 PASS): manual start → `AdmitAndStart`; C3 mutex removed.
   - Slice B (shipped `a55e673` + CI 7/7 PASS): pipeline start/restart/autostart → `AdmitAndStart`; per-PipelineID mutex is operation serialization only.
-  - Slice C (NOT STARTED): model autostart → `AdmitAndStart`; old exported `Supervisor.Start` removed; final caller audit (zero direct callers). RB-002 globally closed.
+  - Slice C (shipped `1d37918` + CI 7/7 PASS): model autostart → `AdmitAndStart`; old exported `Supervisor.Start` unexported (package-private test seam); final caller audit: zero production bypasses. RB-002 RESOLVED.
   - Same-pipeline distinct `PipelineEntryID` entries for the same ModelID remain intentionally supported (ADR 013 D3).
 - [ ] **RB-004 — Legacy runtime start endpoint disposition**
   - `/api/v1/runtimes/{id}/action/start` currently has no valid success path: with live state it reaches conflicting launch semantics / 409; without live state it resolves to 404. Reconcile or remove. NOT STARTED.

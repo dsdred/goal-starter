@@ -1,6 +1,6 @@
 # ADR 017: Unified Owner-Aware Launch Arbitration Boundary
 
-**Status:** Accepted — Slices A+B implemented and published 2026-09-19; Slice C NOT STARTED (RB-002 remains OPEN)
+**Status:** Accepted — fully implemented and published 2026-09-19 (Slices A+B+C; RB-002 RESOLVED)
 **Date:** 2026-09-18
 **Remediates:** RB-002 (process/state divergence and false admission across launch initiators)
 **Depends on:** ADR 016 (Durable Lifecycle Ownership — defines "what a successful Start means"), ADR 013 (Pipeline repeatable model entries — defines the compatibility matrix), ADR 005 (Recovery — defines orphan semantics)
