@@ -266,6 +266,41 @@ func (s *Supervisor) abortPreSpawnCleanup(instID domain.InstanceID, ctrl *Instan
 	s.launchMu.Unlock()
 }
 
+// failUnspawnedController terminalizes a launch that never produced a
+// supervised OS process (never reached a successful manager.Start), so no
+// wait() goroutine owns the instance. The controller shares its
+// *domain.LaunchInstance with Snapshot/List/ListActive/Status readers, so the
+// mutation and the storage snapshot are taken under ic.mu; the repository write
+// runs AFTER the unlock because repository implementations hold their own lock
+// across the file write and must never be nested under ic.mu.
+//
+// The caller MUST NOT hold ic.mu, s.mu or launchMu. It MUST NOT use this for an
+// ADR 016 residual (C/D) outcome: there the process may be alive and ownership
+// belongs to wait().
+func (s *Supervisor) failUnspawnedController(ctrl *InstanceController, cause string) error {
+	ctrl.mu.Lock()
+	ctrl.instance.Fail(cause, domain.InstanceExitError)
+	entry := domain.ToStorageEntry(ctrl.instance)
+	ctrl.mu.Unlock()
+
+	if s.store == nil {
+		return nil
+	}
+	return s.store.Update(entry)
+}
+
+// forgetController removes one exact controller from the active registry. The
+// identity comparison keeps a re-published controller (RemoveTerminal re-inserts
+// on persist failure) from being dropped by a stale cleanup. Safe when the
+// controller is already absent. The caller MUST NOT hold ic.mu or s.mu.
+func (s *Supervisor) forgetController(ctrl *InstanceController, instID domain.InstanceID) {
+	s.mu.Lock()
+	if s.instances[instID] == ctrl {
+		delete(s.instances, instID)
+	}
+	s.mu.Unlock()
+}
+
 // concurrentCount returns the number of currently held slots.
 // For a buffered semaphore, this is len(semaphore) which counts unacquired tokens.
 // Held = maxConcurrent - len(semaphore).
@@ -505,16 +540,11 @@ func (s *Supervisor) startPostAdmit(ctx context.Context, inst *domain.LaunchInst
 		// ADR 016 cleanup below is authoritative and MUST NOT touch
 		// preSpawnInFlight.
 		if !errors.Is(err, ErrPersistenceFailure) {
-			inst.Fail(err.Error(), domain.InstanceExitError)
-			if s.store != nil {
-				if uerr := s.store.Update(domain.ToStorageEntry(inst)); uerr != nil {
-					err = errors.Join(err, fmt.Errorf("persist start error: %w", uerr))
-				}
+			if persistErr := s.failUnspawnedController(ctrl, err.Error()); persistErr != nil {
+				err = errors.Join(err, fmt.Errorf("persist start error: %w", persistErr))
 			}
 		}
-		s.mu.Lock()
-		delete(s.instances, inst.ID)
-		s.mu.Unlock()
+		s.forgetController(ctrl, inst.ID)
 		return nil, fmt.Errorf("start instance %s: %w", inst.ID, err)
 	}
 
