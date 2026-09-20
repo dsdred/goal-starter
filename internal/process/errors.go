@@ -40,6 +40,13 @@ var ErrTerminationUnconfirmed = errors.New("rollback kill accepted but process t
 // confirmed.
 var ErrRollbackFailed = errors.New("rollback kill refused by OS; process may be alive")
 
+// ErrNotRestartable reports that a restart target cannot be restarted under
+// the ADR 017 D1 restart state contract: a stale or orphan record (terminal but
+// unrecoverable attribution), an unknown state, or a pipeline instance whose
+// entry ownership cannot be reconstructed. HTTP handlers map it like any other
+// bounded restart error.
+var ErrNotRestartable = errors.New("instance is not restartable")
+
 // RejectionReason classifies why admission was denied (ADR 017).
 type RejectionReason int
 

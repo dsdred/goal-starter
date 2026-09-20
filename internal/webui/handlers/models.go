@@ -303,18 +303,29 @@ func (h *ModelsHandler) Restart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	instances, _ := h.instanceSvc.ListInstances(r.Context())
+
+	// Select the whole target set first and preflight it (ADR 017 D1): a model
+	// restart must not mutate some of its instances and then fail on one it
+	// should never have touched.
+	var targets []domain.InstanceID
 	for _, inst := range instances {
-		if inst.ModelID == id && inst.State == domain.InstanceStatePending {
+		if inst.ModelID == id && inst.IsInFlight() {
+			targets = append(targets, inst.ID)
+		}
+	}
+	if err := h.instanceSvc.PreflightRestart(r.Context(), targets); err != nil {
+		if errors.Is(err, process.ErrLaunchInFlight) {
 			writeAPIError(w, http.StatusConflict, apierrors.NewAPIError(apierrors.CodeConflict, "launch_in_flight"))
 			return
 		}
+		writeError(w, 500, err.Error())
+		return
 	}
-	for _, inst := range instances {
-		if inst.ModelID == id && inst.IsLive() {
-			if _, err := h.instanceSvc.RestartInstance(r.Context(), inst.ID); err != nil {
-				writeError(w, 500, err.Error())
-				return
-			}
+
+	for _, instID := range targets {
+		if _, err := h.instanceSvc.RestartInstance(r.Context(), instID); err != nil {
+			writeError(w, 500, err.Error())
+			return
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "restarted"})

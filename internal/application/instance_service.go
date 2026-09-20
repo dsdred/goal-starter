@@ -50,6 +50,20 @@ func (s *InstanceService) StopInstance(ctx context.Context, id domain.InstanceID
 	return s.supervisor.Stop(ctx, id)
 }
 
+// PreflightRestart validates a whole selected restart target set against the
+// immediately-known restart preconditions (pending / starting / stale /
+// unattributable ownership / a restart already in flight) BEFORE any target is
+// mutated, so a caller cannot apply part of a set it should never have started.
+//
+// This is pre-flight atomicity only: it performs no arbitration and no
+// reservation, and it is not a transaction — the authoritative decision for
+// each target is still made by the Supervisor's ADR 017 arbitration boundary
+// when that restart runs, and already-completed process restarts are never
+// rolled back.
+func (s *InstanceService) PreflightRestart(ctx context.Context, ids []domain.InstanceID) error {
+	return s.supervisor.PreflightRestart(ids)
+}
+
 // RestartInstance restarts the instance with the CURRENT launch configuration
 // resolved from the repository (ownership-aware):
 //

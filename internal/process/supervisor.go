@@ -109,6 +109,12 @@ type Supervisor struct {
 	arbMu    sync.Mutex
 	arbLocks map[string]*sync.Mutex
 
+	// opSeq mints the monotonic operation/generation identity consumed by the
+	// ADR 017 D1 arbitration boundary (see arbitration.go). Restart reuses the
+	// InstanceID, so this counter — never a random ID — is what binds a spawn
+	// claim to exactly one generation.
+	opSeq atomic.Uint64
+
 	// RB-015b pre-spawn shutdown drain. launchMu serializes admission
 	// registration (A), shutdown drain-start (D), and spawn commit (C).
 	// draining is a one-way latch; preSpawnInFlight counts admitted launches
@@ -431,13 +437,15 @@ func (r *slotReservation) Release() {
 }
 
 // AdmitAndStart is the authoritative launch admission + start operation
-// (ADR 017). It atomically checks for conflicting in-flight instances and
-// orphans, materializes the pending claim in s.instances (the linearization
-// point), and proceeds through the full start lifecycle (slot, persist,
-// spawn, ADR 016).
+// (ADR 017). It delegates the whole arbitration decision to
+// Supervisor.arbitrate, which atomically checks the shutdown/lifecycle state,
+// conflicting same-model operations and repository orphans, materializes the
+// pending claim in s.instances (the linearization point), and mints the
+// generation-bound spawn authorization this launch consumes at commit C.
 //
 // The per-ModelID arbitration lock serializes check+claim for the same model.
-// It is released before slot acquisition, persistence, or spawn.
+// It is released inside arbitrate, before slot acquisition, persistence, or
+// spawn.
 func (s *Supervisor) AdmitAndStart(ctx context.Context, model *domain.Model, runtime *domain.Runtime, owner domain.LaunchOwner, customArgs []string, customEnv map[string]string) (*domain.LaunchInstance, error) {
 	inst, err := s.resolver.ResolveToInstance(model, runtime, customArgs, customEnv)
 	if err != nil {
@@ -446,65 +454,25 @@ func (s *Supervisor) AdmitAndStart(ctx context.Context, model *domain.Model, run
 
 	ctrl := s.newController(inst)
 
-	arbLock := s.arbitrationLock(model.ID)
-	arbLock.Lock()
-
-	if err := s.lifecycleContext().Err(); err != nil {
-		arbLock.Unlock()
-		return nil, &AdmissionRejection{Reason: RejShuttingDown, ModelID: model.ID}
+	claim, err := s.arbitrate(newAdmissionClaimant(model.ID, inst, ctrl, owner))
+	if err != nil {
+		return nil, err
 	}
 
-	s.mu.RLock()
-	for id, c := range s.instances {
-		snap := c.Snapshot()
-		if snap.ModelID == model.ID && snap.IsInFlight() && !compatible(owner, &snap) {
-			s.mu.RUnlock()
-			arbLock.Unlock()
-			return nil, &AdmissionRejection{Reason: RejInFlight, ModelID: model.ID, ConflictID: id, PipelineID: snap.PipelineID, EntryID: snap.PipelineEntryID}
-		}
-	}
-	s.mu.RUnlock()
-
-	if s.store != nil {
-		entries, err := s.store.ListByModelID(model.ID)
-		if err == nil {
-			for _, e := range entries {
-				if e.State == string(domain.InstanceStateOrphan) {
-					arbLock.Unlock()
-					return nil, &AdmissionRejection{Reason: RejOrphan, ModelID: model.ID, ConflictID: domain.InstanceID(e.ID), PipelineID: e.PipelineID, EntryID: e.PipelineEntryID}
-				}
-			}
-		}
-	}
-
-	// RB-015b registration A: serialize admission linearization against
-	// shutdown drain-start (D) on launchMu. The s.instances insertion remains
-	// the ADR 017 linearization point; the pre-spawn token (preSpawnInFlight)
-	// is registered atomically with it. If draining already won, the launch is
-	// never admitted: no insertion, no token, and the existing RejShuttingDown
-	// rejection is returned.
-	s.launchMu.Lock()
-	if s.draining {
-		s.launchMu.Unlock()
-		arbLock.Unlock()
-		return nil, &AdmissionRejection{Reason: RejShuttingDown, ModelID: model.ID}
-	}
-	s.mu.Lock()
-	s.instances[inst.ID] = ctrl
-	s.preSpawnInFlight++
-	ctrl.preSpawnToken = true
-	s.mu.Unlock()
-	s.launchMu.Unlock()
-
-	arbLock.Unlock()
-
-	return s.startPostAdmit(ctx, inst, ctrl)
+	return s.startPostAdmit(ctx, inst, ctrl, claim)
 }
 
 // startPostAdmit performs the post-admission launch sequence: slot acquisition,
 // pending persistence, startCore, and ADR 016 lifecycle. The instance MUST
-// already be in s.instances (admission linearized).
-func (s *Supervisor) startPostAdmit(ctx context.Context, inst *domain.LaunchInstance, ctrl *InstanceController) (*domain.LaunchInstance, error) {
+// already be in s.instances (admission linearized) and hold a published spawn
+// claim.
+func (s *Supervisor) startPostAdmit(ctx context.Context, inst *domain.LaunchInstance, ctrl *InstanceController, claim *spawnClaim) (*domain.LaunchInstance, error) {
+	// The operation record is released when this launch attempt ends — after the
+	// spawn has committed and transferred ownership to a lifecycle-owned
+	// generation, or on final failure. Releasing it earlier would reopen an
+	// externally admissible window inside a launch that is still in flight.
+	defer ctrl.releaseLaunchOperation(claim.opID)
+
 	reservation, err := s.acquireSlot(ctx)
 	if err != nil {
 		// PRE-SLOT abort: no reservation held, no durable record yet. Consume
@@ -525,7 +493,7 @@ func (s *Supervisor) startPostAdmit(ctx context.Context, inst *domain.LaunchInst
 		}
 	}
 
-	ctrlInst, err := ctrl.startWithReservation(s.lifecycleContext(), reservation)
+	ctrlInst, err := ctrl.startWithReservation(s.lifecycleContext(), reservation, claim)
 	if err != nil {
 		if errors.Is(err, ErrLaunchAbortedByShutdown) {
 			// Commit-C (D<C) abort: startCore already terminalized, deleted,
@@ -553,8 +521,10 @@ func (s *Supervisor) startPostAdmit(ctx context.Context, inst *domain.LaunchInst
 }
 
 // start creates a new launch instance and starts its process without admission
-// arbitration. Package-internal test helper only. Production code MUST use
-// AdmitAndStart (ADR 017).
+// arbitration. Package-internal TEST SEAM only (the ADR 016/017 lifecycle
+// tests): production code MUST use AdmitAndStart (ADR 017). Because the spawn
+// boundary requires a claim, the seam publishes one through the single
+// package-private minting helper instead of arbitration.
 func (s *Supervisor) start(ctx context.Context, model *domain.Model, runtime *domain.Runtime, customArgs []string, customEnv map[string]string) (*domain.LaunchInstance, error) {
 	inst, err := s.resolver.ResolveToInstance(model, runtime, customArgs, customEnv)
 	if err != nil {
@@ -567,7 +537,19 @@ func (s *Supervisor) start(ctx context.Context, model *domain.Model, runtime *do
 	s.instances[inst.ID] = ctrl
 	s.mu.Unlock()
 
-	return s.startPostAdmit(ctx, inst, ctrl)
+	return s.startPostAdmit(ctx, inst, ctrl, s.mintTestSpawnClaim(ctrl, domain.ManualOwner))
+}
+
+// controllerFor returns the registered controller for an instance ID.
+func (s *Supervisor) controllerFor(id domain.InstanceID) (*InstanceController, error) {
+	s.mu.RLock()
+	ctrl, ok := s.instances[id]
+	s.mu.RUnlock()
+
+	if !ok {
+		return nil, fmt.Errorf("instance %s not found", id)
+	}
+	return ctrl, nil
 }
 
 // Stop stops a specific instance by ID.
@@ -584,33 +566,59 @@ func (s *Supervisor) Stop(ctx context.Context, id domain.InstanceID) error {
 }
 
 // Restart restarts a specific instance, reusing the instance's frozen launch
-// fields from the original resolve.
+// fields from the original resolve. The restart passes through the SAME ADR 017
+// arbitration boundary as a new launch (D1/BF-01) and receives its own
+// generation-bound spawn authorization.
 func (s *Supervisor) Restart(ctx context.Context, id domain.InstanceID) (*domain.LaunchInstance, error) {
-	s.mu.RLock()
-	ctrl, ok := s.instances[id]
-	s.mu.RUnlock()
-
-	if !ok {
-		return nil, fmt.Errorf("instance %s not found", id)
+	ctrl, err := s.controllerFor(id)
+	if err != nil {
+		return nil, err
 	}
-
-	return ctrl.Restart(ctx)
+	return s.restart(ctx, ctrl, nil, "")
 }
 
 // RestartWithLaunch restarts a specific instance using a freshly resolved
-// launch specification built from the current model/runtime configuration.
-// See InstanceController.RestartWithLaunch for the identity and ownership
-// contract.
+// launch specification built from the current model/runtime configuration. The
+// InstanceID, the persisted record, and the PipelineID/PipelineEntryID
+// attribution are preserved (no new ID is minted); only the launch-affecting
+// fields (RuntimeID, Executable, Args, WorkingDirectory, Environment) are
+// refreshed before the new process generation starts. ModelName is
+// intentionally NOT refreshed (display metadata).
+//
+// The fresh spec is resolved BEFORE arbitration so a resolution failure costs
+// no reservation; arbitration then decides admission exactly as for a new
+// launch (D1/BF-01).
 func (s *Supervisor) RestartWithLaunch(ctx context.Context, id domain.InstanceID, model *domain.Model, runtime *domain.Runtime, customArgs []string, customEnv map[string]string) (*domain.LaunchInstance, error) {
-	s.mu.RLock()
-	ctrl, ok := s.instances[id]
-	s.mu.RUnlock()
-
-	if !ok {
-		return nil, fmt.Errorf("instance %s not found", id)
+	ctrl, err := s.controllerFor(id)
+	if err != nil {
+		return nil, err
 	}
 
-	return ctrl.RestartWithLaunch(ctx, model, runtime, customArgs, customEnv)
+	spec, err := ctrl.resolver.Resolve(model, runtime, customArgs, customEnv)
+	if err != nil {
+		return nil, fmt.Errorf("resolve instance: %w", err)
+	}
+
+	return s.restart(ctx, ctrl, spec, runtime.ID)
+}
+
+// restart is the single restart entry: it derives the owner from the TARGET
+// instance, arbitrates under the per-ModelID arbLock, and only then hands the
+// winning claim to the lifecycle work. arbLock is already released when
+// restartWithRefresh acquires lifecycleMu (no arbLock -> lifecycleMu edge).
+func (s *Supervisor) restart(ctx context.Context, ctrl *InstanceController, spec *domain.CommandSpec, runtimeID string) (*domain.LaunchInstance, error) {
+	snap := ctrl.Snapshot()
+	owner, err := instanceOwner(&snap)
+	if err != nil {
+		return nil, err
+	}
+
+	claim, err := s.arbitrate(newRestartClaimant(ctrl, snap.ModelID, owner))
+	if err != nil {
+		return nil, err
+	}
+
+	return ctrl.restartWithRefresh(ctx, spec, runtimeID, claim)
 }
 
 // Status returns a snapshot of a specific instance.
@@ -1023,12 +1031,24 @@ type InstanceController struct {
 	mu          sync.RWMutex
 	instance    *domain.LaunchInstance
 	instanceID  domain.InstanceID
-	manager     *Manager
-	store       InstanceStore
-	resolver    *domain.LaunchResolver
-	run         *instanceRunState
-	broker      *LogBroker
-	// supervisorRef points back to the parent Supervisor for reservation release.
+	// modelID is the immutable ModelID of the controlled instance. The
+	// arbitration boundary binds a spawn claim to it so a claim minted for one
+	// model can never authorize another controller's spawn (ADR 017 D1).
+	modelID string
+	manager *Manager
+	store   InstanceStore
+	// resolver is the launch resolver used to re-resolve a restart's fresh
+	// command spec before arbitration (see Supervisor.RestartWithLaunch).
+	resolver *domain.LaunchResolver
+	// active is the one launch/restart operation currently holding this
+	// instance's spawn authorization (ADR 017 D1). It is published by
+	// Supervisor.arbitrate under the per-ModelID arbLock + launchMu, read under
+	// ic.mu, and released by the owning operation exactly once. For a restart it
+	// is the reservation that keeps the operation conflict-visible across the
+	// stop -> terminal interval -> spawn window.
+	active        *launchOperation
+	run           *instanceRunState
+	broker        *LogBroker
 	supervisorRef *Supervisor
 	// preSpawnToken is true iff this launch went through AdmitAndStart
 	// registration A (a PRE-SPAWN token was registered in
@@ -1083,11 +1103,12 @@ func NewInstanceController(inst *domain.LaunchInstance, store InstanceStore, res
 	return &InstanceController{
 		instance:      inst,
 		instanceID:    inst.ID,
+		modelID:       inst.ModelID,
 		manager:       NewManager(),
 		store:         store,
 		resolver:      resolver,
 		broker:        broker,
-		supervisorRef: nil, // set by Supervisor.Start after construction
+		supervisorRef: nil, // set by Supervisor.newController after construction
 	}
 }
 
@@ -1098,70 +1119,97 @@ func (ic *InstanceController) IsRunning() bool {
 	return ic.instance.IsLive()
 }
 
-// Start launches the managed process.
+// startWithReservation is the lifecycle-wrapped spawn of one generation. The
+// caller MUST present the spawn claim minted by Supervisor.arbitrate for the
+// operation that currently owns this controller; without it no spawn is
+// possible (ADR 017 D1).
+//
 // The operationCtx parameter is used only for the Start() operation timeout.
 // Post-spawn lifecycle operations (running persist + retry, rollback kill,
 // exit confirmation, failure persistence) use the supervisor lifecycle
 // context, never the caller's request context (ADR 016 §8.1).
 //
-// ADR 016 S1/F1: Start returns a nil error ONLY after the full running
-// identity (state=running, PID, StartedAt) is durably persisted. On running
-// persist failure the fail-closed rollback applies: confirmed-dead outcomes
-// (A/B) return (nil, ErrPersistenceFailure); residual outcomes (C/D,
-// termination unconfirmed / kill refused) return (instance, error) with the
-// instance kept in the supervisor registry and slot/run ownership held by
-// the wait() goroutine until it confirms exit.
-func (ic *InstanceController) Start(operationCtx context.Context) (*domain.LaunchInstance, error) {
-	return ic.startWithReservation(operationCtx, nil)
-}
-
-func (ic *InstanceController) startWithReservation(operationCtx context.Context, reservation *slotReservation) (*domain.LaunchInstance, error) {
+// ADR 016 S1/F1: a nil error is returned ONLY after the full running identity
+// (state=running, PID, StartedAt) is durably persisted. On running persist
+// failure the fail-closed rollback applies: confirmed-dead outcomes (A/B)
+// return (nil, ErrPersistenceFailure); residual outcomes (C/D, termination
+// unconfirmed / kill refused) return (instance, error) with the instance kept
+// in the supervisor registry and slot/run ownership held by the wait()
+// goroutine until it confirms exit.
+func (ic *InstanceController) startWithReservation(operationCtx context.Context, reservation *slotReservation, claim *spawnClaim) (*domain.LaunchInstance, error) {
 	ic.lifecycleMu.Lock()
 	defer ic.lifecycleMu.Unlock()
-	return ic.startCore(operationCtx, reservation)
+	return ic.startCore(operationCtx, reservation, claim)
 }
 
 // abortPreSpawn is the commit-C (D<C) pre-spawn abort: shutdown drain won
-// before the spawn commit. It terminalizes the controller (a durable pending
-// record exists), removes it, releases the slot, and consumes the PRE-SPAWN
-// token ABORTED. It is called with launchMu already released and
-// ic.lifecycleMu still held.
-func (ic *InstanceController) abortPreSpawn(reservation *slotReservation) {
+// before the spawn commit. The claim is already SPENT and stays spent.
+func (ic *InstanceController) abortPreSpawn(reservation *slotReservation, claim *spawnClaim) {
+	if claim.restart {
+		// A restart reuses an existing controller and durable record: there is
+		// no pre-spawn token to consume, the controller must NOT leave the
+		// registry, and the terminal state already established by the previous
+		// generation is the final state. Only the acquired slot is returned.
+		// The restart reservation is released by its owner after this final
+		// state, never here.
+		if reservation != nil {
+			reservation.Release()
+		}
+		return
+	}
+	// New admission: terminalize the durable pending record, remove the
+	// controller, release the slot and consume the PRE-SPAWN token ABORTED.
 	ic.supervisorRef.abortPreSpawnCleanup(ic.instanceID, ic, reservation, true)
 }
 
-func (ic *InstanceController) startCore(operationCtx context.Context, reservation *slotReservation) (*domain.LaunchInstance, error) {
+// startCore spawns this generation's process. It is the single commit-C
+// boundary: the generation-bound spawn claim is validated and consumed exactly
+// once under launchMu before the shutdown drain condition is evaluated, so a
+// path that reaches manager.Start has necessarily passed the ADR 017
+// arbitration boundary (D1/BF-01).
+func (ic *InstanceController) startCore(operationCtx context.Context, reservation *slotReservation, claim *spawnClaim) (*domain.LaunchInstance, error) {
 	s := ic.supervisorRef
-	if s != nil {
-		// RB-015b commit C: acquire launchMu BEFORE ic.mu. This is the
-		// spawn-commit linearization point against shutdown drain-start (D).
-		s.launchMu.Lock()
-		if s.draining {
-			// D < C: shutdown won. Do NOT publish starting, do NOT call
-			// manager.Start; abort PRE-SPAWN (cleanup releases launchMu
-			// before any I/O / s.mu / reservation work).
-			s.launchMu.Unlock()
-			ic.abortPreSpawn(reservation)
-			return nil, ErrLaunchAbortedByShutdown
-		}
-		// C < D: publish the pending->starting transition while launchMu is
-		// still held so the starting publication happens-before the counter
-		// handoff, and consume the PRE-SPAWN token as COMMITTED. After this
-		// point the token no longer exists: no later startCore/ADR 016
-		// failure path may touch preSpawnInFlight.
-		ic.mu.Lock()
-		ic.instance.UpdateState(domain.InstanceStateStarting)
-		if ic.preSpawnToken {
-			s.preSpawnInFlight--
-			ic.preSpawnToken = false
-			s.signalPreSpawnZeroLocked()
-		}
-		s.launchMu.Unlock()
-	} else {
-		// Transitional path (no supervisor): no admission/token accounting.
-		ic.mu.Lock()
-		ic.instance.UpdateState(domain.InstanceStateStarting)
+	if s == nil {
+		// Without a Supervisor there is no arbitration boundary, therefore no
+		// valid claim can exist for this controller.
+		return nil, fmt.Errorf("start instance %s: %w: controller is not supervised", string(ic.instanceID), errSpawnClaimRejected)
 	}
+
+	// RB-015b commit C: acquire launchMu BEFORE ic.mu. This is the
+	// spawn-commit linearization point against shutdown drain-start (D).
+	s.launchMu.Lock()
+	ic.mu.Lock()
+
+	// Consume the spawn authorization first (identity-validated, CAS-spent). A
+	// spent claim is never restored: a retry needs fresh arbitration, a fresh
+	// operation identity and a fresh claim.
+	if err := ic.consumeSpawnClaimLocked(claim); err != nil {
+		ic.mu.Unlock()
+		s.launchMu.Unlock()
+		return nil, err
+	}
+
+	if s.draining {
+		// D < C: shutdown won. The claim stays SPENT. Do NOT publish starting,
+		// do NOT call manager.Start; abort PRE-SPAWN (the cleanup releases
+		// launchMu before any I/O / s.mu / reservation work).
+		ic.mu.Unlock()
+		s.launchMu.Unlock()
+		ic.abortPreSpawn(reservation, claim)
+		return nil, ErrLaunchAbortedByShutdown
+	}
+	// C < D: publish the pending->starting transition while launchMu is
+	// still held so the starting publication happens-before the counter
+	// handoff, and consume the PRE-SPAWN token as COMMITTED. After this
+	// point the token no longer exists: no later startCore/ADR 016
+	// failure path may touch preSpawnInFlight.
+	ic.instance.UpdateState(domain.InstanceStateStarting)
+	if ic.preSpawnToken {
+		s.preSpawnInFlight--
+		ic.preSpawnToken = false
+		s.signalPreSpawnZeroLocked()
+	}
+	s.launchMu.Unlock()
 
 	run := newInstanceRunState(reservation)
 	ic.run = run
@@ -1170,14 +1218,12 @@ func (ic *InstanceController) startCore(operationCtx context.Context, reservatio
 		ic.mu.Unlock()
 		run.releaseSlot()
 		run.complete()
-		if s != nil {
-			// C already committed the token: removing the not-yet-spawned
-			// controller keeps the registry consistent. No token accounting
-			// here — the token was consumed at C.
-			s.mu.Lock()
-			delete(s.instances, ic.instanceID)
-			s.mu.Unlock()
-		}
+		// C already committed the token: removing the not-yet-spawned
+		// controller keeps the registry consistent. No token accounting
+		// here — the token was consumed at C.
+		s.mu.Lock()
+		delete(s.instances, ic.instanceID)
+		s.mu.Unlock()
 		return nil, fmt.Errorf("persist starting state: %w", err)
 	}
 
@@ -1438,51 +1484,46 @@ func (ic *InstanceController) stopCore(ctx context.Context) error {
 	return stopErr
 }
 
-// Restart serializes lifecycle operations, waits for the old controller run to
-// finish completely, then acquires a fresh concurrency reservation before
-// launch, reusing the instance's frozen launch fields.
-func (ic *InstanceController) Restart(ctx context.Context) (*domain.LaunchInstance, error) {
-	return ic.restartWithRefresh(ctx, nil, "")
-}
-
-// RestartWithLaunch restarts the same instance using a freshly resolved launch
-// specification built from the current model/runtime configuration. The
-// InstanceID, the persisted record, and the PipelineID/PipelineEntryID
-// attribution are preserved (no new ID is minted); only the launch-affecting
-// fields (RuntimeID, Executable, Args, WorkingDirectory, Environment) are
-// refreshed before the new process generation starts. ModelName is
-// intentionally NOT refreshed (display metadata).
-func (ic *InstanceController) RestartWithLaunch(ctx context.Context, model *domain.Model, runtime *domain.Runtime, customArgs []string, customEnv map[string]string) (*domain.LaunchInstance, error) {
-	spec, err := ic.resolver.Resolve(model, runtime, customArgs, customEnv)
-	if err != nil {
-		return nil, fmt.Errorf("resolve instance: %w", err)
-	}
-	return ic.restartWithRefresh(ctx, spec, runtime.ID)
-}
-
-func (ic *InstanceController) restartWithRefresh(ctx context.Context, spec *domain.CommandSpec, runtimeID string) (*domain.LaunchInstance, error) {
+// restartWithRefresh performs the restart lifecycle for one operation that has
+// already won arbitration and holds the generation-bound spawn claim (the
+// controller's published reservation). It is package-private and unexported on
+// purpose: the only way to reach it is Supervisor.Restart / RestartWithLaunch,
+// which arbitrate first (D1/BF-01).
+//
+// Lock contract: lifecycleMu is acquired here, strictly after arbLock was
+// released by arbitrate. The reservation is released exactly once at return —
+// after safe ownership transfer to the new generation or on final failure —
+// never merely because the old generation became terminal.
+func (ic *InstanceController) restartWithRefresh(ctx context.Context, spec *domain.CommandSpec, runtimeID string, claim *spawnClaim) (*domain.LaunchInstance, error) {
 	ic.lifecycleMu.Lock()
 	defer ic.lifecycleMu.Unlock()
 
-	ic.mu.RLock()
-	if ic.instance.State == domain.InstanceStatePending {
-		// The launch is still in flight (slot acquisition / spawn). A restart
-		// here would race the in-flight start and double-launch; refuse with
-		// a bounded error instead of waiting or starting a second lifecycle.
-		ic.mu.RUnlock()
-		return nil, ErrLaunchInFlight
+	// Release the reservation only at the end of this attempt (exact-operation,
+	// idempotent), so the restart stays conflict-visible through the stop, the
+	// terminal interval and the slot wait.
+	defer ic.releaseLaunchOperation(claim.opID)
+
+	// Revalidate under lifecycleMu that this operation still owns the
+	// controller: lifecycle serialization (a concurrent Stop or a second
+	// restart attempt) must not have transferred ownership.
+	if err := ic.revalidateOperation(claim); err != nil {
+		return nil, err
 	}
-	active := ic.instance.IsLive()
+
+	ic.mu.RLock()
+	running := ic.instance.State == domain.InstanceStateRunning
 	previousRun := ic.run
 	ic.mu.RUnlock()
-	if active {
+	if running {
 		if err := ic.stop(ctx); err != nil {
 			return nil, err
 		}
 	} else if previousRun != nil {
-		// The process may already be terminal while its wait goroutine is still
-		// persisting final state and releasing the run's slot. Do not publish a
-		// new generation through ic.run until all old-run side effects finish.
+		// Either the instance is stopping — an existing stop owner is still
+		// finalizing it — or it is already terminal while its wait goroutine is
+		// still persisting final state and releasing the run's slot. Await that
+		// owner instead of becoming a second stop owner or publishing a new
+		// generation through a live run.
 		select {
 		case <-previousRun.done:
 		case <-ctx.Done():
@@ -1505,15 +1546,15 @@ func (ic *InstanceController) restartWithRefresh(ctx context.Context, spec *doma
 		ic.mu.Unlock()
 	}
 
-	var reservation *slotReservation
-	var err error
-	if ic.supervisorRef != nil {
-		reservation, err = ic.supervisorRef.acquireSlot(ctx)
-		if err != nil {
-			return nil, err
-		}
+	reservation, err := ic.supervisorRef.acquireSlot(ctx)
+	if err != nil {
+		return nil, err
 	}
-	if _, err := ic.startCore(ctx, reservation); err != nil {
+
+	// BF-09: the new process generation is owned by the supervisor lifecycle
+	// context, never by this request. The request context stays in use only for
+	// the bounded pre-spawn waits above (stop, previous-run wait, slot wait).
+	if _, err := ic.startCore(ic.lifecycleContext(), reservation, claim); err != nil {
 		return nil, err
 	}
 

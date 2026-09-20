@@ -767,9 +767,12 @@ func TestStart_RequestCancellationDuringRollbackCompletes(t *testing.T) {
 	}
 }
 
-// startWithSeparateRequestCtx replicates Supervisor.Start with a caller
-// request context distinct from the supervisor lifecycle context, to prove
-// that post-spawn operations do not depend on the request context.
+// startWithSeparateRequestCtx replicates the post-admission launch sequence with
+// a caller request context distinct from the supervisor lifecycle context, to
+// prove that post-spawn operations do not depend on the request context. The
+// spawn claim comes from the package-private test seam because this fixture
+// bypasses ADR 017 admission on purpose (it tests ADR 016 ownership, not
+// arbitration).
 func startWithSeparateRequestCtx(t *testing.T, store InstanceStore, reqCtx context.Context, args []string) (*domain.LaunchInstance, error) {
 	t.Helper()
 	sup := NewSupervisor(store)
@@ -792,6 +795,9 @@ func startWithSeparateRequestCtx(t *testing.T, store InstanceStore, reqCtx conte
 	sup.instances[inst.ID] = ctrl
 	sup.mu.Unlock()
 
+	claim := sup.mintTestSpawnClaim(ctrl, domain.ManualOwner)
+	defer ctrl.releaseLaunchOperation(claim.opID)
+
 	reservation, err := sup.acquireSlot(reqCtx)
 	if err != nil {
 		sup.mu.Lock()
@@ -806,7 +812,7 @@ func startWithSeparateRequestCtx(t *testing.T, store InstanceStore, reqCtx conte
 		sup.mu.Unlock()
 		return nil, sErr
 	}
-	ctrlInst, err := ctrl.startWithReservation(sup.lifecycleContext(), reservation)
+	ctrlInst, err := ctrl.startWithReservation(sup.lifecycleContext(), reservation, claim)
 	if err != nil {
 		if ctrlInst == nil {
 			sup.mu.Lock()
