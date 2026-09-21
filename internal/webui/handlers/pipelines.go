@@ -10,6 +10,7 @@ import (
 
 	"github.com/dsdred/goal/internal/application"
 	"github.com/dsdred/goal/internal/domain"
+	"github.com/dsdred/goal/internal/process"
 	"github.com/dsdred/goal/internal/storage"
 	"github.com/dsdred/goal/internal/webui/audit"
 	apierrors "github.com/dsdred/goal/internal/webui/errors"
@@ -320,6 +321,17 @@ func (h *PipelineHandler) Start(w http.ResponseWriter, r *http.Request) {
 	}
 	res, err := h.svc.Start(r.Context(), id)
 	if err != nil {
+		var agg *application.PipelineStartError
+		if errors.As(err, &agg) {
+			apiErr := groupFailureClass(agg.Phase, err)
+			logPipelineFailure(h, r, audit.EventPipelineStart, startAuditDetail(res), apiErr)
+			writeJSON(w, statusForAPICode(apiErr.Code), pipelineStartBody{
+				PipelineStartResult: *res,
+				Code:                string(apiErr.Code),
+				Error:               apiErr.Message,
+			})
+			return
+		}
 		writeServiceError(w, err)
 		return
 	}
@@ -336,6 +348,18 @@ func (h *PipelineHandler) Stop(w http.ResponseWriter, r *http.Request) {
 	}
 	res, err := h.svc.Stop(r.Context(), id)
 	if err != nil {
+		var agg *application.PipelineStopError
+		if errors.As(err, &agg) {
+			apiErr := groupFailureClass(agg.Phase, err)
+			logPipelineFailure(h, r, audit.EventPipelineStop, stopAuditDetail(res), apiErr)
+			writeJSON(w, statusForAPICode(apiErr.Code), pipelineStopBody{
+				PipelineStopResult: *res,
+				Results:            stopFailureRows(res.Results, agg.Failures),
+				Code:               string(apiErr.Code),
+				Error:              apiErr.Message,
+			})
+			return
+		}
 		writeServiceError(w, err)
 		return
 	}
@@ -352,36 +376,22 @@ func (h *PipelineHandler) Restart(w http.ResponseWriter, r *http.Request) {
 	}
 	res, err := h.svc.Restart(r.Context(), id)
 	if err != nil {
+		var agg *application.PipelineStopError
+		if errors.As(err, &agg) {
+			apiErr := groupFailureClass(agg.Phase, err)
+			logPipelineFailure(h, r, audit.EventPipelineRestart, restartAuditDetail(id, res), apiErr)
+			writeJSON(w, statusForAPICode(apiErr.Code), pipelineRestartBody{
+				PipelineRestartResult: *res,
+				StopResults:           stopFailureRows(res.StopResults, agg.Failures),
+				Code:                  string(apiErr.Code),
+				Error:                 apiErr.Message,
+			})
+			return
+		}
 		writeServiceError(w, err)
 		return
 	}
-	// Restart carries the combined set of both phases (ADR 010 D6). The
-	// phase-specific counters (started / already_running / orphan_skipped /
-	// stopped) keep their distinct keys; the shared `failed` counter is the
-	// SUM of the start-phase and stop-phase failures (the two phases cannot
-	// overwrite each other's count).
-	detail := map[string]string{auditPipelineIDKey: id}
-	for _, e := range res.StartResults {
-		switch e.Status {
-		case application.OutcomeStarted:
-			detail["started"] = inc(detail["started"])
-		case application.OutcomeAlreadyRunning:
-			detail["already_running"] = inc(detail["already_running"])
-		case application.OutcomeOrphanSkipped:
-			detail["orphan_skipped"] = inc(detail["orphan_skipped"])
-		case application.OutcomeFailed:
-			detail["failed"] = inc(detail["failed"])
-		}
-	}
-	for _, e := range res.StopResults {
-		switch e.Status {
-		case application.OutcomeStopped:
-			detail["stopped"] = inc(detail["stopped"])
-		case application.OutcomeFailed:
-			detail["failed"] = inc(detail["failed"])
-		}
-	}
-	logAudit(h.audit, h.sess, r, audit.EventPipelineRestart, detail)
+	logAudit(h.audit, h.sess, r, audit.EventPipelineRestart, restartAuditDetail(id, res))
 	writeJSON(w, http.StatusOK, res)
 }
 
@@ -417,26 +427,143 @@ func stopAuditDetail(res *application.PipelineStopResult) map[string]string {
 	return detail
 }
 
+// restartAuditDetail carries the combined set of both phases (ADR 010 D6). The
+// phase-specific counters (started / already_running / orphan_skipped /
+// stopped) keep their distinct keys; the shared `failed` counter is the SUM of
+// the start-phase and stop-phase failures (the two phases cannot overwrite
+// each other's count).
+func restartAuditDetail(id string, res *application.PipelineRestartResult) map[string]string {
+	detail := map[string]string{auditPipelineIDKey: id}
+	for _, e := range res.StartResults {
+		switch e.Status {
+		case application.OutcomeStarted:
+			detail["started"] = inc(detail["started"])
+		case application.OutcomeAlreadyRunning:
+			detail["already_running"] = inc(detail["already_running"])
+		case application.OutcomeOrphanSkipped:
+			detail["orphan_skipped"] = inc(detail["orphan_skipped"])
+		case application.OutcomeFailed:
+			detail["failed"] = inc(detail["failed"])
+		}
+	}
+	for _, e := range res.StopResults {
+		switch e.Status {
+		case application.OutcomeStopped:
+			detail["stopped"] = inc(detail["stopped"])
+		case application.OutcomeFailed:
+			detail["failed"] = inc(detail["failed"])
+		}
+	}
+	return detail
+}
+
+// logPipelineFailure audits and writes an incomplete group lifecycle request
+// (BF-02a). The application returned the per-entry body and failure metadata
+// only; this layer decides the status, the client token, and how the failures
+// are rendered into the body. The audit event keeps the same bounded counters as
+// the success event plus the error class (ADR 010 D6: no instance ids, no raw
+// error text).
+func logPipelineFailure(h *PipelineHandler, r *http.Request, event string, detail map[string]string, apiErr *apierrors.APIError) {
+	detail["error"] = apiErr.Message
+	logAudit(h.audit, h.sess, r, event, detail)
+}
+
+// groupFailureClass classifies an incomplete group lifecycle request into the
+// flat error contract. Precedence matches the single-target lifecycle mapping:
+// the server-side class outranks the retry-later shutdown class, which
+// outranks a caller-visible conflict.
+func groupFailureClass(phase string, err error) *apierrors.APIError {
+	switch {
+	case errors.Is(err, process.ErrPersistenceFailure),
+		errors.Is(err, process.ErrTerminationUnconfirmed),
+		errors.Is(err, process.ErrRollbackFailed):
+		return apierrors.NewAPIError(apierrors.CodeInternalServer, incompleteGroupToken(phase))
+	case errors.Is(err, process.ErrLaunchAbortedByShutdown),
+		process.HasRejectionReason(err, process.RejShuttingDown):
+		return apierrors.NewAPIError(apierrors.CodeServiceUnavailable, tokenShuttingDown)
+	default:
+		return apierrors.NewAPIError(apierrors.CodeConflict, incompleteGroupToken(phase))
+	}
+}
+
+func incompleteGroupToken(phase string) string {
+	switch phase {
+	case application.PhaseStop:
+		return "pipeline_stop_incomplete"
+	case application.PhaseRestart:
+		return "pipeline_restart_incomplete"
+	default:
+		return "pipeline_start_failed"
+	}
+}
+
+// ─── Wire bodies of an incomplete group lifecycle request ───
+//
+// They are the 200 body plus the flat code/error keys, so a caller can see
+// which instances DID stop. The embedded result supplies pipeline_id and the
+// start rows; the shadowing fields replace the stop rows with the failure-
+// attributed ones (depth-0 fields win over the embedded ones).
+
+type pipelineInstanceFailureRow struct {
+	InstanceID string `json:"instance_id"`
+	Reason     string `json:"reason"`
+}
+
+type pipelineStopEntryRow struct {
+	application.PipelineEntryStop
+	Failures []pipelineInstanceFailureRow `json:"failures,omitempty"`
+}
+
+type pipelineStopBody struct {
+	application.PipelineStopResult
+	Results []pipelineStopEntryRow `json:"results"`
+	Code    string                 `json:"code,omitempty"`
+	Error   string                 `json:"error,omitempty"`
+}
+
+type pipelineRestartBody struct {
+	application.PipelineRestartResult
+	StopResults []pipelineStopEntryRow `json:"stop_results"`
+	Code        string                 `json:"code,omitempty"`
+	Error       string                 `json:"error,omitempty"`
+}
+
+type pipelineStartBody struct {
+	application.PipelineStartResult
+	Code  string `json:"code,omitempty"`
+	Error string `json:"error,omitempty"`
+}
+
+// stopFailureRows attaches the stop-phase failures to their entry rows without
+// reordering or dropping any row (the aggregate is keyed by entry index).
+func stopFailureRows(entries []application.PipelineEntryStop, failures []application.PipelineFailure) []pipelineStopEntryRow {
+	byIndex := make(map[int][]pipelineInstanceFailureRow)
+	for _, f := range failures {
+		if f.Phase != application.PhaseStop {
+			continue
+		}
+		byIndex[f.Index] = append(byIndex[f.Index], pipelineInstanceFailureRow{
+			InstanceID: f.InstanceID, Reason: string(f.Reason),
+		})
+	}
+	rows := make([]pipelineStopEntryRow, 0, len(entries))
+	for _, e := range entries {
+		rows = append(rows, pipelineStopEntryRow{PipelineEntryStop: e, Failures: byIndex[e.Index]})
+	}
+	return rows
+}
+
 func inc(v string) string {
 	n, _ := strconv.Atoi(v)
 	return strconv.Itoa(n + 1)
 }
 
-// writeServiceError maps PipelineService APIErrors to the flat
+// writeServiceError maps PipelineService errors to the flat
 // error/code/details wire contract (API.md).
 func writeServiceError(w http.ResponseWriter, err error) {
 	var apiErr *apierrors.APIError
 	if errors.As(err, &apiErr) {
-		status := http.StatusInternalServerError
-		switch apiErr.Code {
-		case apierrors.CodeBadRequest:
-			status = http.StatusBadRequest
-		case apierrors.CodeNotFound:
-			status = http.StatusNotFound
-		case apierrors.CodeConflict:
-			status = http.StatusConflict
-		}
-		writeAPIError(w, status, apiErr)
+		writeAPIError(w, statusForAPICode(apiErr.Code), apiErr)
 		return
 	}
 	writeError(w, http.StatusInternalServerError, err.Error())

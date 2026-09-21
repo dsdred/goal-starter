@@ -248,24 +248,7 @@ func (h *ModelsHandler) Start(w http.ResponseWriter, r *http.Request) {
 	}
 	inst, err := h.instanceSvc.StartModel(r.Context(), id)
 	if err != nil {
-		var rej *process.AdmissionRejection
-		if errors.As(err, &rej) {
-			code := "launch_in_flight"
-			if rej.Reason == process.RejOrphan {
-				code = "orphan"
-			}
-			writeAPIError(w, http.StatusConflict, apierrors.NewAPIError(apierrors.CodeConflict, code))
-			return
-		}
-		if errors.Is(err, process.ErrLaunchInFlight) {
-			writeAPIError(w, http.StatusConflict, apierrors.NewAPIError(apierrors.CodeConflict, "launch_in_flight"))
-			return
-		}
-		if errors.Is(err, process.ErrLaunchAbortedByShutdown) {
-			writeAPIError(w, http.StatusServiceUnavailable, apierrors.NewAPIError(apierrors.CodeServiceUnavailable, "launch_aborted"))
-			return
-		}
-		writeError(w, 500, err.Error())
+		writeLifecycleError(w, err)
 		return
 	}
 	inst.Environment = nil
@@ -288,7 +271,7 @@ func (h *ModelsHandler) Stop(w http.ResponseWriter, r *http.Request) {
 	for _, inst := range instances {
 		if inst.ModelID == id && inst.IsLive() {
 			if err := h.instanceSvc.StopInstance(r.Context(), inst.ID); err != nil {
-				writeError(w, 500, err.Error())
+				writeLifecycleError(w, err)
 				return
 			}
 		}
@@ -314,17 +297,13 @@ func (h *ModelsHandler) Restart(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if err := h.instanceSvc.PreflightRestart(r.Context(), targets); err != nil {
-		if errors.Is(err, process.ErrLaunchInFlight) {
-			writeAPIError(w, http.StatusConflict, apierrors.NewAPIError(apierrors.CodeConflict, "launch_in_flight"))
-			return
-		}
-		writeError(w, 500, err.Error())
+		writeLifecycleError(w, err)
 		return
 	}
 
 	for _, instID := range targets {
 		if _, err := h.instanceSvc.RestartInstance(r.Context(), instID); err != nil {
-			writeError(w, 500, err.Error())
+			writeLifecycleError(w, err)
 			return
 		}
 	}

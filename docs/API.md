@@ -24,9 +24,9 @@ All errors return JSON with an `error` string. Two shapes occur:
 { "error": "too many login attempts, please try again later", "code": "rate_limited" }
 ```
 
-The second shape adds a stable `code` (and optional `details`, an array of strings) on the following endpoints: login rate limiting (`rate_limited`), runtime delete/replace/cascade-delete (404/409 mapping: `not_found`, `invalid_runtime`, `conflict`, `bad_request`), model 404 (`invalid_model`), and the audit query endpoint (`bad_request`, `internal_server_error`).
+The second shape adds a stable `code` (and optional `details`, an array of strings) on the following endpoints: login rate limiting (`rate_limited`), runtime delete/replace/cascade-delete (404/409 mapping: `not_found`, `invalid_runtime`, `conflict`, `bad_request`), model 404 (`invalid_model`), the audit query endpoint (`bad_request`, `internal_server_error`), every process-lifecycle endpoint (see [Lifecycle error mapping](#lifecycle-error-mapping)), and the pipeline group lifecycle bodies, which carry the same two keys *inside* an otherwise complete per-entry payload.
 
-Known error codes: `bad_request`, `unauthorized`, `forbidden`, `not_found`, `conflict`, `rate_limited`, `invalid_port`, `invalid_host`, `invalid_address`, `invalid_runtime`, `invalid_model`, `internal_server_error`.
+Known error codes: `bad_request`, `unauthorized`, `forbidden`, `not_found`, `conflict`, `rate_limited`, `gone`, `service_unavailable`, `invalid_port`, `invalid_host`, `invalid_address`, `invalid_runtime`, `invalid_model`, `internal_server_error`.
 
 The `error` strings are English by design; the Web UI maps them to localized messages on the client side.
 
@@ -114,8 +114,8 @@ Instances are running processes created from models.
 | `GET` | `/api/v1/instances/{id}` | Yes | — | Instance detail. |
 | `GET` | `/api/v1/history` | Yes | — | List terminal instances (repository-backed, persists across restart). |
 | `POST` | `/api/v1/instances/start` | Yes | Yes | Start a new instance from a model. |
-| `POST` | `/api/v1/instances/{id}/stop` | Yes | Yes | Stop an instance. Returns `409` with `code=conflict`, `error=launch_in_flight` if the instance is in `pending` state (launch not yet complete). |
-| `POST` | `/api/v1/instances/{id}/restart` | Yes | Yes | Restart an instance: the old process is stopped and a new one is started under the **same InstanceID** (pipeline attribution preserved). Restart re-resolves the **current** launch configuration — `Model.Args` + `Model.Environment`, the runtime (executable/working directory/environment) of the current `Model.RuntimeID`, and, for pipeline-owned instances, the owning entry's `Args` override (all-or-nothing). If the model, runtime, or owning pipeline/entry can no longer be resolved (including legacy instances without entry attribution), the request fails with a bounded `500` error and the frozen launch snapshot is never relaunched. Returns `409` with `code=conflict`, `error=launch_in_flight` if the instance is in `pending` state. |
+| `POST` | `/api/v1/instances/{id}/stop` | Yes | Yes | Stop an instance. Returns `409` with `code=conflict`, `error=launch_in_flight` if the instance is in `pending` state (launch not yet complete), `404` with `error=instance_not_found` if this process has no controller for the id. See [Lifecycle error mapping](#lifecycle-error-mapping). |
+| `POST` | `/api/v1/instances/{id}/restart` | Yes | Yes | Restart an instance: the old process is stopped and a new one is started under the **same InstanceID** (pipeline attribution preserved). Restart re-resolves the **current** launch configuration: `Model.Args` + `Model.Environment`, the runtime (executable/working directory/environment) of the current `Model.RuntimeID`, and, for pipeline-owned instances, the owning entry's `Args` override (all-or-nothing). If the model, runtime, or owning pipeline/entry can no longer be resolved (including legacy instances without entry attribution), the request fails with `409` `code=conflict`, `error=not_restartable` and the frozen launch snapshot is never relaunched. Returns `409` with `code=conflict`, `error=launch_in_flight` if the instance is in `pending` state. |
 | `POST` | `/api/v1/instances/{id}/dismiss` | Yes | Yes | Dismiss an orphan instance (transitions `orphan` → `stale`). No process is touched. |
 | `POST` | `/api/v1/instances/{id}/kill` | Yes | Yes | Terminate an orphan process (destructive, ADR 008). Strict identity re-verification before every signal; `orphan`-only. |
 
@@ -168,6 +168,57 @@ Affected endpoints:
 - `POST /api/v1/models/{id}/restart` — refuses if a pending instance of the model exists (rule 1).
 
 The `pending` state is never terminal. A pending instance transitions to `starting` once the concurrency slot is acquired and the process spawn begins. Multi-instance/replica-per-model semantics are a future product decision and are not supported by the current contract.
+
+### Lifecycle error mapping
+
+Every single-target lifecycle endpoint (`instances/start`, `instances/{id}/stop|restart`,
+`models/{id}/start|stop|restart`, `runtimes/{id}/action/stop|restart`) classifies the process layer's
+failure by **sentinel identity** — never by message text — into one bounded `error` token. The tokens
+are the client-visible vocabulary; raw Go error text never appears in a classified response.
+
+| Status | `code` | `error` | Meaning |
+|--------|--------|---------|---------|
+| `503` | `service_unavailable` | `launch_aborted` | Shutdown won after the launch was admitted (RB-015b); nothing was spawned and no record persists. Retry after restart. |
+| `503` | `service_unavailable` | `shutting_down` | Shutdown won before admission; the launch was rejected. |
+| `500` | `internal_server_error` | `launch_persist_failed` | The process started but its record could not be persisted (ADR 016). |
+| `500` | `internal_server_error` | `termination_unconfirmed` | Termination could not be confirmed; no success is reported. |
+| `500` | `internal_server_error` | `rollback_failed` | A failed launch could not be rolled back completely. |
+| `404` | `not_found` | `instance_not_found` | This process has no controller registered for the requested instance id. |
+| `409` | `conflict` | `not_restartable` | The current launch configuration cannot be re-resolved (missing model/runtime/owning entry, or legacy attribution). |
+| `409` | `conflict` | `orphan` | An orphan record holds this model's identity. |
+| `409` | `conflict` | `launch_in_flight` | See the launch-in-flight guard above. |
+
+Precedence inside a multi-cause error (a restart can join several causes): the `500` server class wins
+over `503` and `409`; `503` wins over `409`; inside the `500` class `launch_persist_failed` is reported
+first, because persisting the launch is the cause the operator acts on. An error of a class outside this
+table keeps the endpoint's previous plain `500` with the error text.
+
+`503` responses carry no `Retry-After`; the client learns completion from `GET /api/v1/instances`.
+
+### Pipeline group lifecycle results
+
+A pipeline start/stop/restart is best-effort and sequential, so a request that could not complete every
+entry is **not** a bare success:
+
+- The body keeps its full per-entry payload and gains the flat error keys: `code` plus `error`, where
+  `error` is the aggregate class token — `shutting_down` when a shutdown class caused the aggregate,
+  otherwise `pipeline_stop_incomplete` / `pipeline_restart_incomplete` for the phase that failed.
+- Per-entry `error` (and, for stop, a new `failures:[{instance_id, reason}]` array) carries a frozen
+  reason class: `launch-in-flight`, `instance-gone`, `persistence-failed`, `termination-unconfirmed`,
+  `shutting-down`, `resolve-failed`, `start-failed`, `stop-failed`.
+- HTTP status follows the aggregate classification: `500` for the persistence/termination/rollback
+  class, `503` when a shutdown class is the cause, `409` for other failures, `200` when nothing failed.
+- `start` promotes the request only for the shutdown class: an entry that simply failed to launch
+  (`no-runtime`, `model-missing`, `start-failed`) or was skipped as `already-running` /
+  `orphan-skipped` stays a `200` with the outcome in `results`, per ADR 010 acceptance. Every `stop`
+  entry failure is promoted, because a pipeline that is not fully stopped is not the state the caller
+  asked for; a `restart` is promoted by a stop-phase failure, while its start-phase outcomes follow the
+  `start` rule above — which is why a promoted group `start` always carries
+  `code=service_unavailable`, `error=shutting_down`.
+- Nothing is rewound: instances that did stop (or start) stay reported as stopped/started, and
+  `stopped_instance_ids` lists only genuinely stopped instances.
+- `restart` runs its forward start phase even when the stop phase failed, so `start_results` always
+  covers every entry while the status and flat keys describe the stop-phase failure.
 
 ### Instance logs
 
@@ -250,9 +301,9 @@ Models are configured launch definitions combining a runtime with launch argumen
 | POST | /api/v1/models | Create a model |
 | PUT | /api/v1/models/{id} | Update a model |
 | DELETE | /api/v1/models/{id} | Delete a model |
-| POST | /api/v1/models/{id}/start | Start an instance. Returns `409` with `code=conflict`, `error=launch_in_flight` if an in-flight instance of this model already exists. |
-| POST | /api/v1/models/{id}/stop | Stop active instances. Returns `409` with `code=conflict`, `error=launch_in_flight` if a pending instance of this model exists. |
-| POST | /api/v1/models/{id}/restart | Restart. Returns `409` with `code=conflict`, `error=launch_in_flight` if a pending instance of this model exists. |
+| POST | /api/v1/models/{id}/start | Start an instance. Returns `409` with `code=conflict`, `error=launch_in_flight` if an in-flight instance of this model already exists; other lifecycle failures follow [Lifecycle error mapping](#lifecycle-error-mapping). |
+| POST | /api/v1/models/{id}/stop | Stop active instances. Returns `409` with `code=conflict`, `error=launch_in_flight` if a pending instance of this model exists; other lifecycle failures follow [Lifecycle error mapping](#lifecycle-error-mapping). |
+| POST | /api/v1/models/{id}/restart | Restart. Returns `409` with `code=conflict`, `error=launch_in_flight` if a pending instance of this model exists; other lifecycle failures follow [Lifecycle error mapping](#lifecycle-error-mapping). |
 | GET | /api/v1/models/{id}/status | Get instance status |
 | POST | /api/v1/models/{id}/activate | Enable autostart |
 | POST | /api/v1/models/{id}/deactivate | Disable autostart |
@@ -288,14 +339,15 @@ args entirely at launch; an empty/absent `args` uses the model's own args.
 | POST | /api/v1/pipelines | Yes | Yes | Create `{name, active?, models:[{model_id, args?, auto_start?}]}` → `201`. A `model_id` **may repeat** (each becomes a distinct entry with a server-generated `id`); the client sends no entry `id`s. `400` on empty name, empty model list, empty or unknown `model_id`. `active`/`auto_start` default `false`. Note: `auto_start` is a legacy field — it round-trips for backward compatibility but is **ignored** for launch decisions (an `active` pipeline launches all entries). |
 | PUT | /api/v1/pipelines/{id} | Yes | Yes | Update. `name`/`args`/`active`/`auto_start` always allowed; structural change = a different **entry-`id` sequence** (add/remove/reorder) → `409` while the pipeline has active owned instances. New entries use `id: ""` (server-generated). `auto_start` round-trips but is not a launch gate. |
 | DELETE | /api/v1/pipelines/{id} | Yes | Yes | Delete. `409` while it has active owned instances; `404` on unknown id. Terminal instances keep their historical `pipeline_id`. |
-| POST | /api/v1/pipelines/{id}/start | Yes | Yes | Start all entries sequentially in order (best-effort, per-entry launch gate + model-owner rule — ADR 013 D3). `200 {pipeline_id, results:[{model_id, entry_id?, index, status, instance_id?, error?}]}`. `status` ∈ `started|already-running|orphan-skipped|no-runtime|model-missing|failed`. |
-| POST | /api/v1/pipelines/{id}/stop | Yes | Yes | Stop the entry's own active instances in REVERSE order (best-effort; per-entry attribution with legacy per-model fallback — ADR 013 D4). `200 {pipeline_id, results:[{model_id, entry_id?, index, instance_id?, stopped_instance_ids?, status, error?}]}`. `status` ∈ `stopped|failed`. |
-| POST | /api/v1/pipelines/{id}/restart | Yes | Yes | Reverse stop then ALWAYS forward start. `200 {pipeline_id, stop_results:[…], start_results:[…]}`. |
+| POST | /api/v1/pipelines/{id}/start | Yes | Yes | Start all entries sequentially in order (best-effort, per-entry launch gate + model-owner rule — ADR 013 D3). `200 {pipeline_id, results:[{model_id, entry_id?, index, status, instance_id?, error?}]}`. `status` ∈ `started|already-running|orphan-skipped|no-runtime|model-missing|failed`. Non-`200` only for the shutdown class; see [Pipeline group lifecycle results](#pipeline-group-lifecycle-results). |
+| POST | /api/v1/pipelines/{id}/stop | Yes | Yes | Stop the entry's own active instances in REVERSE order (best-effort; per-entry attribution with legacy per-model fallback — ADR 013 D4). `{pipeline_id, results:[{model_id, entry_id?, index, instance_id?, stopped_instance_ids?, failures?:[{instance_id, reason}], status, error?}]}`. `status` ∈ `stopped|failed`; `failed` never claims an instance in `stopped_instance_ids`. A partial stop returns the same body with `code`/`error` at a non-`200` status. |
+| POST | /api/v1/pipelines/{id}/restart | Yes | Yes | Reverse stop then ALWAYS forward start. `{pipeline_id, stop_results:[…], start_results:[…]}`; a stop-phase failure is reported with the same additive `code`/`error` keys and the start phase still runs. |
 
 Lifecycle requests emit one `pipeline.start` / `pipeline.stop` / `pipeline.restart` audit
-event each (bounded counters only). Pipeline CRUD emits `pipeline.create|update|delete`
-(success-only; detail: `id`, `entries` count on create, changed field *names* on update —
-ADR 007 §2a).
+event each (bounded counters only; an incomplete group request additionally records the bounded
+`error` token of its aggregate class, never an instance id or raw error text). Pipeline CRUD
+emits `pipeline.create|update|delete` (success-only; detail: `id`, `entries` count on create,
+changed field *names* on update — ADR 007 §2a).
 
 ## Logs (aggregated)
 

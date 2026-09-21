@@ -94,7 +94,12 @@ func (s *InstanceService) RestartInstance(ctx context.Context, id domain.Instanc
 	domainModel := domain.ModelEntryToDomain(me)
 	if inst.PipelineID != "" {
 		if inst.PipelineEntryID == "" {
-			return nil, fmt.Errorf("pipeline entry ownership cannot be reconstructed for instance %s (legacy attribution)", id)
+			// Same class the Supervisor's preflight already reports for this
+			// condition (arbitration.instanceOwner), so a caller sees one
+			// bounded error for one cause regardless of which layer catches it
+			// (BF-03a).
+			return nil, fmt.Errorf("%w: pipeline entry ownership cannot be reconstructed for instance %s (legacy attribution)",
+				process.ErrNotRestartable, id)
 		}
 		pe, err := s.repo.GetPipeline(inst.PipelineID)
 		if err != nil {

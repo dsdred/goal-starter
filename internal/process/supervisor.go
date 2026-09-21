@@ -547,7 +547,7 @@ func (s *Supervisor) controllerFor(id domain.InstanceID) (*InstanceController, e
 	s.mu.RUnlock()
 
 	if !ok {
-		return nil, fmt.Errorf("instance %s not found", id)
+		return nil, fmt.Errorf("%w: %s", ErrInstanceNotFound, id)
 	}
 	return ctrl, nil
 }
@@ -559,7 +559,7 @@ func (s *Supervisor) Stop(ctx context.Context, id domain.InstanceID) error {
 	s.mu.RUnlock()
 
 	if !ok {
-		return fmt.Errorf("instance %s not found", id)
+		return fmt.Errorf("%w: %s", ErrInstanceNotFound, id)
 	}
 
 	return ctrl.Stop(ctx)
@@ -628,7 +628,7 @@ func (s *Supervisor) Status(id domain.InstanceID) (*domain.LaunchInstance, error
 	s.mu.RUnlock()
 
 	if !ok {
-		return nil, fmt.Errorf("instance %s not found", id)
+		return nil, fmt.Errorf("%w: %s", ErrInstanceNotFound, id)
 	}
 
 	snap := ctrl.Snapshot()

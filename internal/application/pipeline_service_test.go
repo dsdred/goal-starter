@@ -479,6 +479,9 @@ func TestPipelineStop_ReverseOwnedOnly(t *testing.T) {
 }
 
 // ADR 010 acceptance 8: a stop failure on one entry does not block the rest.
+// BF-02 adds the attribution half: the non-blocking failures are also reported
+// at request level as a typed aggregate the handler turns into a non-200,
+// while every instance that DID stop stays reported as stopped.
 func TestPipelineStop_FailureDoesNotBlock(t *testing.T) {
 	e := newPipelineEnv(t)
 	ctx := context.Background()
@@ -500,12 +503,26 @@ func TestPipelineStop_FailureDoesNotBlock(t *testing.T) {
 		t.Fatalf("seed fake owned: %v", err)
 	}
 
-	// m2: a real owned instance (start of m1 yields already-running).
+	// m2: a real owned instance. Start also launches m1 for real — the
+	// store-only ghost has no controller to admit against — so m1's stop is
+	// one genuine stop plus one failure, which is exactly the mixed outcome
+	// BF-02 must attribute.
 	if _, err := e.svc.Start(ctx, pipe); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 
-	res := e.stopPipeline(t, pipe)
+	res, err := e.svc.Stop(ctx, pipe)
+	if res == nil {
+		t.Fatalf("Stop must return the full per-entry body even when incomplete: %v", err)
+	}
+	var agg *PipelineStopError
+	if !errors.As(err, &agg) {
+		t.Fatalf("Stop error = %v, want *PipelineStopError", err)
+	}
+	// The underlying cause stays reachable by identity, not by text.
+	if !errors.Is(err, process.ErrInstanceNotFound) {
+		t.Fatalf("aggregate must unwrap process.ErrInstanceNotFound, got %v", err)
+	}
 	if len(res.Results) != 2 {
 		t.Fatalf("results = %d, want 2: %+v", len(res.Results), res.Results)
 	}
@@ -516,11 +533,33 @@ func TestPipelineStop_FailureDoesNotBlock(t *testing.T) {
 	if res.Results[1].ModelID != m1 || res.Results[1].Status != OutcomeFailed {
 		t.Fatalf("m1 result = %+v, want failed", res.Results[1])
 	}
-	if res.Results[1].Error != ReasonStopFailed {
-		t.Fatalf("m1 reason = %q, want %q", res.Results[1].Error, ReasonStopFailed)
+	if res.Results[1].Error != string(ReasonInstanceGone) {
+		t.Fatalf("m1 reason = %q, want %q", res.Results[1].Error, ReasonInstanceGone)
 	}
-	if res.Results[1].InstanceID != "fake-owned-m1" {
-		t.Fatalf("m1 instance_id = %q, want fake-owned-m1", res.Results[1].InstanceID)
+	// BF-02c: the stopped lists carry only genuinely stopped instances. The
+	// instance whose stop failed is never claimed as stopped.
+	for _, id := range append(append([]string{}, res.Results[1].StoppedInstanceIDs...),
+		res.Results[1].InstanceID) {
+		if id == "fake-owned-m1" {
+			t.Fatalf("m1 claimed the failed instance as stopped: %+v", res.Results[1])
+		}
+	}
+	if res.Results[0].InstanceID == "" {
+		t.Fatal("m2 must keep the last stopped instance id")
+	}
+	if agg.Phase != PhaseStop || agg.PipelineID != pipe || len(agg.Failures) != 1 {
+		t.Fatalf("aggregate = phase %q pipeline %q failures %+v", agg.Phase, agg.PipelineID, agg.Failures)
+	}
+	f := agg.Failures[0]
+	if f.EntryID != res.Results[1].EntryID || f.Index != 0 || f.ModelID != m1 ||
+		f.InstanceID != "fake-owned-m1" || f.Reason != ReasonInstanceGone {
+		t.Fatalf("aggregate failure = %+v", f)
+	}
+	// The aggregate is failure METADATA only: it names the entry, the
+	// instance and the class, so the handler can attribute the failure
+	// without the application layer knowing how the body is assembled.
+	if f.Phase != PhaseStop {
+		t.Fatalf("failure phase = %q, want %q", f.Phase, PhaseStop)
 	}
 }
 

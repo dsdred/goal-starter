@@ -47,6 +47,13 @@ var ErrRollbackFailed = errors.New("rollback kill refused by OS; process may be 
 // bounded restart error.
 var ErrNotRestartable = errors.New("instance is not restartable")
 
+// ErrInstanceNotFound reports that no controller is registered for the asked
+// instance ID in this Supervisor. The repository may still hold a record for
+// it (a pipeline stop selects durable records, not registry members), so this
+// is a bounded, caller-visible condition rather than a server failure.
+// HTTP handlers map it to 404 with code not_found.
+var ErrInstanceNotFound = errors.New("instance not found")
+
 // RejectionReason classifies why admission was denied (ADR 017).
 type RejectionReason int
 
@@ -90,4 +97,37 @@ func (a *AdmissionRejection) Error() string {
 	default:
 		return "launch rejected"
 	}
+}
+
+// HasRejectionReason reports whether err carries an AdmissionRejection with the
+// given reason anywhere in its tree. errors.As alone is not enough for an
+// aggregate produced by errors.Join (it stops at the FIRST rejection), and
+// message matching is not allowed by the API error contract, so callers use
+// this identity-based predicate.
+func HasRejectionReason(err error, reason RejectionReason) bool {
+	return walkErrors(err, func(e error) bool {
+		var rej *AdmissionRejection
+		return errors.As(e, &rej) && rej.Reason == reason
+	})
+}
+
+// walkErrors visits every node of an error tree, following both single Unwrap
+// and the multi-error Unwrap() []error produced by errors.Join. The walk stops
+// as soon as visit returns true.
+func walkErrors(err error, visit func(error) bool) bool {
+	if err == nil {
+		return false
+	}
+	if visit(err) {
+		return true
+	}
+	if multi, ok := err.(interface{ Unwrap() []error }); ok {
+		for _, nested := range multi.Unwrap() {
+			if walkErrors(nested, visit) {
+				return true
+			}
+		}
+		return false
+	}
+	return walkErrors(errors.Unwrap(err), visit)
 }

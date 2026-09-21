@@ -807,6 +807,17 @@ async function pipelineAction(action, id, successKey) {
     try {
         await api('/pipelines/' + id + '/' + action, { method: 'POST' });
         showToast(t(successKey), 'success');
+    } catch (e) {
+        // A group stop/restart can return a non-200 that still executed
+        // partially: show it as a warning and always re-render from the
+        // server, which now holds the real per-instance state.
+        const msg = (e && e.message) || '';
+        const partial = msg === 'pipeline_stop_incomplete' || msg === 'pipeline_restart_incomplete';
+        showToast(friendlyError(e), partial ? 'warning' : 'error');
+    }
+    // Always re-render from the server: a non-200 group stop/restart may have
+    // executed partially, so the client's copy of the state is not trustworthy.
+    try {
         await reloadAllData(); renderAll();
     } catch (e) { showToast(friendlyError(e), 'error'); }
 }
@@ -2087,6 +2098,18 @@ const errorCodeKeys = {
     internal_server_error: 'err.internal',
 };
 
+// Bounded lifecycle error tokens (API.md). They win over the HTTP code: 409
+// conflict also covers "object is in use", which is a different message.
+const lifecycleTokenKeys = {
+    launch_in_flight: 'err.launch_in_flight',
+    not_restartable: 'err.not_restartable',
+    shutting_down: 'err.shutting_down',
+    launch_aborted: 'err.shutting_down',
+    instance_not_found: 'err.instance_not_found',
+    pipeline_stop_incomplete: 'err.pipeline_stop_incomplete',
+    pipeline_restart_incomplete: 'err.pipeline_restart_incomplete',
+};
+
 function translateServerMessage(msg) {
     if (!msg) return t('err.unknown');
     for (let i = 0; i < errorPatterns.length; i++) {
@@ -2096,8 +2119,10 @@ function translateServerMessage(msg) {
 }
 
 function friendlyError(err) {
+    const msg = (err && err.message) || '';
+    if (lifecycleTokenKeys[msg]) return t(lifecycleTokenKeys[msg]);
     if (err && err.code && errorCodeKeys[err.code]) return t(errorCodeKeys[err.code]);
-    return translateServerMessage((err && err.message) || '');
+    return translateServerMessage(msg);
 }
 
 // ─── Canonical tooltip (single system) ──────────────────────────────────────

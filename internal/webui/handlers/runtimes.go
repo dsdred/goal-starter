@@ -378,7 +378,7 @@ func (h *RuntimesHandler) Action(w http.ResponseWriter, r *http.Request) {
 		for _, inst := range instances {
 			if inst.RuntimeID == id && inst.IsLive() {
 				if err := h.instances.StopInstance(r.Context(), inst.ID); err != nil {
-					writeError(w, 500, err.Error())
+					writeLifecycleError(w, err)
 					return
 				}
 				writeJSON(w, http.StatusOK, map[string]string{"status": "stopped"})
@@ -394,15 +394,11 @@ func (h *RuntimesHandler) Action(w http.ResponseWriter, r *http.Request) {
 				// already in flight, unattributable ownership) returns its
 				// bounded error instead of a partially applied restart.
 				if err := h.instances.PreflightRestart(r.Context(), []domain.InstanceID{inst.ID}); err != nil {
-					if errors.Is(err, process.ErrLaunchInFlight) {
-						writeAPIError(w, http.StatusConflict, apierrors.NewAPIError(apierrors.CodeConflict, "launch_in_flight"))
-						return
-					}
-					writeError(w, 500, err.Error())
+					writeLifecycleError(w, err)
 					return
 				}
 				if _, err := h.instances.RestartInstance(r.Context(), inst.ID); err != nil {
-					writeError(w, 500, err.Error())
+					writeLifecycleError(w, err)
 					return
 				}
 				writeJSON(w, http.StatusOK, map[string]string{"status": "restarted"})

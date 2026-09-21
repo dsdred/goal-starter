@@ -89,40 +89,11 @@ func (h *InstancesHandler) StartModel(w http.ResponseWriter, r *http.Request) {
 	}
 	inst, err := h.instanceSvc.StartModel(r.Context(), body.ModelID)
 	if err != nil {
-		var rej *process.AdmissionRejection
-		if errors.As(err, &rej) {
-			code := "launch_in_flight"
-			if rej.Reason == process.RejOrphan {
-				code = "orphan"
-			}
-			logAudit(h.audit, h.sess, r, audit.EventInstanceStart, map[string]string{
-				"model_id": body.ModelID,
-				"error":    code,
-			})
-			writeAPIError(w, http.StatusConflict, apierrors.NewAPIError(apierrors.CodeConflict, code))
-			return
-		}
-		if errors.Is(err, process.ErrLaunchInFlight) {
-			logAudit(h.audit, h.sess, r, audit.EventInstanceStart, map[string]string{
-				"model_id": body.ModelID,
-				"error":    "launch_in_flight",
-			})
-			writeAPIError(w, http.StatusConflict, apierrors.NewAPIError(apierrors.CodeConflict, "launch_in_flight"))
-			return
-		}
-		if errors.Is(err, process.ErrLaunchAbortedByShutdown) {
-			logAudit(h.audit, h.sess, r, audit.EventInstanceStart, map[string]string{
-				"model_id": body.ModelID,
-				"error":    "launch_aborted",
-			})
-			writeAPIError(w, http.StatusServiceUnavailable, apierrors.NewAPIError(apierrors.CodeServiceUnavailable, "launch_aborted"))
-			return
-		}
 		logAudit(h.audit, h.sess, r, audit.EventInstanceStart, map[string]string{
 			"model_id": body.ModelID,
-			"error":    sanitizeAuditError(err),
+			"error":    lifecycleAuditToken(err),
 		})
-		writeError(w, 500, err.Error())
+		writeLifecycleError(w, err)
 		return
 	}
 	logAudit(h.audit, h.sess, r, audit.EventInstanceStart, map[string]string{
@@ -153,11 +124,7 @@ func (h *InstancesHandler) StopInstance(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if err := h.instanceSvc.StopInstance(r.Context(), domain.InstanceID(id)); err != nil {
-		if errors.Is(err, process.ErrLaunchInFlight) {
-			writeAPIError(w, http.StatusConflict, apierrors.NewAPIError(apierrors.CodeConflict, "launch_in_flight"))
-			return
-		}
-		writeError(w, 500, err.Error())
+		writeLifecycleError(w, err)
 		return
 	}
 	logAudit(h.audit, h.sess, r, audit.EventInstanceStop, map[string]string{"instance_id": id})
@@ -174,11 +141,7 @@ func (h *InstancesHandler) RestartInstance(w http.ResponseWriter, r *http.Reques
 	}
 	inst, err := h.instanceSvc.RestartInstance(r.Context(), domain.InstanceID(id))
 	if err != nil {
-		if errors.Is(err, process.ErrLaunchInFlight) {
-			writeAPIError(w, http.StatusConflict, apierrors.NewAPIError(apierrors.CodeConflict, "launch_in_flight"))
-			return
-		}
-		writeError(w, 500, err.Error())
+		writeLifecycleError(w, err)
 		return
 	}
 	logAudit(h.audit, h.sess, r, audit.EventInstanceRestart, map[string]string{"instance_id": id})

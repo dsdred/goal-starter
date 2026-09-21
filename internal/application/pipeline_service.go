@@ -266,7 +266,12 @@ func (s *PipelineService) hasActiveOwnedInstances(pipelineID string) bool {
 // ─── Group lifecycle (ADR 010 D3) ───
 
 // Start processes entries sequentially in pipeline order. Best-effort: an
-// error in one entry neither cancels nor blocks the following entries.
+// error in one entry neither cancels nor blocks the following entries, and the
+// per-entry outcomes stay a 200 body (ADR 010 D3/Acceptance 5). The request
+// becomes non-200 only when an entry was refused by SYSTEM SHUTDOWN (BF-02e):
+// every other outcome is a reported business result, but a shutdown means the
+// group could not be launched at all and the caller must retry later. The
+// result body is returned either way; the error is failure metadata only.
 func (s *PipelineService) Start(ctx context.Context, pipelineID string) (*PipelineStartResult, error) {
 	defer s.lockPipeline(pipelineID)()
 	p, err := s.repo.GetPipeline(pipelineID)
@@ -277,10 +282,11 @@ func (s *PipelineService) Start(ctx context.Context, pipelineID string) (*Pipeli
 		PipelineID: pipelineID,
 		Results:    make([]PipelineEntryStart, 0, len(p.Models)),
 	}
+	var collected lifecycleCollector
 	for i, entry := range p.Models {
-		res.Results = append(res.Results, s.startEntry(ctx, pipelineID, i, entry))
+		res.Results = append(res.Results, s.startEntry(ctx, pipelineID, i, entry, &collected))
 	}
-	return res, nil
+	return res, collected.startAggregate(pipelineID)
 }
 
 // Autostart is the startup path: when GoAl starts, a pipeline whose
@@ -298,6 +304,10 @@ func (s *PipelineService) Start(ctx context.Context, pipelineID string) (*Pipeli
 // migration is required; the field simply becomes written-but-ignored.
 // Launched instances carry the pipeline_id; per-entry failures do not abort
 // startup. It emits no audit events (startup has no user/session context).
+//
+// Its error contract is unchanged by BF-02: the startup path keeps reporting
+// per-entry outcomes and never a group aggregate, so the collector exists only
+// to satisfy the shared startEntry signature.
 func (s *PipelineService) Autostart(ctx context.Context, pipelineID string) (*PipelineStartResult, error) {
 	defer s.lockPipeline(pipelineID)()
 	p, err := s.repo.GetPipeline(pipelineID)
@@ -308,8 +318,9 @@ func (s *PipelineService) Autostart(ctx context.Context, pipelineID string) (*Pi
 		PipelineID: pipelineID,
 		Results:    make([]PipelineEntryStart, 0, len(p.Models)),
 	}
+	var collected lifecycleCollector
 	for i, entry := range p.Models {
-		res.Results = append(res.Results, s.startEntry(ctx, pipelineID, i, entry))
+		res.Results = append(res.Results, s.startEntry(ctx, pipelineID, i, entry, &collected))
 	}
 	return res, nil
 }
@@ -317,6 +328,12 @@ func (s *PipelineService) Autostart(ctx context.Context, pipelineID string) (*Pi
 // Stop stops exactly the active owned instances, in REVERSE pipeline order
 // (ADR 013 D4: per entry; a stop failure on one instance neither aborts the
 // entry's remaining stops nor blocks the following entries).
+//
+// Best-effort EXECUTION does not imply best-effort SUCCESS (BF-02a): when any
+// owned instance failed to stop, the caller gets the full per-entry body AND a
+// typed PipelineStopError carrying only the failure metadata, instead of a
+// bare 200. Instances that did stop are reported as stopped and are never
+// rewound or re-reported.
 func (s *PipelineService) Stop(ctx context.Context, pipelineID string) (*PipelineStopResult, error) {
 	defer s.lockPipeline(pipelineID)()
 	p, err := s.repo.GetPipeline(pipelineID)
@@ -328,10 +345,11 @@ func (s *PipelineService) Stop(ctx context.Context, pipelineID string) (*Pipelin
 		Results:    make([]PipelineEntryStop, 0, len(p.Models)),
 	}
 	targets := s.stopTargets(p, pipelineID)
+	var collected lifecycleCollector
 	for i := len(p.Models) - 1; i >= 0; i-- {
-		res.Results = append(res.Results, s.stopEntry(ctx, i, p.Models[i], targets[i]))
+		res.Results = append(res.Results, s.stopEntry(ctx, i, p.Models[i], targets[i], &collected))
 	}
-	return res, nil
+	return res, collected.stopAggregate(PhaseStop, pipelineID)
 }
 
 // stopTargets computes, per entry in list order, the set of active owned
@@ -387,7 +405,9 @@ func (s *PipelineService) stopTargets(p *storage.PipelineEntry, pipelineID strin
 }
 
 // Restart = Stop phase (reverse order) then Start phase (forward order,
-// ALWAYS executed for all entries, regardless of individual stop failures).
+// ALWAYS executed for all entries, regardless of individual stop failures —
+// ADR 010 Acceptance 9). The stop-phase aggregate is reported (BF-02a): a
+// restart whose instances did not all stop is not a success.
 func (s *PipelineService) Restart(ctx context.Context, pipelineID string) (*PipelineRestartResult, error) {
 	defer s.lockPipeline(pipelineID)()
 	p, err := s.repo.GetPipeline(pipelineID)
@@ -396,28 +416,29 @@ func (s *PipelineService) Restart(ctx context.Context, pipelineID string) (*Pipe
 	}
 
 	targets := s.stopTargets(p, pipelineID)
-	stopResults := make([]PipelineEntryStop, 0, len(p.Models))
-	for i := len(p.Models) - 1; i >= 0; i-- {
-		stopResults = append(stopResults, s.stopEntry(ctx, i, p.Models[i], targets[i]))
-	}
-
-	startResults := make([]PipelineEntryStart, 0, len(p.Models))
-	for i, entry := range p.Models {
-		startResults = append(startResults, s.startEntry(ctx, pipelineID, i, entry))
-	}
-
-	return &PipelineRestartResult{
+	res := &PipelineRestartResult{
 		PipelineID:   pipelineID,
-		StopResults:  stopResults,
-		StartResults: startResults,
-	}, nil
+		StopResults:  make([]PipelineEntryStop, 0, len(p.Models)),
+		StartResults: make([]PipelineEntryStart, 0, len(p.Models)),
+	}
+	var collected lifecycleCollector
+	for i := len(p.Models) - 1; i >= 0; i-- {
+		res.StopResults = append(res.StopResults, s.stopEntry(ctx, i, p.Models[i], targets[i], &collected))
+	}
+	for i, entry := range p.Models {
+		res.StartResults = append(res.StartResults, s.startEntry(ctx, pipelineID, i, entry, &collected))
+	}
+
+	return res, collected.stopAggregate(PhaseRestart, pipelineID)
 }
 
 // startEntry launches one pipeline entry with the D2 all-or-nothing Args
 // override (pre-substitution; the persisted Model.Args is never modified).
 // Admission arbitration is delegated to Supervisor.AdmitAndStart (ADR 017);
 // the structured AdmissionRejection is mapped to per-entry pipeline outcomes.
-func (s *PipelineService) startEntry(ctx context.Context, pipelineID string, index int, entry domain.PipelineModel) PipelineEntryStart {
+// Shutdown-class refusals are additionally recorded in the collector: they are
+// the one start outcome that makes the request itself unsuccessful (BF-02e).
+func (s *PipelineService) startEntry(ctx context.Context, pipelineID string, index int, entry domain.PipelineModel, collected *lifecycleCollector) PipelineEntryStart {
 	out := PipelineEntryStart{ModelID: entry.ModelID, EntryID: entry.ID, Index: index}
 
 	me, err := s.repo.GetModel(entry.ModelID)
@@ -444,9 +465,22 @@ func (s *PipelineService) startEntry(ctx context.Context, pipelineID string, ind
 
 	inst, err := s.supervisor.AdmitAndStart(ctx, dm, rt, domain.PipelineOwner(pipelineID, entry.ID), nil, nil)
 	if err != nil {
+		addShutdown := func() {
+			collected.add(PipelineFailure{
+				Phase: PhaseStart, EntryID: entry.ID, Index: index, ModelID: entry.ModelID,
+				Reason: ReasonShuttingDown,
+			}, err)
+		}
 		var rej *process.AdmissionRejection
 		if errors.As(err, &rej) {
 			switch rej.Reason {
+			case process.RejShuttingDown:
+				// Shutdown won BEFORE admission: the entry never launched.
+				// Reporting it as already-running hid a pipeline that is not
+				// running at all (BF-02e).
+				out.Status = OutcomeFailed
+				out.Error = string(ReasonShuttingDown)
+				addShutdown()
 			case process.RejOrphan:
 				if rej.PipelineID == pipelineID || rej.PipelineID == "" {
 					out.Status = OutcomeOrphanSkipped
@@ -459,9 +493,15 @@ func (s *PipelineService) startEntry(ctx context.Context, pipelineID string, ind
 			return out
 		}
 		out.Status = OutcomeFailed
-		if strings.Contains(err.Error(), "resolve instance") {
+		switch {
+		case errors.Is(err, process.ErrLaunchAbortedByShutdown):
+			// Admission won but shutdown aborted the launch pre-spawn
+			// (RB-015b): same class, different linearization point.
+			out.Error = string(ReasonShuttingDown)
+			addShutdown()
+		case strings.Contains(err.Error(), "resolve instance"):
 			out.Error = ReasonResolveFailed
-		} else {
+		default:
 			out.Error = ReasonStartFailed
 		}
 		return out
@@ -476,13 +516,24 @@ func (s *PipelineService) startEntry(ctx context.Context, pipelineID string, ind
 // entry's remaining stops (the pre-ADR 013 early-return debt is fixed).
 // Manual instances (empty pipeline_id), orphan and stale instances are
 // never targets (stopTargets only selects owned active instances).
-func (s *PipelineService) stopEntry(ctx context.Context, index int, entry domain.PipelineModel, targets []string) PipelineEntryStop {
+//
+// Every failed instance is recorded in the collector with its own bounded
+// reason class (BF-02b), and every genuinely stopped one in
+// StoppedInstanceIDs (BF-02c): before this, a later failure overwrote the
+// earlier one and InstanceID pointed at an instance that was never stopped.
+func (s *PipelineService) stopEntry(ctx context.Context, index int, entry domain.PipelineModel, targets []string, collected *lifecycleCollector) PipelineEntryStop {
 	out := PipelineEntryStop{ModelID: entry.ModelID, EntryID: entry.ID, Index: index, Status: OutcomeStopped}
 	for _, id := range targets {
 		if err := s.supervisor.Stop(ctx, domain.InstanceID(id)); err != nil {
+			reason := classifyStopFailure(err)
 			out.Status = OutcomeFailed
-			out.InstanceID = id
-			out.Error = ReasonStopFailed
+			if out.Error == "" {
+				out.Error = string(reason)
+			}
+			collected.add(PipelineFailure{
+				Phase: PhaseStop, EntryID: entry.ID, Index: index,
+				ModelID: entry.ModelID, InstanceID: id, Reason: reason,
+			}, err)
 			continue
 		}
 		out.InstanceID = id
