@@ -133,6 +133,12 @@ type Supervisor struct {
 	// deterministically count spawn attempts for the "no manager.Start after
 	// successful shutdown" contract.
 	managerStartHook func(m *Manager)
+
+	// cleanupScanHook is a test seam (nil in production) invoked by
+	// ForgetCleanedControllers between the registry scan and the identity-checked
+	// removal, with no lock held, so the D3 identity-race regression can
+	// deterministically re-publish a controller at an already-validated ID.
+	cleanupScanHook func()
 }
 
 // InstanceStore persists and retrieves launch instances.
@@ -305,6 +311,153 @@ func (s *Supervisor) forgetController(ctrl *InstanceController, instID domain.In
 		delete(s.instances, instID)
 	}
 	s.mu.Unlock()
+}
+
+// === ADR 017 corrective slice D3: cleanup ↔ registry coherence (BF-07c) ======
+//
+// Invariant: explicitly cleaning up a terminal instance removes BOTH its
+// repository history record and the exact matching terminal controller from the
+// active registry. A controller whose history record is gone must not stay
+// addressable: Status/List/Stop would keep answering for an instance that no
+// longer exists, and a Restart of it would run real lifecycle work against a
+// record that can never be persisted again.
+//
+// Retention is NOT removed here: a terminal controller whose record still
+// exists is never a candidate (D3 Owner decision — no TTL, no LRU, no eviction
+// from wait(), no eviction because terminal persistence succeeded). Historical
+// InstanceID restart stays process-scoped and keeps working until an explicit
+// cleanup deletes its record.
+
+// ForgetCleanedControllers removes from the active registry the controllers
+// whose durable instance record no longer exists, i.e. the controllers of the
+// instances an explicit cleanup has just deleted. It MUST be called only AFTER
+// the repository deletion succeeded: registry removal never precedes the record
+// removal, so a failed deletion leaves both the history row and its restart
+// capability intact.
+//
+// The primitive is registry-only (D3 §7). It performs no repository write (a
+// deleted record must not be resurrected), no lifecycle transition, no spawn or
+// stop, no arbitration, and acquires neither arbLock nor lifecycleMu.
+// RemoveTerminal is deliberately not reused: it deletes the registry entry
+// before persisting and re-inserts the controller when that persist fails — for
+// an already-deleted record the persist always fails, so it would both report a
+// false failure and hand the ID back to a controller whose history is gone.
+//
+// Candidate = registered controller whose InstanceID has no durable record.
+// Every candidate then has to pass the hard ownership fence
+// (cleanupRemovalProof) at the removal point itself; repository terminality is a
+// precondition for candidacy, never proof that ownership finished.
+//
+// Linearization point, per candidate: launchMu is held across the ownership
+// re-proof and the identity-checked delete, so no ADR 017 operation can be
+// published in between (both claimant modes publish inside publishClaimLocked
+// under launchMu) and no already-published operation can be missed. The two
+// lock edges used — launchMu→ic.mu and launchMu→s.mu — are the ones startCore
+// commit C and publishClaimLocked already establish; ic.mu is never held while
+// s.mu is taken, so no new edge and no arbLock↔lifecycleMu cycle is introduced.
+func (s *Supervisor) ForgetCleanedControllers() error {
+	if s.store == nil {
+		// No durable view of instances exists, so nothing can be proven cleaned.
+		return nil
+	}
+	entries, err := s.store.List()
+	if err != nil {
+		return fmt.Errorf("read instance records for cleanup: %w", err)
+	}
+	durable := make(map[domain.InstanceID]struct{}, len(entries))
+	for _, e := range entries {
+		durable[domain.InstanceID(e.ID)] = struct{}{}
+	}
+
+	type candidate struct {
+		id   domain.InstanceID
+		ctrl *InstanceController
+	}
+	s.mu.RLock()
+	candidates := make([]candidate, 0, len(s.instances))
+	for id, ctrl := range s.instances {
+		if _, ok := durable[id]; ok {
+			continue
+		}
+		candidates = append(candidates, candidate{id: id, ctrl: ctrl})
+	}
+	s.mu.RUnlock()
+
+	// Test seam (nil in production): runs with no lock held, so a test can
+	// re-publish a controller at a validated ID and prove the removal below is
+	// identity-checked rather than ID-based.
+	if s.cleanupScanHook != nil {
+		s.cleanupScanHook()
+	}
+
+	for _, c := range candidates {
+		s.launchMu.Lock()
+		if err := c.ctrl.cleanupRemovalProof(); err != nil {
+			s.launchMu.Unlock()
+			slog.Info("instance cleanup kept a controller whose history record is gone",
+				"instance_id", string(c.id), "reason", err.Error())
+			continue
+		}
+		// Identity-safe removal: the map may already hold a different
+		// controller for this ID, and that replacement is never deleted on a
+		// stale candidate's behalf.
+		s.mu.Lock()
+		if s.instances[c.id] == c.ctrl {
+			delete(s.instances, c.id)
+		}
+		s.mu.Unlock()
+		s.launchMu.Unlock()
+	}
+	return nil
+}
+
+// cleanupRemovalProof is the D3 hard ownership fence. It returns an error — and
+// thereby keeps the controller registered — unless every form of lifecycle,
+// process and restart ownership over this instance is provably finished:
+//
+//   - a non-terminal state covers pending, starting, running and stopping, and
+//     so every IsInFlight() generation, the ADR 016 C/D residual outcomes (which
+//     are deliberately kept in the live state starting), and ShutdownWith-
+//     Persistence's retry authority over them;
+//   - active == nil covers an in-flight launch AND an active D1 restart
+//     reservation, because a reservation IS the published operation across the
+//     stop → terminal interval → spawn window;
+//   - preSpawnToken covers an admitted, not yet committed or aborted launch;
+//   - a run whose done channel is not closed covers incomplete wait/run
+//     ownership and a slot that is still held;
+//   - a live Manager control covers possible OS process ownership: the control
+//     is cleared by the single cmd.Wait() owner only after the process is gone.
+//
+// A generation that cannot be proven terminal is refused by the first check; a
+// controller identity mismatch is refused by the caller's identity comparison,
+// not here.
+//
+// The caller MUST hold launchMu: preSpawnToken is launchMu-guarded, and the
+// proof is only meaningful while no operation can be published concurrently.
+func (ic *InstanceController) cleanupRemovalProof() error {
+	ic.mu.Lock()
+	defer ic.mu.Unlock()
+
+	if !ic.instance.IsTerminal() {
+		return fmt.Errorf("lifecycle state %s is not terminal", string(ic.instance.State))
+	}
+	if ic.active != nil {
+		return fmt.Errorf("operation %d still holds this instance's launch authority", ic.active.id)
+	}
+	if ic.preSpawnToken {
+		return errors.New("an admitted pre-spawn launch has not committed or aborted")
+	}
+	if ic.run != nil {
+		select {
+		case <-ic.run.done:
+		default:
+			return errors.New("the process run has not finished finalizing")
+		}
+	}
+	if ic.manager != nil && ic.manager.Control() != nil {
+		return errors.New("the manager still owns a live OS process")
+	}
+	return nil
 }
 
 // concurrentCount returns the number of currently held slots.

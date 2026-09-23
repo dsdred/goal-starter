@@ -331,7 +331,9 @@ func (s *Supervisor) PreflightRestart(ids []domain.InstanceID) error {
 	for _, id := range ids {
 		ctrl, ok := s.instances[id]
 		if !ok {
-			return fmt.Errorf("instance %s not found", string(id))
+			// Same bounded class every other controller lookup returns: this
+			// process has no controller registered for the ID (BF-07e).
+			return fmt.Errorf("%w: %s", ErrInstanceNotFound, id)
 		}
 		snap := ctrl.Snapshot()
 		if _, err := instanceOwner(&snap); err != nil {

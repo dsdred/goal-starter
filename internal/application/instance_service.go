@@ -192,19 +192,38 @@ func (s *InstanceService) KillOrphan(ctx context.Context, id domain.InstanceID) 
 
 // CleanupInstances deletes terminal instances matching the filter.
 // Active instances are never deleted. Returns the number of instances deleted.
+//
+// Repository deletion happens FIRST and the Supervisor registry is reconciled
+// only after it succeeded (ADR 017 D3): a failed deletion leaves the history
+// record, its terminal controller and that controller's historical restart
+// capability untouched, while a successful one removes both sides of the
+// cleaned instance. Reconciliation is registry-only and never deletes or
+// re-persists a record, and it never touches a controller whose lifecycle,
+// process or restart ownership is not provably finished.
 func (s *InstanceService) CleanupInstances(ctx context.Context, mode string, ids []string) (int, error) {
+	var cutoff time.Time
 	switch mode {
 	case "all_terminal":
-		return s.repo.DeleteTerminalInstances(mode, nil, time.Time{})
+		ids = nil
 	case "older_than_7d":
-		return s.repo.DeleteTerminalInstances(mode, nil, time.Now().AddDate(0, 0, -7))
+		ids, cutoff = nil, time.Now().AddDate(0, 0, -7)
 	case "older_than_30d":
-		return s.repo.DeleteTerminalInstances(mode, nil, time.Now().AddDate(0, 0, -30))
+		ids, cutoff = nil, time.Now().AddDate(0, 0, -30)
 	case "selected":
-		return s.repo.DeleteTerminalInstances(mode, ids, time.Time{})
 	default:
 		return 0, fmt.Errorf("invalid cleanup mode: %s", mode)
 	}
+
+	deleted, err := s.repo.DeleteTerminalInstances(mode, ids, cutoff)
+	if err != nil {
+		return deleted, err
+	}
+	if s.supervisor != nil {
+		if err := s.supervisor.ForgetCleanedControllers(); err != nil {
+			return deleted, fmt.Errorf("cleanup deleted %d instance record(s) but the registry was not reconciled: %w", deleted, err)
+		}
+	}
+	return deleted, nil
 }
 
 // GetModelStatus returns instance summary for a specific model.
