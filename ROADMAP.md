@@ -2,6 +2,7 @@
 
 ## Current state
 
+- **Post-v2.1.0 lifecycle remediation program — IN FLIGHT, NOT COMPLETE.** Corrective slices D0–D3 are published on `main` (up to `bc7d06d`); D4 is the documentation/tracking reconciliation recorded under the ADR 017 item below; D5 (focused remediation re-review) and Manual Owner Acceptance are open, and ADR 015 is FROZEN until they close.
 - **v2.1.0 — released** (latest published release, tag `v2.1.0` → `adafd20180bb73b03f6937793e6e2ae22a0f75c9`). Shipped Pipeline MVP + repeatable model entries and UX polish (ADR 010/013), Windows Service (ADR 011), explicit hot-reload (ADR 009), and the accumulated P0/P1 hardening and product items listed in this roadmap.
 - **v2.0.1 — released** (superseded). Shipped the v2.0.1 manual-acceptance corrections (editable auth settings, responsive tables, mobile layout fixes).
 - **v2.0.0 — released** (superseded). v2.0 simplified the domain model and completed manual-acceptance stabilization.
@@ -52,21 +53,43 @@
   - Design gate: [ADR 016](docs/adr/016-durable-lifecycle-ownership.md) (**Accepted** — implemented and published 2026-09-18) defines the durable state ownership contract for the Start and Terminal transitions, eliminating the crash windows where durable and in-memory state diverged.
   - Shipped: `3f67cd7` + CI 7/7 PASS (including Linux race). RB-001 RESOLVED. RB-003 RESOLVED.
 - [x] **ADR 017 — Unified Owner-Aware Launch Arbitration (RB-002)**
-  - Design gate: [ADR 017](docs/adr/017-unified-launch-arbitration.md) (**Accepted** — fully implemented and published 2026-09-19) defines a single atomic admission boundary (`Supervisor.AdmitAndStart`) with an owner-aware compatibility matrix replacing all caller-side duplicate-prevention.
+  - Design gate: [ADR 017](docs/adr/017-unified-launch-arbitration.md) (**Accepted** — implemented and published 2026-09-19 as Slices A+B+C; RB-002 was declared resolved on that basis. **That closure was later found incomplete**: the focused remediation review proved that terminal-instance restart could reach the spawn path without passing the arbitration boundary — see the corrective-slice record below) defines a single atomic admission boundary (`Supervisor.AdmitAndStart`) with an owner-aware compatibility matrix replacing all caller-side duplicate-prevention.
   - Slice A (shipped `b377c46` + CI 7/7 PASS): manual start → `AdmitAndStart`; C3 mutex removed.
   - Slice B (shipped `a55e673` + CI 7/7 PASS): pipeline start/restart/autostart → `AdmitAndStart`; per-PipelineID mutex is operation serialization only.
-  - Slice C (shipped `1d37918` + CI 7/7 PASS): model autostart → `AdmitAndStart`; old exported `Supervisor.Start` unexported (package-private test seam); final caller audit: zero production bypasses. RB-002 RESOLVED.
+  - Slice C (shipped `1d37918` + CI 7/7 PASS): model autostart → `AdmitAndStart`; old exported `Supervisor.Start` unexported (package-private test seam); final caller audit: zero production bypasses. RB-002 RESOLVED. *(Historical record, kept verbatim; annotated: that audit covered the launch initiators identified at the time and **missed the terminal-restart path**, so "zero production bypasses" was later falsified. Corrective D1, not Slice C, established the current non-bypassable restart contract.)*
   - Same-pipeline distinct `PipelineEntryID` entries for the same ModelID remain intentionally supported (ADR 013 D3).
+  - **Corrective slices D0–D3 (post-review remediation, 2026-09-20 → 2026-09-23) — published.** The focused remediation review that ran after the A+B+C closure returned findings BF-01…BF-09; the bounded corrective implementation slices are published and CI-green:
+    - **D0** `d3d2c6dda1c953c7f62ca8d288e35f3d9deab0a7` + CI 35526734598 — unspawned-launch-failure cleanup synchronized (BF-04).
+    - **D1** `d89c58ada3499d901d9085807518f033d759d1fe` + CI 35536576751 — terminal restart routed through the shared arbitration boundary with a launch reservation visible across the stop → spawn interval (BF-01), and the relaunched process generation owned by the supervisor lifecycle context instead of the request context (BF-09).
+    - **D2** `6b89a019feb84e94759b89305cf19e86af68078f` + CI 35657065639 **attempt 2** — pipeline group stop/restart failure attribution no longer reports false success (BF-02) and shared lifecycle error mapping classified by sentinel identity (BF-03a), plus the bounded class-A API/documentation subset (BF-03b).
+    - **D3** `bc7d06d06b6a5e87cc04045e1adc5ef94ac64bfc` + CI 35857525442 **attempt 1** — explicit cleanup reconciles the Supervisor registry so a cleaned InstanceID stops being addressable, and an unknown InstanceID at the restart preflight is classified `404` instead of `500`.
+    - **D4** — this documentation/tracking reconciliation (current working tree; not yet committed or published).
+    - **D5** — focused remediation **re-review** of the corrective slices; NOT STARTED, next after D4 publication.
+  - **Current remediation register (repository-visible status):**
+    - BF-01 — **RESOLVED** by D1. Restart of a terminal instance can no longer reach the spawn path without arbitration.
+    - BF-02 — **RESOLVED** by D2 (pipeline group stop/restart success attribution).
+    - BF-03a — **RESOLVED** by D2 (shared lifecycle error mapping by sentinel identity).
+    - BF-03b — **RESOLVED** by D2 **for the bounded class-A API/documentation subset only**.
+    - BF-04 — **RESOLVED** by D0.
+    - BF-05 — **NOT CONFIRMED** as a current defect.
+    - BF-06 — **NOT CONFIRMED** as a current defect.
+    - BF-07 — **PARTIALLY CONFIRMED.** Two bounded aspects were corrected and published in D3: explicit cleanup ↔ Supervisor registry coherence, and the unknown-instance restart-preflight classification. The remaining aspects are **not** defects-under-correction: terminal-controller metadata retention stays deferred engineering debt (no automatic TTL/LRU/cap/background eviction; retained until explicit cleanup or the current process ends — hygiene-with-cost, and **no** current evidence supports calling it a process/goroutine/slot leak), and historical terminal-`InstanceID` restart is **intentionally process-scoped** as the documented contract. The overall item stays open as partial and is tracked in [BACKLOG.md](BACKLOG.md).
+    - BF-08 — **RESOLVED by D4** (ADR 017 documentation/contract-accuracy drift: premature closure wording, the restart-premise statement, the Slice C non-bypassability claim, stale acceptance-criteria identifiers, the terminalization/`RemoveTerminal` lifecycle wording, and the stale orphan error code). This status is asserted for the D4 documentation patch itself; it is not a claim that the remediation program is complete.
+    - BF-09 — **RESOLVED** by D1.
+    - Preserved from the same batch: **RB-001 RESOLVED**, **RB-003 RESOLVED** (ADR 016), **RB-002 RESOLVED by ADR 017 Slices A+B+C plus corrective D1**, **RB-004 RESOLVED**, **RB-015b RESOLVED**.
+    - **The remediation program is NOT complete.** D5 (focused remediation re-review) and Manual Owner Acceptance remain open; **ADR 015 stays FROZEN** until both close.
 - [x] **RB-004 — Legacy runtime start endpoint disposition**
   - RESOLVED: the legacy `POST /api/v1/runtimes/{id}/action/start` action was **retired** — it now deterministically returns `410 Gone` (code `gone`) before any instance lookup/launch, directing callers to the canonical `POST /api/v1/models/{id}/start`. `stop`/`restart` actions unchanged. Forensic: no reachable success path existed (live state → ADR 017 duplicate rejection / 409; no live state → 404), and a runtime is a launch template with no unambiguous ModelID. Shipped `8307f20` + CI 35434215393 (7/7 PASS).
 - [x] **RB-015b — Shutdown admission for already-admitted work**
   - RESOLVED: already-admitted work blocked on `acquireSlot` when shutdown begins is now aborted PRE-SPAWN via a lifecycle-aware drain (one-way `draining` latch + `preSpawnInFlight` counter + `launchMu`-linearized admission/commit/drain); a successful `Shutdown` return guarantees no admitted PRE-SPAWN launch can subsequently reach `manager.Start`. Shipped `f13bae8` + CI 35467099833 (7/7 PASS including Linux race).
-- [ ] **Focused remediation review**
-  - Validates the completed remediation batch (RB-002, RB-004, RB-015b) before Manual Owner Acceptance. No implementation work.
-- [ ] **Manual Owner Acceptance (pre-Readiness gate)**
+- [x] **Focused remediation review (original — ran; findings returned)**
+  - Reviewed the completed remediation batch (RB-002 ADR 017 Slices A+B+C, RB-004, RB-015b) after its publication. **It ran and was NOT clean**: it returned findings BF-01…BF-09 (register above), and those findings caused corrective implementation slices D0–D3. Review-only; no code was changed by the review itself.
+- [ ] **D5 — Focused remediation re-review (of corrective slices D0–D4)**
+  - Required AFTER D4 publication: re-review the D0–D3 corrective implementation and the D4 documentation/tracking reconciliation, verify the register statuses above are accurate, and confirm the deferred aspects are correctly classified as debt rather than as open defects. Review-only; no implementation work. Distinct from the original focused review above.
+- [ ] **Manual Owner Acceptance (pre-Readiness gate) — BLOCKED until D5 closes**
   - Real Windows Owner Acceptance of the stabilized post-v2.1.0 product: Models, Runtimes, Pipelines (incl. duplicate ModelID entries), Start/Stop/Restart, pending/concurrency, recovery/orphan lifecycle, audit/history, WebUI, Windows Service, real llama-server process lifecycle. Gates the Readiness/Health probes design + implementation.
 - [ ] **Readiness / Health probes (ADR 015 — design gate pending; implementation FROZEN)**
-  - Direction accepted (on-demand AI infrastructure item 1); design ADR not yet materialized; implementation NOT STARTED; blocked until remediation complete + focused review + Manual Owner Acceptance passes.
+  - Direction accepted (on-demand AI infrastructure item 1); design ADR not yet materialized; implementation NOT STARTED; FROZEN until the remediation program closes (D5) **and** Manual Owner Acceptance passes.
 
 ### P1 — Product & reliability
 - [x] Forensic: untracked `cmd/goal/linux/packager.go` — BACKLOG lists it as completed Linux packaging, but the file was never committed and is not imported by `cmd/goal`; per AGENTS.md a separate forensic decides include-vs-reject, then the BACKLOG record is corrected

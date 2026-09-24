@@ -243,6 +243,32 @@ Response 200:
 { "status": "cleaned", "deleted": 5 }
 ```
 
+A successful cleanup has two effects:
+
+- the matching terminal history records are removed from the repository, and
+- the corresponding **safe terminal** controllers are reconciled out of the current Supervisor registry.
+
+After a successful cleanup a cleaned `InstanceID` is no longer Supervisor-addressable:
+`GET /api/v1/instances/{id}` reports `404`, and the lifecycle operations follow the existing
+unknown-instance contract — see [Lifecycle error mapping](#lifecycle-error-mapping): Stop and Restart,
+including the restart preflight, return `404` with `code=not_found`, `error=instance_not_found`.
+
+Only safe terminal controllers are affected. Cleanup never removes an active instance's process
+ownership, and active records are never deleted. Cleanup is **explicit**: no terminal record or
+controller is evicted automatically, so controllers of instances that were not cleaned stay registered
+until a cleanup that selects them or until the GoAl process ends.
+
+### Historical terminal restart is process-scoped
+
+Restarting a **terminal** `InstanceID` (`POST /api/v1/instances/{id}/restart`) is a **process-scoped**
+capability:
+
+- it may remain available while the terminal controller is still registered in the current GoAl process
+  **and** its history record has not been explicitly cleaned;
+- it is **not** guaranteed across a GoAl process restart — history records persist in the repository
+  (`GET /api/v1/history`), but GoAl does not reconstruct restart-capable controllers from them;
+- explicit cleanup removes that historical `InstanceID`'s restart capability together with its record.
+
 ### POST /api/v1/runtimes/{id}/replace
 
 Rebind all models from the given runtime to a new runtime, then delete the old one. Requires auth + CSRF.

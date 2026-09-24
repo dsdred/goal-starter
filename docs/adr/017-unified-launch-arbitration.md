@@ -1,6 +1,6 @@
 # ADR 017: Unified Owner-Aware Launch Arbitration Boundary
 
-**Status:** Accepted — fully implemented and published 2026-09-19 (Slices A+B+C; RB-002 RESOLVED)
+**Status:** Accepted — implemented and published 2026-09-19 (Slices A+B+C); RB-002 was declared resolved on that basis. **The original closure was later found incomplete** by the focused remediation review: terminal-instance restart could reach the spawn path without passing this ADR's arbitration boundary. Corrective slice **D1** closed that gap (see [Closure Chronology](#closure-chronology-corrective-slices-d0-d5)). Accepted / implemented / published — with the restart contract now resting on D1 rather than on Slice C alone.
 **Date:** 2026-09-18
 **Remediates:** RB-002 (process/state divergence and false admission across launch initiators)
 **Depends on:** ADR 016 (Durable Lifecycle Ownership — defines "what a successful Start means"), ADR 013 (Pipeline repeatable model entries — defines the compatibility matrix), ADR 005 (Recovery — defines orphan semantics)
@@ -102,7 +102,16 @@ UNMATERIALIZED → CLAIMED → SLOT_OWNED → SPAWNED → LIFECYCLE_OWNED → TE
 | SPAWNED → RELEASED (Outcome A) | Persist fails; kill confirmed dead; `confirmExit` succeeds; `releaseSlot` + `delete(s.instances)` | `startCore` (after confirmed termination) |
 | SPAWNED → RELEASED (Outcome B) | Persist fails; kill confirmed dead; failed-persist also fails; same as A for slot/instances | `startCore` (after confirmed termination) |
 | SPAWNED → LIFECYCLE_OWNED (Outcome C/D) | Persist fails; kill unconfirmed/refused; state reverted to `starting`; `wait()` started | `wait()` (on eventual exit) |
-| LIFECYCLE_OWNED → TERMINAL/RELEASED | Process exits; `wait()` persists terminal; `releaseSlot` + `complete`; `RemoveTerminal` | `wait()` |
+| LIFECYCLE_OWNED → TERMINAL (slot RELEASED) | Process exits; `wait()` persists the terminal state, then `releaseSlot` + `complete` | `wait()` |
+
+**Terminal is not deregistered.** Production `wait()` performs terminal finalization and releases the
+slot; the terminal controller then **remains registered** in `s.instances`, which is what keeps the
+process-scoped restart capability of its `InstanceID` alive. The only production path that unregisters a
+terminal controller is explicit cleanup's registry reconciliation (`POST /api/v1/instances/cleanup` →
+`Supervisor.ForgetCleanedControllers`) — see [Cleanup and Registry Reconciliation Invariant](#cleanup-and-registry-reconciliation-invariant).
+`Supervisor.RemoveTerminal` exists but has **zero production callers**; it is not the eviction mechanism,
+and its removal-or-adoption decision is tracked as debt in [BACKLOG.md](../../BACKLOG.md). The retained
+terminal metadata is hygiene-with-cost, **not** an established process/goroutine/slot leak.
 
 **Hard invariant:** Once `manager.Start` can have created an OS process (SPAWNED phase), the claim is NEVER deleted, the slot is NEVER released, and the ModelID is NEVER made admissible again — until termination is confirmed (A/B) or `wait()` confirms exit (C/D/normal).
 
@@ -224,7 +233,34 @@ An unresolved orphan in the repository blocks all launches of that ModelID.
 
 ### Restart Interaction
 
-Restart paths (`RestartInstance` → `Supervisor.RestartWithLaunch`) operate on an **already materialized in-flight instance** (it is in `s.instances` and `IsInFlight()`). A concurrent `AdmitAndStart` for the same ModelID sees this in-flight instance and rejects per the compatibility matrix. No second admission path is needed. The per-instance `lifecycleMu` + pending gate protects same-instance concurrency.
+**Published current behavior (corrected by corrective slice D1).** The earlier version of this section
+asserted that restart operates on an already materialized in-flight instance and therefore needs no
+second admission path. That premise was **false**: the restart target is frequently a **terminal**
+instance, which is not `IsInFlight()` at all — so an in-flight-only argument left the terminal restart
+path outside the arbitration boundary.
+
+What holds now:
+
+- **A terminal historical restart is not necessarily `IsInFlight()`.** `exited`, `failed` and `stale`
+  instances are restartable within the current process (see `docs/API.md`, "Historical terminal restart
+  is process-scoped"), and none of them is visible to an in-flight-only conflict scan.
+- **`RestartWithLaunch` uses the same arbitration machinery as a new launch**, through the restart
+  claimant path: `Supervisor.RestartWithLaunch` → `restart` → `Supervisor.arbitrate` with a restart-mode
+  claimant, sharing `scanConflicts`, the orphan fence and the compatibility matrix with
+  `AdmitAndStart`. There is one arbitration boundary, entered from two claim modes (`new admission` and
+  `restart existing`) — not two admission systems.
+- **The restart reservation stays visible across the relevant interval.** Restart publishes an active
+  operation on the controller before the stop begins, so it remains conflict-visible through
+  stop → terminal → spawn. An in-flight check alone does not close that interval; the published
+  operation does, which is why the scan tests `IsInFlight()` **or** an active operation.
+- **Same-model conflicts remain subject to the ADR 013 compatibility matrix** above. In particular,
+  within one pipeline, distinct `PipelineEntryID` entries for the same ModelID stay mutually compatible
+  (ADR 013 D3) — a restart of one entry does not conflict with its sibling entries.
+- The per-instance `lifecycleMu` and the pending gate still protect **same-instance** concurrency; they
+  are complements to arbitration, never a substitute for it.
+
+Consequence for this ADR's non-bypassability claim: it is established by Slice C **plus** D1, not by
+Slice C alone — see [Migration Slices](#migration-slices) and the chronology below.
 
 ### Shutdown / RB-015b Boundary
 
@@ -234,6 +270,31 @@ Restart paths (`RestartInstance` → `Supervisor.RestartWithLaunch`) operate on 
 ### RB-004 Boundary
 
 The legacy `/api/v1/runtimes/{id}/action/start` was retired (RB-004): it now returns `410 Gone` before any instance lookup or launch, directing callers to the canonical `POST /api/v1/models/{id}/start`. It no longer routes through `InstanceService.StartModel`/`AdmitAndStart` (a runtime is a launch template with no unambiguous ModelID). The `stop`/`restart` actions are unchanged.
+
+### Cleanup and Registry Reconciliation Invariant
+
+Explicit cleanup is ordered repository-first, and only the second half arrived with corrective slice D3:
+
+- `InstanceService.DeleteTerminalInstances` removes the matching terminal records from the repository;
+- **only after that succeeds**, `Supervisor.ForgetCleanedControllers` reconciles the registry — a safe
+  terminal controller whose `InstanceID` no longer has a durable record is unregistered (identity-checked
+  delete behind the `launchMu` ownership fence; registry-only, never a repository write).
+
+**Why whole-set reconciliation is sound — a CURRENT call-graph invariant, not an eternal architectural
+law.** `DeleteTerminalInstances` is currently the only production path that removes a `LaunchInstance`
+record while the Supervisor is alive (the per-ID deleters `DeleteInstance` / `Delete` /
+`DeleteLaunchInstance` have zero production callers), and production admission-failure paths never leave
+a safely-terminal registered controller whose durable record was never created. So at the reconciliation
+point, "a safe terminal controller without a durable record" is currently attributable to exactly one
+cause: explicit cleanup. **If another production `LaunchInstance`-record deletion path is introduced,
+this assumption must be re-reviewed** — the future-change trigger is tracked in
+[BACKLOG.md](../../BACKLOG.md).
+
+Observable consequences: a cleaned `InstanceID` is no longer Supervisor-addressable (status, stop and the
+restart preflight return the documented unknown-instance `404`), and that `InstanceID`'s historical
+process-scoped restart capability is removed with it. Nothing is evicted automatically — terminal
+controllers of instances that were not cleaned stay registered until a cleanup selects them or the GoAl
+process ends.
 
 ### Source-of-Truth Table
 
@@ -246,7 +307,7 @@ The legacy `/api/v1/runtimes/{id}/action/start` was retired (RB-004): it now ret
 | Terminal persist failure | In-memory terminal for operational; repository (stale `running`) for recovery |
 | ADR 016 C/D residual | `s.instances` (`starting` = in-flight) |
 
-Admission checks: (1) `s.instances` for `IsInFlight()` instances of the ModelID, (2) repository for `orphan` state. These two checks are complete.
+Admission checks: (1) `s.instances` for `IsInFlight()` instances of the ModelID, (2) repository for `orphan` state. Since D1 the in-memory check is **not** limited to `IsInFlight()`: a controller with a published active operation (a restart in progress against a terminal instance) is also conflict-visible, because a terminal restart target is by definition not in flight — see [Restart Interaction](#restart-interaction).
 
 ### Migration Slices
 
@@ -254,17 +315,43 @@ Admission checks: (1) `s.instances` for `IsInFlight()` instances of the ModelID,
 |-------|-------|----------------------|
 | **A** | `AdmitAndStart` on Supervisor + `arbLocks` + `LaunchOwner` + manual Start migration (remove C3 mutex) + orphan rejection + structured rejection + concurrency tests | Manual Start paths are non-bypassable. Orphan blocks manual Start. C3 mutex removed. |
 | **B** | Pipeline `startEntry` migrated to `AdmitAndStart` with owner; ADR 013 compatibility matrix enforced; per-pipeline mutex retained for ordering; structured outcomes preserved | Pipeline paths are non-bypassable. Cross-pipeline TOCTOU eliminated. Within-pipeline independence preserved. |
-| **C** | Model autostart migrated to `AdmitAndStart`; old exported `Supervisor.Start` removed or made unexported; final production caller audit | **Global non-bypassability achieved.** Zero production callers of the old `Supervisor.Start`. RB-002 globally implemented. |
+| **C** | Model autostart migrated to `AdmitAndStart`; old exported `Supervisor.Start` removed or made unexported; final production caller audit | Claimed at the time: **Global non-bypassability achieved.** Zero production callers of the old `Supervisor.Start`. RB-002 globally implemented. **Later falsified in part** — see the annotation below. |
 
 **Transitional invariant:** After Slice A, manual paths are protected but pipeline/autostart still use the old path. After Slice B, pipeline is protected but autostart still uses the old path. Only after Slice C + final caller audit is RB-002 globally closed.
 
+> **Annotation on Slice C's closure claim (kept, not deleted).** The Slice C caller audit covered the
+> launch initiators identified at the time — the callers of the old exported `Supervisor.Start`. The
+> terminal-restart path was **not** among them: it reaches the spawn path through
+> `Supervisor.RestartWithLaunch` → `restart` → `startCore`, never through `Supervisor.Start`, so a
+> "zero callers of `Supervisor.Start`" audit could not see it. The statement "Global non-bypassability
+> achieved / RB-002 globally implemented" was therefore **premature as written**, and the corrective
+> slice **D1** — which routed the restart claimant through `Supervisor.arbitrate` — is what established
+> the current non-bypassable restart contract. RB-002 is resolved by A+B+C **plus D1**.
+
 ### Final Non-Bypassability Acceptance Criterion
 
-After Slice C:
-1. `grep` for `supervisor.Start` (or the old public method name) in production code shows zero callers outside `AdmitAndStart` itself.
-2. The old method is either removed or unexported (package-private `startUnfenced`).
-3. Every production OS-spawn path (initiators 1-10 from the forensic) routes through `AdmitAndStart`.
-4. Race detector passes.
+As originally written this criterion was evaluated after Slice C and passed while the restart bypass was
+still open — which is the drift D1 corrected. Restated against published behavior:
+
+1. No production path reaches the OS spawn except through the arbitration boundary. The production routes
+   into `InstanceController.startCore` are exactly two, and both call `Supervisor.arbitrate` first:
+   `AdmitAndStart` → `startPostAdmit` → `startWithReservation` → `startCore`, and
+   `restart` → `restartWithRefresh` → `startCore`. The only remaining caller of `startPostAdmit` is the
+   package-private test seam `Supervisor.start`, which mints a test-only spawn claim
+   (`mintTestSpawnClaim`) and has **zero production callers** — every caller of it is a `_test.go` file.
+2. The old exported method is unexported: exported `Supervisor.Start` does not exist in the repository.
+   The surviving package-private seam is named exactly `start`; this criterion previously named a
+   different identifier that the implementation never used.
+3. The production OS-spawn initiators are enumerable, and each is arbitration-backed:
+   - manual model start — `POST /api/v1/models/{id}/start` and `POST /api/v1/instances/start` →
+     `InstanceService.StartModel` → `AdmitAndStart` (manual owner);
+   - startup model autostart — `cmd/goal` → `AdmitAndStart` (manual owner);
+   - pipeline entry start — `PipelineService.startEntry`, used by pipeline start/restart → `AdmitAndStart`
+     (pipeline owner, per-entry identity);
+   - instance restart — `POST /api/v1/instances/{id}/restart` and the model restart action →
+     `InstanceService.RestartInstance` → `Supervisor.RestartWithLaunch` → `restart` → `arbitrate`
+     (restart claimant). **This is the initiator Slice C missed and D1 added.**
+4. Race detector passes (Linux CI job).
 
 ### Required Concurrency / Regression Tests
 
@@ -288,6 +375,45 @@ After Slice C:
 | `TestPipeline_StartEntry_AdmitOutcome` | Pipeline startEntry maps AdmissionRejection to correct per-entry outcome |
 | `TestRestart_DoesNotBypassAdmit` | Restart of an in-flight instance blocks concurrent AdmitAndStart |
 
+`TestRestart_DoesNotBypassAdmit` was listed here as required and is now present
+(`internal/process/supervisor_bf01_test.go`). The post-review corrective slices added their own
+regressions, which are part of the same acceptance surface: D1 terminal-target restart conflict
+(`TestRestart_TerminalTarget_ConflictRejected`), D0 unspawned-failure cleanup synchronization
+(`TestBF04_*`), and D3 cleanup ↔ registry coherence (`TestD3Cleanup_*` in
+`internal/process/supervisor_d3_cleanup_test.go` and `internal/application/instance_cleanup_d3_test.go`,
+including `TestD3Cleanup_NoAutomaticEviction` and
+`TestD3Cleanup_HistoricalRestartBeforeAndAfterCleanup`).
+
+## Closure Chronology (corrective slices D0-D5)
+
+Preserving chronology — the original closure happened, was published, and was later found incomplete.
+Nothing below rewrites that sequence.
+
+| When | What | Status |
+|------|------|--------|
+| 2026-09-18 | This ADR accepted. | Historical |
+| 2026-09-19 | Slices A (`b377c46`), B (`a55e673`), C (`1d37918`) published, each CI 7/7. RB-002 **declared** resolved on Slice C's caller audit. | Historical (the declaration was premature — see below) |
+| 2026-09-20 | **Focused remediation review** ran over the published batch (RB-002 Slices A+B+C, RB-004, RB-015b; baseline `08aef89`) and returned findings BF-01…BF-09. | Historical |
+| 2026-09-20 | **D0** `d3d2c6d` + CI 35526734598 — post-admission failure cleanup synchronized (BF-04). | Published |
+| 2026-09-21 | **D1** `d89c58a` + CI 35536576751 — terminal restart routed through `Supervisor.arbitrate` with a launch reservation visible across stop → spawn (BF-01); relaunched generation owned by the supervisor lifecycle context (BF-09). **This is the slice RB-002's current closure depends on.** | Published |
+| 2026-09-22 | **D2** `6b89a01` + CI 35657065639 (green on **attempt 2**) — pipeline group stop/restart success attribution (BF-02) and sentinel-based lifecycle error mapping (BF-03a) with the bounded class-A API/documentation subset (BF-03b). Adjacent to this ADR, not an ADR 017 slice. | Published |
+| 2026-09-23 | **D3** `bc7d06d` + CI 35857525442 (attempt 1) — explicit cleanup reconciles the Supervisor registry, and the unknown-instance restart preflight is classified `404` instead of `500`. Adjacent to this ADR, not an ADR 017 slice. | Published |
+| 2026-09-24 | **D4** — this documentation/tracking reconciliation: the ADR's status, restart contract, Slice C claim, acceptance-criteria identifiers, terminalization wording and orphan error code are aligned with published behavior. | Working tree (not committed / not published) |
+| — | **D5** — focused remediation **re-review** of D0–D4. NOT STARTED; next after D4 publication. | Open |
+| — | **Manual Owner Acceptance** — BLOCKED until D5 closes. **ADR 015** — FROZEN until remediation and Manual Owner Acceptance close. | Open |
+
+**What was actually wrong.** Terminal-instance `RestartWithLaunch` could reach the spawn path without
+passing the arbitration boundary this ADR defines: the scan inside `arbitrate` looked at in-flight
+instances, while a restart target in a terminal state is not in flight, so a concurrent same-model
+launch could be admitted next to a restart about to spawn. Slice C's audit could not detect this because
+it enumerated callers of the old exported `Supervisor.Start`, and the restart path never went through
+that method. D1 closed it by introducing the restart claimant mode on the same boundary.
+
+**What is NOT claimed here.** D2 and D3 are post-review remediation adjacent to this ADR and are not
+ADR 017 migration slices; the deferred BF-07 aspects (terminal-controller metadata retention,
+process-scoped historical restart) remain open debt, and this ADR's remediation program is **not**
+complete until D5 and Manual Owner Acceptance close.
+
 ## Rejected Alternatives
 
 | Alternative | Reason for Rejection |
@@ -303,7 +429,9 @@ After Slice C:
 
 ## Affected Documentation (on implementation acceptance)
 
-- API.md: 409 `recovery_conflict` code (orphan rejection for manual starts).
+- API.md: the orphan rejection for a manual start is `409` with `code=conflict` and `error=orphan` — the
+  published contract, documented in API.md §"Lifecycle error mapping". This bullet previously recorded a
+  different error token that the implementation never emitted. No transport behavior changed.
 - ADR 010: cross-reference (orphan gate now enforced server-side for all paths, not just pipeline).
 - ADR 016: cross-reference (admission boundary is a pre-Start gate; does not modify ADR 016 invariants).
 - ADR 013: cross-reference (compatibility matrix is codified in the admission boundary).
