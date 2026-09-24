@@ -144,24 +144,150 @@ func TestLifecycleErrorMappingMatrix(t *testing.T) {
 	}
 }
 
-// TestLifecycleErrorOrdering pins the precedence rules that keep ADR 016 and
-// RB-015b intact inside a joined multi-cause error: the ADR 016 server class
-// outranks the caller-visible classes, shutdown outranks conflict, and within
-// the 500 class persistence failure outranks the termination causes.
+// TestLifecycleErrorOrdering pins the canonical single-target precedence
+// 500 > 503 > 409 (docs/API.md, "Lifecycle error mapping") that keeps ADR 016
+// and RB-015b intact inside a joined multi-cause error: the ADR 016 server class
+// outranks the retry-later shutdown class, which outranks a caller-visible
+// conflict, and within the 500 class persistence failure outranks the
+// termination causes. Every composite is asserted in BOTH argument orders, so a
+// future reordering of a join site cannot hide the classifier's precedence.
 func TestLifecycleErrorOrdering(t *testing.T) {
-	notFoundAndPersist := errors.Join(process.ErrInstanceNotFound, process.ErrPersistenceFailure)
-	if status, _, _ := writeLifecycle(t, notFoundAndPersist); status != http.StatusInternalServerError {
-		t.Fatalf("joined persistence status = %d, want 500 (the platform failure wins)", status)
+	tests := []struct {
+		name       string
+		err        error
+		wantStatus int
+		wantToken  string
+	}{
+		{
+			name:       "persistence outranks an aborted launch",
+			err:        errors.Join(process.ErrPersistenceFailure, process.ErrLaunchAbortedByShutdown),
+			wantStatus: http.StatusInternalServerError,
+			wantToken:  "launch_persist_failed",
+		},
+		{
+			name:       "persistence outranks an aborted launch, reversed",
+			err:        errors.Join(process.ErrLaunchAbortedByShutdown, process.ErrPersistenceFailure),
+			wantStatus: http.StatusInternalServerError,
+			wantToken:  "launch_persist_failed",
+		},
+		{
+			name: "persistence outranks a pre-admission shutdown rejection",
+			err: errors.Join(&process.AdmissionRejection{Reason: process.RejShuttingDown},
+				process.ErrPersistenceFailure),
+			wantStatus: http.StatusInternalServerError,
+			wantToken:  "launch_persist_failed",
+		},
+		{
+			name: "persistence outranks a pre-admission shutdown rejection, reversed",
+			err: errors.Join(process.ErrPersistenceFailure,
+				&process.AdmissionRejection{Reason: process.RejShuttingDown}),
+			wantStatus: http.StatusInternalServerError,
+			wantToken:  "launch_persist_failed",
+		},
+		{
+			name:       "termination-unconfirmed outranks an aborted launch",
+			err:        errors.Join(process.ErrTerminationUnconfirmed, process.ErrLaunchAbortedByShutdown),
+			wantStatus: http.StatusInternalServerError,
+			wantToken:  "termination_unconfirmed",
+		},
+		{
+			name: "rollback-failed outranks a pre-admission shutdown rejection",
+			err: errors.Join(&process.AdmissionRejection{Reason: process.RejShuttingDown},
+				process.ErrRollbackFailed),
+			wantStatus: http.StatusInternalServerError,
+			wantToken:  "rollback_failed",
+		},
+		{
+			// The ADR 016 residual join is the shape a real rollback produces;
+			// shutdown noise must not demote it.
+			name: "residual join stays 500 next to a shutdown rejection",
+			err: errors.Join(
+				&process.AdmissionRejection{Reason: process.RejShuttingDown},
+				process.ErrPersistenceFailure,
+				process.ErrTerminationUnconfirmed,
+				process.ErrRollbackFailed,
+			),
+			wantStatus: http.StatusInternalServerError,
+			wantToken:  "launch_persist_failed",
+		},
+		{
+			name:       "shutdown outranks a conflict",
+			err:        errors.Join(process.ErrLaunchInFlight, process.ErrLaunchAbortedByShutdown),
+			wantStatus: http.StatusServiceUnavailable,
+			wantToken:  "launch_aborted",
+		},
+		{
+			name:       "persistence outranks a gone instance",
+			err:        errors.Join(process.ErrInstanceNotFound, process.ErrPersistenceFailure),
+			wantStatus: http.StatusInternalServerError,
+			wantToken:  "launch_persist_failed",
+		},
+		{
+			// Within the 500 class the order is fixed too: the platform failing to
+			// persist the launch is the cause the operator acts on first.
+			name:       "persistence outranks termination-unconfirmed",
+			err:        errors.Join(process.ErrPersistenceFailure, process.ErrTerminationUnconfirmed),
+			wantStatus: http.StatusInternalServerError,
+			wantToken:  "launch_persist_failed",
+		},
+		{
+			name:       "termination-unconfirmed outranks rollback-failed",
+			err:        errors.Join(process.ErrRollbackFailed, process.ErrTerminationUnconfirmed),
+			wantStatus: http.StatusInternalServerError,
+			wantToken:  "termination_unconfirmed",
+		},
 	}
-	inFlightAndShutdown := errors.Join(process.ErrLaunchInFlight, process.ErrLaunchAbortedByShutdown)
-	if status, _, _ := writeLifecycle(t, inFlightAndShutdown); status != http.StatusServiceUnavailable {
-		t.Fatalf("joined shutdown status = %d, want 503 (retry-later wins over conflict)", status)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			status, _, msg := writeLifecycle(t, tc.err)
+			if status != tc.wantStatus || msg != tc.wantToken {
+				t.Fatalf("got %d error=%q, want %d error=%q", status, msg, tc.wantStatus, tc.wantToken)
+			}
+		})
 	}
-	// Within the 500 class the order is fixed too: the platform failing to
-	// persist the launch is the cause the operator acts on first.
-	persistAndTermination := errors.Join(process.ErrPersistenceFailure, process.ErrTerminationUnconfirmed)
-	if _, _, msg := writeLifecycle(t, persistAndTermination); msg != "launch_persist_failed" {
-		t.Fatalf("joined 500-class token = %q, want launch_persist_failed", msg)
+}
+
+// The two shipped lifecycle classifiers are separate functions on purpose (the
+// group mapper never reports a per-instance 404 and names the PHASE, not one
+// instance's class), but they must never disagree on which STATUS class wins a
+// multi-cause error. This test pins that shared precedence from both sides, so
+// reordering either switch in isolation fails.
+func TestLifecyclePrecedenceAgreesAcrossMappers(t *testing.T) {
+	composites := []struct {
+		name       string
+		err        error
+		wantStatus int
+	}{
+		{"500 over 503 abort",
+			errors.Join(process.ErrPersistenceFailure, process.ErrLaunchAbortedByShutdown),
+			http.StatusInternalServerError},
+		{"500 over 503 rejection",
+			errors.Join(&process.AdmissionRejection{Reason: process.RejShuttingDown}, process.ErrRollbackFailed),
+			http.StatusInternalServerError},
+		{"500 over 409",
+			errors.Join(process.ErrLaunchInFlight, process.ErrTerminationUnconfirmed),
+			http.StatusInternalServerError},
+		{"503 over 409",
+			errors.Join(process.ErrLaunchInFlight, &process.AdmissionRejection{Reason: process.RejShuttingDown}),
+			http.StatusServiceUnavailable},
+	}
+	for _, tc := range composites {
+		t.Run(tc.name, func(t *testing.T) {
+			single := lifecycleAPIError(tc.err)
+			if single == nil {
+				t.Fatalf("single-target mapper left a classified composite unclassified")
+			}
+			if got := statusForAPICode(single.Code); got != tc.wantStatus {
+				t.Fatalf("single-target status = %d, want %d", got, tc.wantStatus)
+			}
+			for _, phase := range []string{application.PhaseStop, application.PhaseRestart} {
+				group := groupFailureClass(phase, tc.err)
+				if got := statusForAPICode(group.Code); got != tc.wantStatus {
+					t.Fatalf("group status (%s) = %d, want %d — the two mappers diverged",
+						phase, got, tc.wantStatus)
+				}
+			}
+		})
 	}
 }
 
@@ -483,10 +609,12 @@ func TestStopFailureRowsKeepsEveryEntryRow(t *testing.T) {
 }
 
 // A group aggregate has its own precedence, parallel to the single-target
-// mapping: the platform's own failure outranks a caller-visible conflict even
-// when both are present in one request, and the retry-later shutdown class
-// outranks a conflict. The token is always the PHASE's incomplete token, never
-// one instance's class.
+// mapping: the canonical 500 > 503 > 409 order (docs/API.md, "Lifecycle error
+// mapping") — the platform's own failure outranks the retry-later shutdown
+// class, which outranks a caller-visible conflict. The token is always the
+// PHASE's incomplete token, never one instance's class.
+// TestLifecyclePrecedenceAgreesAcrossMappers pins that both mappers hold that
+// order.
 func TestGroupFailureClassPrecedence(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -509,6 +637,18 @@ func TestGroupFailureClassPrecedence(t *testing.T) {
 		{"shutdown outranks a conflict", application.PhaseStop,
 			errors.Join(process.ErrLaunchInFlight, &process.AdmissionRejection{Reason: process.RejShuttingDown}),
 			http.StatusServiceUnavailable, "service_unavailable", "shutting_down"},
+		// The reachable 500+503 composite is a group RESTART: one collector
+		// accumulates a stop-phase persistence failure and a start-phase
+		// shutdown rejection. The server class must win, in either order.
+		{"persistence outranks shutdown in a restart aggregate", application.PhaseRestart,
+			errors.Join(process.ErrPersistenceFailure, &process.AdmissionRejection{Reason: process.RejShuttingDown}),
+			http.StatusInternalServerError, "internal_server_error", "pipeline_restart_incomplete"},
+		{"persistence outranks shutdown, reversed", application.PhaseRestart,
+			errors.Join(process.ErrLaunchAbortedByShutdown, process.ErrTerminationUnconfirmed),
+			http.StatusInternalServerError, "internal_server_error", "pipeline_restart_incomplete"},
+		{"rollback-failed outranks an aborted launch", application.PhaseRestart,
+			errors.Join(&process.AdmissionRejection{Reason: process.RejShuttingDown}, process.ErrRollbackFailed),
+			http.StatusInternalServerError, "internal_server_error", "pipeline_restart_incomplete"},
 		{"aborted launch is the shutdown class", application.PhaseStart,
 			process.ErrLaunchAbortedByShutdown,
 			http.StatusServiceUnavailable, "service_unavailable", "shutting_down"},

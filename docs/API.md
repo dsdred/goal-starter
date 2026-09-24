@@ -190,8 +190,10 @@ are the client-visible vocabulary; raw Go error text never appears in a classifi
 
 Precedence inside a multi-cause error (a restart can join several causes): the `500` server class wins
 over `503` and `409`; `503` wins over `409`; inside the `500` class `launch_persist_failed` is reported
-first, because persisting the launch is the cause the operator acts on. An error of a class outside this
-table keeps the endpoint's previous plain `500` with the error text.
+first, because persisting the launch is the cause the operator acts on. This canonical order
+(`500 > 503 > 409`) is the same for the pipeline group classification below: an internal
+persistence/termination/rollback cause in a group aggregate is never demoted to a retry-later `503`.
+An error of a class outside this table keeps the endpoint's previous plain `500` with the error text.
 
 `503` responses carry no `Retry-After`; the client learns completion from `GET /api/v1/instances`.
 

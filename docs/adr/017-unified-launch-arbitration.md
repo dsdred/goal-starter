@@ -1,6 +1,6 @@
 # ADR 017: Unified Owner-Aware Launch Arbitration Boundary
 
-**Status:** Accepted — implemented and published 2026-09-19 (Slices A+B+C); RB-002 was declared resolved on that basis. **The original closure was later found incomplete** by the focused remediation review: terminal-instance restart could reach the spawn path without passing this ADR's arbitration boundary. Corrective slice **D1** closed that gap (see [Closure Chronology](#closure-chronology-corrective-slices-d0-d5)). Accepted / implemented / published — with the restart contract now resting on D1 rather than on Slice C alone.
+**Status:** Accepted — implemented and published 2026-09-19 (Slices A+B+C); RB-002 was declared resolved on that basis. **The original closure was later found incomplete** by the focused remediation review: terminal-instance restart could reach the spawn path without passing this ADR's arbitration boundary. Corrective slice **D1** closed that gap (see [Closure Chronology](#closure-chronology-corrective-slices-d0-d62)). Accepted / implemented / published — with the restart contract now resting on D1 rather than on Slice C alone.
 **Date:** 2026-09-18
 **Remediates:** RB-002 (process/state divergence and false admission across launch initiators)
 **Depends on:** ADR 016 (Durable Lifecycle Ownership — defines "what a successful Start means"), ADR 013 (Pipeline repeatable model entries — defines the compatibility matrix), ADR 005 (Recovery — defines orphan semantics)
@@ -215,7 +215,7 @@ s.arbMu (brief, map access only)
 An unresolved orphan in the repository blocks all launches of that ModelID.
 
 - **Admission sees orphan** → reject with `RejOrphan`.
-- **Dismiss** (supervisor.go:748) transitions orphan → stale. After the durable `store.Update` completes, admission sees stale (not orphan) and allows.
+- **Dismiss** (`DismissOrphan`, supervisor.go:1142) transitions orphan → stale. After the durable `store.Update` completes, admission sees stale (not orphan) and allows.
 - **Kill** (supervisor_kill.go:92) transitions orphan → stale only after confirmed termination (`finishKill`). Until the durable `store.Update` completes, the repository still says `orphan` and admission rejects. If kill is refused, state stays `orphan` and admission continues to reject.
 - **Concurrency:** The repository's `RWMutex` serializes the orphan state read (admission) and write (Dismiss/Kill). The one-way state transition (orphan → stale, never reversed) guarantees:
   - If admission sees `orphan` → reject (safe, conservative).
@@ -241,9 +241,23 @@ path outside the arbitration boundary.
 
 What holds now:
 
-- **A terminal historical restart is not necessarily `IsInFlight()`.** `exited`, `failed` and `stale`
-  instances are restartable within the current process (see `docs/API.md`, "Historical terminal restart
-  is process-scoped"), and none of them is visible to an in-flight-only conflict scan.
+- **A terminal historical restart is not necessarily `IsInFlight()`.** `exited` and `failed`
+  instances are restartable while their controller is still registered in the current GoAl process
+  **and** its history record has not been explicitly cleaned (see `docs/API.md`, "Historical terminal
+  restart is process-scoped"); neither is visible to an in-flight-only conflict scan.
+- **`stale` is deliberately NOT restartable, and `pending`/`starting` are refused as in-flight.**
+  `checkRestartTarget` (`arbitration.go`) allows `running`, `stopping`, `exited` and `failed`; it
+  refuses `pending`/`starting` with `ErrLaunchInFlight` (`409` `launch_in_flight`) and everything else
+  — `stale` and `orphan` — with `ErrNotRestartable` (`409` `not_restartable`). The distinction is
+  attribution, not terminality: `exited`/`failed` record a **confirmed** termination, while `stale`
+  means process termination or process identity could **not** be reliably confirmed (recovery
+  `pid-not-found`/`identity-unconfirmed`, or an orphan reconciliation), so relaunching that
+  generation's identity could stack a second process next to a possibly-live, unclaimed one.
+  In ordinary operation a `stale` `InstanceID` never even reaches that check: the `stale`-producing
+  paths (`Recover`, `DismissOrphan`, `finishKill`) write repository records only and do not
+  register or reconstruct a controller, so the lookup fails earlier as `404` `instance_not_found`.
+  `409` `not_restartable` for `stale` is reachable only if a `stale` controller exists in this
+  process; the code makes no attempt to manufacture that answer.
 - **`RestartWithLaunch` uses the same arbitration machinery as a new launch**, through the restart
   claimant path: `Supervisor.RestartWithLaunch` → `restart` → `Supervisor.arbitrate` with a restart-mode
   claimant, sharing `scanConflicts`, the orphan fence and the compatibility matrix with
@@ -353,38 +367,56 @@ still open — which is the drift D1 corrected. Restated against published behav
      (restart claimant). **This is the initiator Slice C missed and D1 added.**
 4. Race detector passes (Linux CI job).
 
-### Required Concurrency / Regression Tests
+### Concurrency / Regression Test Inventory
 
-| Test | What it proves |
-|------|---------------|
-| `TestAdmitAndStart_SameModel_Concurrent` | Two concurrent admits for same ModelID: exactly one succeeds |
-| `TestAdmitAndStart_DifferentModels_Concurrent` | Two different models start concurrently (no cross-model blocking) |
-| `TestAdmitAndStart_Orphan_Present` | Rejects when repo has orphan for ModelID |
-| `TestAdmitAndStart_Orphan_AfterDismiss` | After Dismiss (orphan→stale), admission succeeds |
-| `TestAdmitAndStart_Orphan_AfterKill` | After Kill (orphan→stale), admission succeeds |
-| `TestAdmitAndStart_Pipeline_CrossPipeline_Race` | Two pipelines sharing ModelID, concurrent: exactly one launches |
-| `TestAdmitAndStart_Pipeline_Manual_Race` | Pipeline + manual Start of same ModelID, concurrent: exactly one launches |
-| `TestAdmitAndStart_Pipeline_WithinPipeline_Repeat` | Same pipeline, two entries of same ModelID: both launch (ADR 013) |
-| `TestAdmitAndStart_SameEntry_Idempotency` | Same pipeline+entry, second Start: rejected (already-running) |
-| `TestAdmitAndStart_ADR016_C_Residual` | After C (termination unconfirmed), new admission rejected until wait() confirms |
-| `TestAdmitAndStart_ADR016_D_Residual` | After D (kill failed), new admission rejected until wait() confirms |
-| `TestAdmitAndStart_ShardDown_Rejects` | After lifecycle ctx cancelled, returns RejShuttingDown |
-| `TestAdmitAndStart_PendingWindow` | During slot acquire (pending in s.instances, not in repo), second admit sees pending and rejects |
-| `TestStartModel_Orphan_BackendRejection` | HTTP: POST /models/{id}/start returns 409 when orphan exists |
-| `TestAutostart_Orphan_Skipped` | Model autostart skips model with orphan |
-| `TestPipeline_StartEntry_AdmitOutcome` | Pipeline startEntry maps AdmissionRejection to correct per-entry outcome |
-| `TestRestart_DoesNotBypassAdmit` | Restart of an in-flight instance blocks concurrent AdmitAndStart |
+Reconciled by D6.1: the earlier version of this table listed identifiers that were never shipped
+(`TestAdmitAndStart_SameModel_Concurrent`, `…_Orphan_AfterKill`, `…_ShardDown_Rejects`,
+`TestStartModel_Orphan_BackendRejection`, `TestAutostart_Orphan_Skipped` and others). Every row now
+names a function that exists in the repository, or is explicitly labelled **by composition** — two or
+more shipped tests whose propositions together establish the invariant, with no single end-to-end
+test. Location abbreviations: `adr017` = `internal/process/supervisor_adr017_test.go`,
+`bf01` = `internal/process/supervisor_bf01_test.go`, `adr016` = `internal/process/supervisor_adr016_test.go`,
+`pending` = `internal/process/supervisor_pending_test.go`, `recovery` = `internal/process/supervisor_recovery_test.go`,
+`kill` = `internal/process/supervisor_kill_test.go`, `shutdown` = `internal/process/supervisor_shutdown_test.go`,
+`handlers` = `internal/webui/handlers/lifecycle_errors_d2_test.go`, `autostart` = `cmd/goal/autostart_test.go`,
+`pipeline` = `internal/application/pipeline_service_test.go`.
 
-`TestRestart_DoesNotBypassAdmit` was listed here as required and is now present
-(`internal/process/supervisor_bf01_test.go`). The post-review corrective slices added their own
-regressions, which are part of the same acceptance surface: D1 terminal-target restart conflict
-(`TestRestart_TerminalTarget_ConflictRejected`), D0 unspawned-failure cleanup synchronization
-(`TestBF04_*`), and D3 cleanup ↔ registry coherence (`TestD3Cleanup_*` in
-`internal/process/supervisor_d3_cleanup_test.go` and `internal/application/instance_cleanup_d3_test.go`,
-including `TestD3Cleanup_NoAutomaticEviction` and
-`TestD3Cleanup_HistoricalRestartBeforeAndAfterCleanup`).
+| Invariant | Shipped proof | Kind |
+|-----------|---------------|------|
+| Two concurrent admits for one ModelID: exactly one succeeds | `TestAdmitAndStart_SameModelID_Concurrent` (adr017:53), serialized case `TestAdmitAndStart_SameModelID_SerialAdmission` (adr017:16) | direct |
+| Different models start concurrently (no cross-model blocking) | `TestAdmitAndStart_DifferentModelIDs_Concurrent` (adr017:128) | direct |
+| Admission rejects when the repository holds an orphan for the ModelID | `TestAdmitAndStart_OrphanConflict` (adr017:196), `TestAdmitAndStart_Pipeline_Orphan` (adr017:626), `TestRestart_OrphanFence` (bf01:551) | direct |
+| After Dismiss (orphan→stale) admission succeeds | Fence side: `TestAdmitAndStart_DismissedOrphanNoLongerBlocks` (adr017:230) seeds a `stale` record and asserts a successful `AdmitAndStart`; transition side: `TestDismissOrphan_Success` (recovery:333) asserts the durable `stale` write | **by composition** (no single chain test — debt) |
+| After Kill (orphan→stale) admission succeeds | Fence side: same `TestAdmitAndStart_DismissedOrphanNoLongerBlocks` (the fence keys only on `orphan`); transition side: `TestKillOrphan_Terminated` (kill:93) asserts the persisted record becomes `stale` | **by composition** (no single chain test — debt) |
+| Two pipelines sharing a ModelID, concurrent: exactly one launches | `TestAdmitAndStart_Pipeline_CrossPipeline_SameModel` (adr017:525) | direct |
+| Pipeline + manual start of the same ModelID, concurrent: exactly one launches | `TestAdmitAndStart_Manual_Pipeline_SameModel` (adr017:576) | direct |
+| Same pipeline, two entries of one ModelID: both launch (ADR 013) | `TestAdmitAndStart_Pipeline_SamePipeline_DifferentEntries_SameModel` (adr017:463); restart-side sibling `TestRestart_WithinPipeline_DuplicateModelID_Allowed` (bf01:511) | direct |
+| Same pipeline+entry, second start rejected | `TestAdmitAndStart_Pipeline_SameEntry_Rejected` (adr017:492) | direct |
+| After ADR 016 C (termination unconfirmed) new admission is rejected | Rejection: `TestAdmitAndStart_ResidualStartingRejected` (adr017:257) — C leaves the generation `starting`, which is the state that predicate covers; cause: `TestStartCore_RunningPersistFail_KillUnconfirmed` (adr016:254) | direct |
+| After ADR 016 D (rollback failed) new admission is rejected | Rejection: `TestAdmitAndStart_ResidualStartingRejected` (adr017:257); cause: `TestStartCore_RunningPersistFail_KillFailed` (adr016:310), registry survival `TestD3Cleanup_ADR016ResidualSurvives` | direct |
+| After the lifecycle context is cancelled, admission returns `RejShuttingDown` | `TestAdmitAndStart_Shutdown` (adr017:368) plus the RB-015b drain series `TestRB015b_T3`…`T6` (shutdown) | direct |
+| Pending window is conflict-visible | `TestAdmitAndStart_PendingVisibility` (adr017:296) plus `TestSupervisor_PendingWindow_*` (pending:64, :114, :167, :205) | direct |
+| `POST /models/{id}/start` returns `409 orphan` when an orphan exists | Fence: `TestAdmitAndStart_OrphanConflict` (adr017:196); mapping: the `orphan rejection` case of `TestLifecycleErrorMappingMatrix` (handlers:68), which drives the same `writeLifecycleError` the handler calls | **by composition** (no single HTTP chain test — debt) |
+| Autostart does not launch a model it cannot own | `TestAutostart_DuplicateGuard_ActiveInstanceExists` (autostart:543), `TestAutostart_DuplicateGuard_StaleInstanceDoesNotBlock` (autostart:584), `TestAutostart_FailureDoesNotBlockNext` (autostart:187); the orphan deny itself is `TestAdmitAndStart_OrphanConflict` | **by composition, partial** (no orphan-specific autostart test — debt) |
+| Pipeline `startEntry` maps an `AdmissionRejection` to the right per-entry outcome | `TestPipelineStart_OrphanSkipped` (pipeline:323) plus the `OutcomeAlreadyRunning`/`ReasonShuttingDown` assertions in `internal/application/pipeline_d2_test.go` and `internal/application/pipeline_adr013_test.go` | direct |
+| Restart of an in-flight instance blocks concurrent `AdmitAndStart` | `TestRestart_DoesNotBypassAdmit` (bf01:259) | direct |
 
-## Closure Chronology (corrective slices D0-D5)
+The corrective slices added their own regressions, which are part of the same acceptance surface:
+D1 terminal-target restart conflict (`TestRestart_TerminalTarget_ConflictRejected`, bf01:332), plus the
+D1 reservation/claim series (`TestRestart_AbortAfterClaim_ReleasesReservation`,
+`TestSpawnClaim_*`, `TestRestart_Stopping_AwaitsExistingGeneration`, `TestRestart_StartingRejected`,
+`TestPreflightRestart_CompleteSet`), D0 unspawned-failure cleanup synchronization (`TestBF04_*`),
+D3 cleanup ↔ registry coherence (`TestD3Cleanup_*` in `internal/process/supervisor_d3_cleanup_test.go`
+and `internal/application/instance_cleanup_d3_test.go`, including `TestD3Cleanup_NoAutomaticEviction`
+and `TestD3Cleanup_HistoricalRestartBeforeAndAfterCleanup`), and the canonical-precedence pins for the
+lifecycle error contract (`TestLifecycleErrorOrdering`,
+`TestLifecyclePrecedenceAgreesAcrossMappers`, `TestGroupFailureClassPrecedence`).
+
+**Missing chain coverage is recorded as technical debt, not as an acceptance blocker** — see
+[BACKLOG.md](../../BACKLOG.md): the `KillOrphan → stale → AdmitAndStart` end-to-end test, the
+`POST /models/{id}/start → 409 orphan` end-to-end test, and the orphan-specific autostart test.
+
+## Closure Chronology (corrective slices D0-D6.2)
 
 Preserving chronology — the original closure happened, was published, and was later found incomplete.
 Nothing below rewrites that sequence.
@@ -398,9 +430,12 @@ Nothing below rewrites that sequence.
 | 2026-09-21 | **D1** `d89c58a` + CI 35536576751 — terminal restart routed through `Supervisor.arbitrate` with a launch reservation visible across stop → spawn (BF-01); relaunched generation owned by the supervisor lifecycle context (BF-09). **This is the slice RB-002's current closure depends on.** | Published |
 | 2026-09-22 | **D2** `6b89a01` + CI 35657065639 (green on **attempt 2**) — pipeline group stop/restart success attribution (BF-02) and sentinel-based lifecycle error mapping (BF-03a) with the bounded class-A API/documentation subset (BF-03b). Adjacent to this ADR, not an ADR 017 slice. | Published |
 | 2026-09-23 | **D3** `bc7d06d` + CI 35857525442 (attempt 1) — explicit cleanup reconciles the Supervisor registry, and the unknown-instance restart preflight is classified `404` instead of `500`. Adjacent to this ADR, not an ADR 017 slice. | Published |
-| 2026-09-24 | **D4** — this documentation/tracking reconciliation: the ADR's status, restart contract, Slice C claim, acceptance-criteria identifiers, terminalization wording and orphan error code are aligned with published behavior. | Working tree (not committed / not published) |
-| — | **D5** — focused remediation **re-review** of D0–D4. NOT STARTED; next after D4 publication. | Open |
-| — | **Manual Owner Acceptance** — BLOCKED until D5 closes. **ADR 015** — FROZEN until remediation and Manual Owner Acceptance close. | Open |
+| 2026-09-24 | **D4** `68fdd63` + CI 36004107121 (attempt 1, 7/7 jobs, Linux `-race` step executed) — documentation/tracking reconciliation: the ADR's status, restart contract, Slice C claim, acceptance-criteria identifiers, terminalization wording and orphan error code were aligned with published behavior. | Published |
+| 2026-09-24 | **D5** — focused remediation **re-review** of the published D0–D4 chain (baseline `68fdd63`). Ran and was **NOT clean**: the lifecycle, arbitration, shutdown, cleanup and attribution contracts re-proved from current bytes, but the review returned findings D5-01…D5-13, of which it labeled four as documentation/tracking or contract-consistency blockers to acceptance (D6 re-adjudicated that split in the next row). | Complete — remediation blockers found |
+| 2026-09-24 | **D6** — bounded adjudication of the D5 blocker set, from current bytes. Acceptance blocker: **D5-01** only. Non-blocking but required before program closure: **D5-02, D5-03, D5-04, D5-10**. **F-3** was not established from repository evidence and no finding was invented. Canonical lifecycle error precedence fixed as **500 > 503 > 409**. | Design complete — blockers adjudicated |
+| 2026-09-24 | **D6.1** — this correction slice: D5-01 restart contract, D5-02 test inventory, D5-03 chronology, D5-04 precedence alignment (`lifecycleAPIError`) with regression pins, D5-10 F-2 wording, plus the stale `DismissOrphan` pointer. | Authored here; commit and publication are separate Owner gates, so nothing beyond this is asserted about its own SHA |
+| — | **D6.2** — focused re-review of exactly D5-01, D5-02, D5-03, D5-04, D5-10 and the F-3 disposition, plus non-regression of the corrected error mappings. | Not started; next after D6.1 publication |
+| — | **Manual Owner Acceptance** — BLOCKED until D6.1 is published and D6.2 passes. **ADR 015** — FROZEN until remediation and Manual Owner Acceptance close. | Open |
 
 **What was actually wrong.** Terminal-instance `RestartWithLaunch` could reach the spawn path without
 passing the arbitration boundary this ADR defines: the scan inside `arbitrate` looked at in-flight
@@ -412,7 +447,7 @@ that method. D1 closed it by introducing the restart claimant mode on the same b
 **What is NOT claimed here.** D2 and D3 are post-review remediation adjacent to this ADR and are not
 ADR 017 migration slices; the deferred BF-07 aspects (terminal-controller metadata retention,
 process-scoped historical restart) remain open debt, and this ADR's remediation program is **not**
-complete until D5 and Manual Owner Acceptance close.
+complete until D6.1 is published, D6.2 passes and Manual Owner Acceptance closes.
 
 ## Rejected Alternatives
 

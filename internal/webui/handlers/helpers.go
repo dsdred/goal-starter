@@ -107,21 +107,29 @@ func lifecycleAuditToken(err error) string {
 
 // lifecycleAPIError classifies one lifecycle error, or returns nil when the
 // class is not part of the lifecycle contract.
+//
+// Canonical precedence inside a multi-cause error is 500 > 503 > 409
+// (docs/API.md, "Lifecycle error mapping"), shared with the group classifier in
+// pipelines.go: an internal persistence/ownership/termination failure outranks
+// a retry-later shutdown refusal, because only the 500 class means GoAl's own
+// state may be unresolved and an unconfirmed termination must never be laundered
+// into a benign retry answer.
 func lifecycleAPIError(err error) *apierrors.APIError {
 	switch {
-	// Retry-later: the platform is going down (RB-015b abort = admitted then
-	// aborted; RejShuttingDown = rejected before admission).
-	case errors.Is(err, process.ErrLaunchAbortedByShutdown):
-		return apierrors.NewAPIError(apierrors.CodeServiceUnavailable, tokenLaunchAborted)
-	case process.HasRejectionReason(err, process.RejShuttingDown):
-		return apierrors.NewAPIError(apierrors.CodeServiceUnavailable, tokenShuttingDown)
 	// Server-side: the platform could not complete or confirm its own work.
+	// Evaluated first so a joined shutdown cause cannot hide it.
 	case errors.Is(err, process.ErrPersistenceFailure):
 		return apierrors.NewAPIError(apierrors.CodeInternalServer, tokenLaunchPersistFailed)
 	case errors.Is(err, process.ErrTerminationUnconfirmed):
 		return apierrors.NewAPIError(apierrors.CodeInternalServer, tokenTerminationUnconfirmed)
 	case errors.Is(err, process.ErrRollbackFailed):
 		return apierrors.NewAPIError(apierrors.CodeInternalServer, tokenRollbackFailed)
+	// Retry-later: the platform is going down (RB-015b abort = admitted then
+	// aborted; RejShuttingDown = rejected before admission).
+	case errors.Is(err, process.ErrLaunchAbortedByShutdown):
+		return apierrors.NewAPIError(apierrors.CodeServiceUnavailable, tokenLaunchAborted)
+	case process.HasRejectionReason(err, process.RejShuttingDown):
+		return apierrors.NewAPIError(apierrors.CodeServiceUnavailable, tokenShuttingDown)
 	// Bounded caller-visible conditions.
 	case errors.Is(err, process.ErrInstanceNotFound):
 		return apierrors.NewAPIError(apierrors.CodeNotFound, tokenInstanceNotFound)
