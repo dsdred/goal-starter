@@ -1,7 +1,8 @@
 # ADR 014: Portable Configuration — Variable Resolution and Secret-Safe Export/Import
 
 **Status:** Accepted — owner contract agreed 2026-09-13; **MVP complete and published 2026-09-15** (Slices 1, 2A, 2B, 3; final SHA `4624d81`, CI run `34889093837` 7/7 PASS). Deferred items (persisted variable store, secret-value export, merge/remap, relative-root) remain open for future Owner decisions.
-**Amended 2026-09-25 (implementation, pending Owner recheck):** the import conflict policy is **SKIP EXISTING**, replacing REJECT-on-collision — see [§ Import conflict policy — SKIP EXISTING](#import-conflict-policy--skip-existing-2026-09-25). The `REJECT` wording elsewhere in this ADR describes the original 2026-09-13 contract and is superseded on that one point.
+**Amended 2026-09-25 (implementation published the same day; Owner recheck completed 2026-09-26 — see the supersession line below):** the import conflict policy is **SKIP EXISTING**, replacing REJECT-on-collision — see [§ Import conflict policy — SKIP EXISTING](#import-conflict-policy--skip-existing-2026-09-25). The `REJECT` wording elsewhere in this ADR describes the original 2026-09-13 contract and is superseded on that one point.
+**Superseded as the current conflict / restore policy on 2026-09-26 by [ADR 018 — Portable Configuration Backup / Restore Semantics](018-portable-configuration-restore-semantics.md)** (plan classes NEW / UPDATE / UNCHANGED / BLOCKED), following Owner finding **OWNER-IMPORT-01**: skipping a same-ID entity cannot serve the product's backup/restore purpose. ADR 018 is **design accepted, implementation NOT STARTED**, so **SKIP EXISTING remains the shipped behavior of this repository** until ADR 018's implementation slices land and pass their own gates. Nothing in this ADR is rewritten: the 2026-09-13 decisions and the 2026-09-25 amendment stay as the historical record they are.
 **Date:** 2026-09-13
 **Related:** ADR 004 (Config vs Repository ownership), ADR 010 (Pipeline), ADR 011 (Windows Service — owner decision 3: no new path resolution without Owner contract), ADR 013 (Pipeline repeatable entries), ADR 009 (Hot-reload — restart-class fields), ADR 006 (Secure Credential Storage), ADR 007 (Audit Logging), ROADMAP P1 "Portable Configuration & Path Variables"
 
@@ -836,7 +837,7 @@ Slice 3 (Product UI / Acceptance) is implemented.
 
 ## Import conflict policy — SKIP EXISTING (2026-09-25)
 
-**Status:** implemented, pending Owner recheck. This section amends D15/D16 and supersedes the `REJECT` collision wording in this ADR. It does **not** close the ADR 014 remediation program and does **not** mark Manual Owner Acceptance as accepted.
+**Status:** **superseded as the current policy on 2026-09-26 by [ADR 018](018-portable-configuration-restore-semantics.md)** (NEW / UPDATE / UNCHANGED / BLOCKED) — still the **shipped** behavior until ADR 018's slices land. This section amends D15/D16 and supersedes the `REJECT` collision wording in this ADR. It documents the Owner recheck that resolved it: implemented and published 2026-09-25 (commits `23a1697` + `485cc6c`, exact-SHA CI run `36141385020` 7/7 PASS), rechecked by the Owner 2026-09-26, and adjudicated **FAIL for the product requirement** as **OWNER-IMPORT-01** — it satisfies re-import of an unchanged file but cannot restore modified entities. It does **not** close the ADR 014 remediation program and does **not** mark Manual Owner Acceptance as accepted.
 
 ### Why
 
