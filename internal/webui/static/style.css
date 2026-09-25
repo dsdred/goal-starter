@@ -433,6 +433,17 @@ code { font-family: var(--font-mono); font-size: 0.9em; background: var(--bg-inp
 /* Active toggle: visually distinct from the model autostart "A" badge and
    from the manual Start action (persistent setting, accent color). */
 .toggle-pipeline input:checked + .toggle-slider { background: var(--accent); }
+/* Pipeline AutoStart row. Inside .form-group the generic `label` rule wins on
+   specificity and forces display:block, which stacked the switch above its text
+   and left both off the Name/Models grid. Restore the inline switch layout and
+   attach the helper text to the same field. */
+#pipeline-form .form-group-autostart { margin-bottom: 1rem; }
+#pipeline-form label.pipeline-autostart {
+    display: inline-flex; align-items: center; gap: 8px; margin-bottom: 0;
+    font-size: 0.9rem; font-weight: 500; color: var(--text-secondary); cursor: pointer;
+}
+#pipeline-form label.pipeline-autostart:hover { color: var(--text-primary); }
+#pipeline-form .form-group-autostart .hint { display: block; margin-top: 4px; }
 .pl-chips-wrap { flex-wrap: wrap; gap: 2px; white-space: normal; }
 /* Per-entry model-name chip: constrain to the available width. At narrow
    viewports (125%/150% browser zoom, narrow desktop windows) an unconstrained
@@ -604,16 +615,47 @@ code { font-family: var(--font-mono); font-size: 0.9em; background: var(--bg-inp
 .portable-subsection { margin-bottom: 1rem; }
 .portable-subsection h4 { font-size: 0.8rem; font-weight: 600; margin-bottom: 0.4rem; color: var(--text-secondary); }
 .portable-export-row { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
-.portable-export-row select { flex: 1; min-width: 100px; max-width: 200px; }
-.portable-warning-box { margin: 0.8rem 0; padding: 0.6rem 0.8rem; background: var(--bg-card); border: 1px solid var(--warning); border-radius: var(--radius-sm); }
-.portable-warning-box .hint-text { margin: 0; font-size: 0.78rem; }
+.portable-export-row select {
+    flex: 1; min-width: 100px; max-width: 200px;
+    padding: 5px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm);
+    background: var(--bg-input); color: var(--text-primary);
+    font-family: var(--font); font-size: 0.8rem; color-scheme: dark;
+    transition: border-color 0.15s;
+}
+.portable-export-row select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-subtle); }
+[data-theme="light"] .portable-export-row select { color-scheme: light; }
+.portable-warning-box { margin: 0.8rem 0; padding: 0.5rem 0.7rem; background: transparent; border: 1px solid var(--border); border-left: 2px solid var(--warning); border-radius: var(--radius-sm); }
+.portable-warning-box .hint-text { margin: 0; font-size: 0.75rem; color: var(--text-muted); }
 .portable-import-actions { display: flex; gap: 0.5rem; margin-top: 0.6rem; }
 #portable-import-result { margin-top: 0.8rem; font-size: 0.82rem; }
 #portable-import-result .portable-result-success { color: var(--success); }
 #portable-import-result .portable-result-error { color: var(--danger); }
+#portable-import-result .portable-result-info { color: var(--text-secondary); }
+#portable-import-result .portable-plan-title { font-weight: 600; margin-bottom: 0.25rem; }
 #portable-import-result .portable-result-conflicts { margin: 0.4rem 0 0 1rem; padding: 0; }
 #portable-import-result .portable-result-conflicts li { margin-bottom: 0.2rem; word-break: break-word; }
-#portable-import-file { width: 100%; font-size: 0.8rem; }
+#portable-import-result .portable-plan-list { list-style: none; margin: 0.3rem 0; }
+#portable-import-result .portable-plan-list li { margin-bottom: 0.15rem; }
+#portable-import-result .portable-plan-blocked { list-style: none; margin: 0.3rem 0; }
+#portable-import-result .portable-plan-blocked li { margin-bottom: 0.25rem; word-break: break-word; }
+#portable-import-result .portable-plan-totals { margin: 0.3rem 0 0; color: var(--text-secondary); }
+#portable-import-result .portable-plan-details { margin-top: 0.4rem; color: var(--text-muted); }
+#portable-import-result .portable-plan-details summary { cursor: pointer; font-size: 0.75rem; }
+
+/* GoAl file picker: a real button drives the clipped native input, so the
+   visible caption comes from GoAl's own dictionaries instead of the OS locale. */
+.file-picker { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+.file-picker-btn { flex-shrink: 0; }
+.file-picker-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.file-picker-name {
+    flex: 1; min-width: 0; font-size: 0.8rem; color: var(--text-muted);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.file-picker-name.has-file { color: var(--text-primary); font-family: var(--font-mono); }
+.file-picker .file-picker-native, .form-group .file-picker-native {
+    position: absolute; width: 1px; height: 1px; padding: 0; border: none;
+    opacity: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap;
+}
 
 /* Runtime delete options */
 .rt-delete-options { display: flex; flex-direction: column; gap: 8px; margin: 1rem 0; }

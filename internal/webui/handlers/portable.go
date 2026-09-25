@@ -4,7 +4,6 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"strconv"
 
 	"github.com/dsdred/goal/internal/application/portable"
 	"github.com/dsdred/goal/internal/storage"
@@ -124,7 +123,7 @@ func (h *PortableHandler) Import(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		var conflict *portable.ErrConflict
 		if errors.As(err, &conflict) {
-			writeConflictError(w, conflict)
+			writeImportConflict(w, conflict)
 			return
 		}
 		var persistence *portable.ErrPersistence
@@ -141,12 +140,115 @@ func (h *PortableHandler) Import(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{
-		"dry_run":   dryRun,
-		"runtimes":  result.Runtimes,
-		"models":    result.Models,
-		"pipelines": result.Pipelines,
-	})
+	writeJSON(w, http.StatusOK, buildImportResponse(result))
+}
+
+// importTypeSummary is the per-entity-type import plan count set.
+type importTypeSummary struct {
+	Total    int `json:"total"`
+	New      int `json:"new"`
+	Existing int `json:"existing"`
+	Blocked  int `json:"blocked"`
+}
+
+// importCountsBody carries one count set across the three entity types.
+type importCountsBody struct {
+	Runtimes  int `json:"runtimes"`
+	Models    int `json:"models"`
+	Pipelines int `json:"pipelines"`
+}
+
+// importSummaryBody is the localized-summary source for the UI.
+type importSummaryBody struct {
+	Runtimes  importTypeSummary `json:"runtimes"`
+	Models    importTypeSummary `json:"models"`
+	Pipelines importTypeSummary `json:"pipelines"`
+}
+
+// importResponse is the import/import-plan body.
+//
+// The flat runtimes/models/pipelines fields are created counts, kept so the
+// body stays readable without walking the nested objects.
+type importResponse struct {
+	DryRun    bool                `json:"dry_run"`
+	CanImport bool                `json:"can_import"`
+	Summary   importSummaryBody   `json:"summary"`
+	Created   importCountsBody    `json:"created"`
+	Skipped   importCountsBody    `json:"skipped"`
+	Blocked   []portable.Conflict `json:"blocked"`
+	Runtimes  int                 `json:"runtimes"`
+	Models    int                 `json:"models"`
+	Pipelines int                 `json:"pipelines"`
+}
+
+type importConflictResponse struct {
+	importResponse
+	Error   string   `json:"error"`
+	Code    string   `json:"code"`
+	Details []string `json:"details,omitempty"`
+}
+
+func buildImportResponse(res *portable.ImportResult) importResponse {
+	blockedByType := map[string]int{}
+	for _, c := range res.Blocked {
+		blockedByType[c.Type]++
+	}
+	blocked := res.Blocked
+	if blocked == nil {
+		blocked = []portable.Conflict{}
+	}
+	return importResponse{
+		DryRun:    res.DryRun,
+		CanImport: res.CanImport,
+		Summary: importSummaryBody{
+			Runtimes:  summarize(res.Total.Runtimes, res.Created.Runtimes, res.Skipped.Runtimes, blockedByType["runtime"]),
+			Models:    summarize(res.Total.Models, res.Created.Models, res.Skipped.Models, blockedByType["model"]),
+			Pipelines: summarize(res.Total.Pipelines, res.Created.Pipelines, res.Skipped.Pipelines, blockedByType["pipeline"]),
+		},
+		Created: importCountsBody{
+			Runtimes:  res.Created.Runtimes,
+			Models:    res.Created.Models,
+			Pipelines: res.Created.Pipelines,
+		},
+		Skipped: importCountsBody{
+			Runtimes:  res.Skipped.Runtimes,
+			Models:    res.Skipped.Models,
+			Pipelines: res.Skipped.Pipelines,
+		},
+		Blocked:   blocked,
+		Runtimes:  res.Created.Runtimes,
+		Models:    res.Created.Models,
+		Pipelines: res.Created.Pipelines,
+	}
+}
+
+func summarize(total, new, existing, blocked int) importTypeSummary {
+	return importTypeSummary{Total: total, New: new, Existing: existing, Blocked: blocked}
+}
+
+// writeImportConflict answers a blocked import plan. Nothing was written. The
+// body carries the same plan shape as a successful validation so the caller can
+// distinguish file validity from repository conflicts, plus the legacy error
+// envelope fields.
+func writeImportConflict(w http.ResponseWriter, conflict *portable.ErrConflict) {
+	resp := importConflictResponse{
+		importResponse: buildImportResponse(conflict.Result),
+		Error:          conflict.Error(),
+		Code:           string(apierrors.CodeConflict),
+	}
+	details := make([]string, 0, len(conflict.Conflicts))
+	for _, c := range conflict.Conflicts {
+		detail := c.Type + " " + c.ID + ": " + c.Reason
+		if c.Name != "" {
+			detail += " (name: " + c.Name + ")"
+		}
+		if c.RelatedID != "" {
+			detail += " (existing: " + c.RelatedID + ")"
+		}
+		details = append(details, detail)
+	}
+	resp.Details = details
+	writeJSON(w, http.StatusConflict, resp)
 }
 
 func parseDryRun(r *http.Request) (bool, error) {
@@ -169,16 +271,4 @@ func parseDryRun(r *http.Request) (bool, error) {
 		return false, nil
 	}
 	return false, errors.New("dry_run must be 'true' or 'false'")
-}
-
-func writeConflictError(w http.ResponseWriter, conflict *portable.ErrConflict) {
-	details := make([]string, 0, len(conflict.Conflicts))
-	for _, c := range conflict.Conflicts {
-		detail := c.Type + " " + c.ID + ": " + c.Reason
-		if c.Name != "" {
-			detail += " (name: " + c.Name + ")"
-		}
-		details = append(details, detail)
-	}
-	writeAPIError(w, http.StatusConflict, apierrors.NewAPIError(apierrors.CodeConflict, "import rejected: "+strconv.Itoa(len(conflict.Conflicts))+" collision(s)", details...))
 }

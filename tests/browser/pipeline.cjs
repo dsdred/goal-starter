@@ -19,6 +19,39 @@ async function poll(pred, timeoutMs, intervalMs = 300) {
   }
 }
 
+// autostartLayout measures the pipeline AutoStart row against the form grid it
+// must sit in (OWNER-UX-02): one inline control, left-aligned with the Name and
+// Models fields, helper text belonging to the same field.
+async function autostartLayout(page) {
+  return page.evaluate(() => {
+    const form = document.getElementById('pipeline-form');
+    const row = form.querySelector('label.pipeline-autostart');
+    const group = row.closest('.form-group');
+    const nameGroup = document.getElementById('pl-name').closest('.form-group');
+    const modelsGroup = document.getElementById('pl-models-container').closest('.form-group');
+    const hint = group.querySelector('.hint');
+    const sw = row.querySelector('.toggle-switch').getBoundingClientRect();
+    const tx = row.querySelector('span[data-i18n="pipelines.field.active"]').getBoundingClientRect();
+    const g = group.getBoundingClientRect();
+    const cs = getComputedStyle(row);
+    return {
+      display: cs.display,
+      alignItems: cs.alignItems,
+      groupLeft: g.left,
+      nameLeft: nameGroup.getBoundingClientRect().left,
+      modelsLeft: modelsGroup.getBoundingClientRect().left,
+      hintText: hint ? hint.textContent.trim() : null,
+      hintLeft: hint ? hint.getBoundingClientRect().left : null,
+      hintBottom: hint ? hint.getBoundingClientRect().bottom : null,
+      groupBottom: g.bottom,
+      switchTextGap: tx.left - sw.right,
+      sameLine: Math.max(sw.top, tx.top) < Math.min(sw.bottom, tx.bottom),
+      labelText: row.querySelector('span[data-i18n="pipelines.field.active"]').textContent.trim(),
+      checked: row.querySelector('input[type=checkbox]').checked,
+    };
+  });
+}
+
 async function main() {
   const ws = H.makeWorkspace('pipeline');
   const goalBin = H.buildGoal(ws);
@@ -166,6 +199,18 @@ async function main() {
     const addText = ((await page.locator('#pl-models-container .pl-add').first().textContent() || '').trim());
     const addKey = await page.evaluate(() => t('pipelines.btn.add_model'));
     suite.log('2.13 Add-model continuation control present', addText === addKey && addText !== '', `text=${JSON.stringify(addText)}`);
+
+    // ── (OWNER-UX-02) AutoStart row: inline control aligned with the grid ──
+    const layCreate = await autostartLayout(page);
+    suite.log('2.13a AutoStart switch and text form one inline control', layCreate.display === 'inline-flex' && layCreate.alignItems === 'center' && layCreate.sameLine && layCreate.switchTextGap > 0, JSON.stringify(layCreate));
+    suite.log('2.13b AutoStart row aligns with Name and Models fields', Math.abs(layCreate.groupLeft - layCreate.nameLeft) < 1 && Math.abs(layCreate.groupLeft - layCreate.modelsLeft) < 1, `auto=${layCreate.groupLeft} name=${layCreate.nameLeft} models=${layCreate.modelsLeft}`);
+    suite.log('2.13c Helper text belongs to the AutoStart field', layCreate.hintText !== null && Math.abs(layCreate.hintLeft - layCreate.groupLeft) < 1 && layCreate.hintBottom <= layCreate.groupBottom + 1, `hintLeft=${layCreate.hintLeft} groupLeft=${layCreate.groupLeft}`);
+    suite.log('2.13d Helper text is localized by GoAl', layCreate.hintText === (await page.evaluate(() => t('pipelines.field.active_hint'))), `got=${JSON.stringify(layCreate.hintText)}`);
+    // Switch and label act as one control: clicking the text toggles the input.
+    await page.click('#pipeline-form label.pipeline-autostart span[data-i18n="pipelines.field.active"]');
+    suite.log('2.13e Clicking the AutoStart label toggles the setting', (await autostartLayout(page)).checked === true);
+    await page.click('#pipeline-form label.pipeline-autostart span[data-i18n="pipelines.field.active"]');
+    suite.log('2.13f Clicking again toggles it back', (await autostartLayout(page)).checked === false);
 
     // ── Build: block 1 = model A, Custom args ──
     await page.fill('#pl-name', 'Cluster A');
@@ -324,6 +369,33 @@ async function main() {
     await poll(async () => ((await page.locator('#pipeline-list .model-row').first().textContent() || '')).includes('Cluster A2'), 8000);
     suite.log('9.4 List shows the new name', (await page.locator('#pipeline-list .model-row').first().textContent() || '').includes('Cluster A2'));
     await H.screenshot(page, ws, '06-pipeline-edited');
+
+    // ═══ SECTION 9b: AutoStart row in the Edit modal (OWNER-UX-02) ═══
+    await actionClick('#pipeline-list .model-row', 'editPipeline');
+    await page.waitForTimeout(400);
+    const layEdit = await autostartLayout(page);
+    suite.log('9b.1 Edit modal keeps the same inline, grid-aligned row', layEdit.display === 'inline-flex' && layEdit.sameLine && Math.abs(layEdit.groupLeft - layEdit.nameLeft) < 1 && Math.abs(layEdit.groupLeft - layEdit.modelsLeft) < 1, JSON.stringify(layEdit));
+    suite.log('9b.2 Edit prefills AutoStart from the stored flag (semantics unchanged)', layEdit.checked === true, `checked=${layEdit.checked}`);
+    const enLabels = await page.evaluate(async () => {
+      await window.setLanguage('en');
+      const row = document.querySelector('#pipeline-form label.pipeline-autostart');
+      const out = {
+        label: row.querySelector('span[data-i18n="pipelines.field.active"]').textContent.trim(),
+        hint: row.closest('.form-group').querySelector('.hint').textContent.trim(),
+        want: t('pipelines.field.active'),
+        wantHint: t('pipelines.field.active_hint'),
+        checked: row.querySelector('input[type=checkbox]').checked,
+      };
+      await window.setLanguage('ru');
+      return out;
+    });
+    suite.log('9b.3 EN renders GoAl-owned AutoStart label and helper', enLabels.label === enLabels.want && enLabels.hint === enLabels.wantHint && enLabels.label !== layEdit.labelText, `label=${JSON.stringify(enLabels.label)} hint=${JSON.stringify(enLabels.hint)}`);
+    suite.log('9b.4 Language switch does not disturb the setting', enLabels.checked === true);
+    await page.evaluate(() => closeModal('pipeline-modal'));
+    await page.waitForTimeout(200);
+    const afterEdit = (await api('GET', '/api/v1/pipelines')).data.find(x => x.id === pipeId);
+    suite.log('9b.5 Closing the editor wrote nothing', afterEdit && afterEdit.active === true && afterEdit.name === 'Cluster A2', `got=${JSON.stringify(afterEdit && { a: afterEdit.active, n: afterEdit.name })}`);
+    await H.screenshot(page, ws, '06b-autostart-row');
 
     // ═══ SECTION 10: Duplicate model ×2 with DIFFERENT custom args ═══
     await page.click('#view-pipelines .view-header .btn-primary');

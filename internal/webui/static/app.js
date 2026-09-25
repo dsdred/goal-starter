@@ -2479,7 +2479,6 @@ async function saveSettingsEdit() {
 // ─── Portable Configuration ─────────────────────────────────────────────────
 
 let portableImportFileContent = null;
-let portableImportValidated = false;
 
 function portableUpdateEntitySelector() {
     const scopeSel = document.getElementById('portable-export-scope');
@@ -2544,42 +2543,66 @@ async function portableExport() {
     }
 }
 
+// The visible picker is a GoAl button; the native input stays a real
+// input[type=file] (so selection semantics are unchanged) but clipped out of
+// view, which keeps its caption under GoAl i18n control instead of the OS.
+function portableChooseFile() {
+    const input = document.getElementById('portable-import-file');
+    if (input) input.click();
+}
+
+function portableSetFileLabel(name) {
+    const el = document.getElementById('portable-import-filename');
+    if (!el) return;
+    if (name) {
+        delete el.dataset.i18n;
+        el.textContent = name;
+        el.classList.add('has-file');
+    } else {
+        el.dataset.i18n = 'portable.import.no_file';
+        el.textContent = t('portable.import.no_file');
+        el.classList.remove('has-file');
+    }
+}
+
 function portableOnFileChange() {
     const fileInput = document.getElementById('portable-import-file');
     const file = fileInput.files[0];
     portableImportFileContent = null;
-    portableImportValidated = false;
     const iBtn = document.getElementById('portable-import-btn');
+    const vBtn = document.getElementById('portable-validate-btn');
     const result = document.getElementById('portable-import-result');
     if (iBtn) iBtn.disabled = true;
     if (result) { result.style.display = 'none'; result.innerHTML = ''; }
-    if (!file) return;
+    if (!file) { portableSetFileLabel(null); return; }
+    portableSetFileLabel(file.name);
     if (file.size > 10 * 1024 * 1024) {
-        portableShowResult('error', t('portable.import.file_too_large'));
+        portableShowResult('error', esc(t('portable.import.file_too_large')));
         fileInput.value = '';
-        document.getElementById('portable-validate-btn').disabled = true;
+        portableSetFileLabel(null);
+        if (vBtn) vBtn.disabled = true;
         return;
     }
     const reader = new FileReader();
     reader.onload = function () {
         portableImportFileContent = reader.result;
-        document.getElementById('portable-validate-btn').disabled = false;
+        if (vBtn) vBtn.disabled = false;
     };
     reader.onerror = function () {
-        portableShowResult('error', t('portable.import.invalid'));
+        portableShowResult('error', esc(t('portable.import.invalid')));
     };
     reader.readAsText(file);
 }
 
 function portableResetImport() {
     portableImportFileContent = null;
-    portableImportValidated = false;
     const vBtn = document.getElementById('portable-validate-btn');
     const iBtn = document.getElementById('portable-import-btn');
     const fileInput = document.getElementById('portable-import-file');
     if (vBtn) vBtn.disabled = true;
     if (iBtn) iBtn.disabled = true;
     if (fileInput) fileInput.value = '';
+    portableSetFileLabel(null);
     const result = document.getElementById('portable-import-result');
     if (result) { result.style.display = 'none'; result.innerHTML = ''; }
 }
@@ -2590,13 +2613,94 @@ function portableShowResult(type, html) {
     el.style.display = '';
 }
 
-function portableShowConflicts(details) {
-    let html = '<div class="portable-result-error">' + t('portable.import.conflict') + '</div><ul class="portable-result-conflicts">';
-    details.forEach(function (d) { html += '<li>' + esc(d) + '</li>'; });
-    html += '</ul>';
-    const el = document.getElementById('portable-import-result');
-    el.innerHTML = html;
-    el.style.display = '';
+// countsTotal sums one {runtimes, models, pipelines} count object.
+function countsTotal(obj) {
+    if (!obj) return 0;
+    return (obj.runtimes || 0) + (obj.models || 0) + (obj.pipelines || 0);
+}
+
+// planListHtml renders the per-type NEW/EXISTING breakdown. It is shown for
+// every outcome that parsed a valid file — the plan is about the repository,
+// not about the file being correct or not.
+function planListHtml(summary) {
+    if (!summary) return '';
+    const rows = [
+        ['runtimes', summary.runtimes, 'portable.import.plan.runtimes'],
+        ['models', summary.models, 'portable.import.plan.models'],
+        ['pipelines', summary.pipelines, 'portable.import.plan.pipelines'],
+    ];
+    const lines = [];
+    rows.forEach(function (row) {
+        const s = row[1];
+        if (!s || !s.total) return;
+        // new + existing + blocked always adds up to the type total, so a
+        // blocked entity is visible in the plan as well as in the reason list.
+        const blocked = s.blocked ? t('portable.import.plan.blocked_suffix', { blocked: s.blocked }) : '';
+        lines.push('<li>' + esc(t(row[2], { new: s.new, existing: s.existing }) + blocked) + '</li>');
+    });
+    return lines.length ? '<ul class="portable-plan-list">' + lines.join('') + '</ul>' : '';
+}
+
+function planTotalsHtml(created, skipped) {
+    const parts = [];
+    if (created) parts.push(esc(t('portable.import.plan.will_import', { count: created })));
+    if (skipped) parts.push(esc(t('portable.import.plan.will_skip', { count: skipped })));
+    return parts.length ? '<p class="portable-plan-totals">' + parts.join(' · ') + '</p>' : '';
+}
+
+// BLOCKED_KEYS maps the storage reason codes to user-facing text. An unknown
+// code falls back to the raw-reason frame rather than leaking a missing key.
+const PORTABLE_BLOCKED_KEYS = {
+    runtime_name_taken_other_id: 'portable.import.blocked_reason.runtime_name',
+    runtime_ref_unresolved: 'portable.import.blocked_reason.runtime_ref',
+    model_ref_unresolved: 'portable.import.blocked_reason.model_ref',
+    dependency_blocked: 'portable.import.blocked_reason.dependency',
+};
+
+function blockedReasonText(c) {
+    const key = PORTABLE_BLOCKED_KEYS[c.reason] || 'portable.import.blocked_reason.other';
+    return t(key, { name: c.name || c.id, ref: c.related_id || '', id: c.id, reason: c.reason });
+}
+
+// technicalDetailsHtml keeps the machine-readable conflict strings available for
+// diagnostics below the localized explanation, never instead of it.
+function technicalDetailsHtml(items) {
+    if (!items || !items.length) return '';
+    let html = '<details class="portable-plan-details"><summary>' + esc(t('portable.import.details')) + '</summary><ul class="portable-result-conflicts">';
+    items.forEach(function (c) {
+        let line = c.type + ' ' + c.id + ': ' + c.reason;
+        if (c.name) line += ' (name: ' + c.name + ')';
+        if (c.related_id) line += ' (existing: ' + c.related_id + ')';
+        html += '<li>' + esc(line) + '</li>';
+    });
+    return html + '</ul></details>';
+}
+
+// portableShowPlan renders an import plan returned by a request that DID parse
+// the file. Repository conflicts are shown as a plan with reasons, never as a
+// bare "invalid configuration", so file validity and repository state stay two
+// separate statements. The Import button follows the server-side can_import flag.
+function portableShowPlan(d) {
+    const iBtn = document.getElementById('portable-import-btn');
+    const blocked = Array.isArray(d.blocked) ? d.blocked : [];
+    const created = countsTotal(d.created);
+    const skipped = countsTotal(d.skipped);
+    if (iBtn) iBtn.disabled = true;
+    if (blocked.length) {
+        let html = '<p class="portable-plan-title">' + esc(t('portable.import.blocked_title')) + '</p>' +
+            planListHtml(d.summary) + '<ul class="portable-plan-blocked">';
+        blocked.forEach(function (c) { html += '<li>' + esc(blockedReasonText(c)) + '</li>'; });
+        portableShowResult('error', html + '</ul>' + technicalDetailsHtml(blocked));
+        return;
+    }
+    if (!created) {
+        portableShowResult('info', '<p class="portable-plan-title">' + esc(t('portable.import.nothing_to_import')) + '</p>' +
+            planListHtml(d.summary) + planTotalsHtml(0, skipped));
+        return;
+    }
+    portableShowResult('success', '<p class="portable-plan-title">' + esc(t('portable.import.plan_valid')) + '</p>' +
+        planListHtml(d.summary) + planTotalsHtml(created, skipped));
+    if (iBtn) iBtn.disabled = !d.can_import;
 }
 
 async function portableValidate() {
@@ -2607,7 +2711,6 @@ async function portableValidate() {
     iBtn.disabled = true;
     const oldLabel = vBtn.textContent;
     vBtn.textContent = t('common.loading');
-    portableImportValidated = false;
     const result = document.getElementById('portable-import-result');
     result.style.display = 'none';
     result.innerHTML = '';
@@ -2617,26 +2720,20 @@ async function portableValidate() {
             headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
             body: portableImportFileContent
         });
-        if (!r.ok) {
-            let msg = r.statusText;
-            let code = '';
-            let details = null;
-            try {
-                const d = await r.json();
-                msg = d.error || msg;
-                code = d.code || '';
-                if (Array.isArray(d.details)) details = d.details;
-            } catch {}
-            if (r.status === 409 && details) {
-                portableShowConflicts(details);
-            } else {
-                portableShowResult('error', esc(friendlyError({ message: msg, code: code, status: r.status })));
-            }
+        let d = null;
+        try { d = await r.json(); } catch {}
+        const detail = friendlyError({ message: (d && d.error) || r.statusText, code: (d && d.code) || '', status: r.status });
+        if (r.status === 200 || r.status === 409) {
+            portableShowPlan(d || {});
         } else {
-            const d = await r.json();
-            portableImportValidated = true;
-            portableShowResult('success', esc(t('portable.import.dryrun_success', { runtimes: d.runtimes, models: d.models, pipelines: d.pipelines })));
-            iBtn.disabled = false;
+            // The heading must not claim more than the status supports: 400 and
+            // 413 say something about the file, a server fault says something
+            // about the check, and neither is a repository conflict.
+            const heading = r.status === 400 ? 'portable.import.file_invalid'
+                : r.status === 413 ? 'portable.import.file_too_large'
+                    : 'portable.import.validate_failed';
+            portableShowResult('error', '<p class="portable-plan-title">' + esc(t(heading)) + '</p>' +
+                '<ul class="portable-plan-list"><li>' + esc(detail) + '</li></ul>');
         }
     } catch (e) {
         portableShowResult('error', esc(friendlyError(e)));
@@ -2661,21 +2758,18 @@ async function portableImport() {
                 body: content
             });
             if (!r.ok) {
-                let msg = r.statusText;
-                let code = '';
-                let details = null;
-                try {
-                    const d = await r.json();
-                    msg = d.error || msg;
-                    code = d.code || '';
-                    if (Array.isArray(d.details)) details = d.details;
-                } catch {}
+                let d = null;
+                try { d = await r.json(); } catch {}
                 closeConfirm();
-                if (r.status === 409 && details) {
-                    portableShowConflicts(details);
+                if (r.status === 409) {
+                    // The repository moved after validation: the fresh plan is
+                    // shown instead of the stale one, and nothing was written.
+                    portableShowPlan(d || {});
                     showToast(t('portable.import.stale'), 'warning');
                 } else {
-                    portableShowResult('error', esc(friendlyError({ message: msg, code: code, status: r.status })));
+                    const msg = friendlyError({ message: (d && d.error) || r.statusText, code: (d && d.code) || '', status: r.status });
+                    portableShowResult('error', '<p class="portable-plan-title">' + esc(t('portable.import.error')) + '</p>' +
+                        '<ul class="portable-plan-list"><li>' + esc(msg) + '</li></ul>');
                     showToast(t('portable.import.error'), 'error');
                 }
                 iBtn.disabled = true;
@@ -2683,9 +2777,12 @@ async function portableImport() {
             }
             const d = await r.json();
             closeConfirm();
+            const created = countsTotal(d.created);
+            const skipped = countsTotal(d.skipped);
             portableResetImport();
-            portableShowResult('success', esc(t('portable.import.success', { runtimes: d.runtimes, models: d.models, pipelines: d.pipelines })));
-            showToast(t('portable.import.success', { runtimes: d.runtimes, models: d.models, pipelines: d.pipelines }), 'success');
+            const done = t('portable.import.success', { created: created, skipped: skipped });
+            portableShowResult('success', '<p class="portable-plan-title">' + esc(done) + '</p>');
+            showToast(done, 'success');
             await reloadAllData();
             renderAll();
         } catch (e) {
@@ -2785,6 +2882,7 @@ window.plDrop = plDrop;
 window.portableSelectScope = portableSelectScope;
 window.portableExport = portableExport;
 window.portableOnFileChange = portableOnFileChange;
+window.portableChooseFile = portableChooseFile;
 window.portableValidate = portableValidate;
 window.portableImport = portableImport;
 window.i18nMissing = i18nMissing;

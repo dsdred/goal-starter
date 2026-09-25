@@ -349,7 +349,7 @@ func TestImport_MissingDependency(t *testing.T) {
 	}
 }
 
-func TestImport_Collision(t *testing.T) {
+func TestImport_ExistingIDSkipped_NoOverwrite(t *testing.T) {
 	router, repo := newPortableTestRouter(t)
 	if err := repo.CreateRuntime(&storage.RuntimeEntry{ID: "rt-new", Name: "Existing", Executable: "/bin/existing"}); err != nil {
 		t.Fatal(err)
@@ -359,8 +359,23 @@ func TestImport_Collision(t *testing.T) {
 	resp := httptest.NewRecorder()
 	router.ServeHTTP(resp, req)
 
-	if resp.Code != http.StatusConflict {
-		t.Fatalf("status = %d, want 409: %s", resp.Code, resp.Body.String())
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", resp.Code, resp.Body.String())
+	}
+	body := decodeImportBody(t, resp)
+	if body.Created.Runtimes != 0 || body.Skipped.Runtimes != 1 {
+		t.Fatalf("created/skipped = %+v / %+v", body.Created, body.Skipped)
+	}
+	if body.CanImport {
+		t.Fatal("nothing-to-import must not report can_import")
+	}
+	if body.Runtimes != 0 {
+		t.Fatalf("flat runtimes must be the created count, got %v", body.Runtimes)
+	}
+
+	rt, _ := repo.GetRuntime("rt-new")
+	if rt.Name != "Existing" || rt.Executable != "/bin/existing" {
+		t.Fatalf("existing runtime overwritten: %+v", rt)
 	}
 }
 
@@ -530,8 +545,8 @@ type failingImportRepo struct {
 	storage.Repository
 }
 
-func (f *failingImportRepo) ImportGraph(runtimes []*storage.RuntimeEntry, models []*storage.ModelEntry, pipelines []*storage.PipelineEntry) error {
-	return fmt.Errorf("injected persistence failure")
+func (f *failingImportRepo) ImportGraph(runtimes []*storage.RuntimeEntry, models []*storage.ModelEntry, pipelines []*storage.PipelineEntry) (*storage.ImportGraphPlan, error) {
+	return nil, fmt.Errorf("injected persistence failure")
 }
 
 func TestImport_PersistenceFailure_HTTP500(t *testing.T) {

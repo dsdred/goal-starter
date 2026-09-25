@@ -2,20 +2,22 @@ package portable
 
 import (
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/dsdred/goal/internal/domain"
 	"github.com/dsdred/goal/internal/storage"
 )
 
-// ErrConflict is returned when one or more collisions are detected.
+// ErrConflict is returned when one or more blocking conflicts are detected.
+// Result carries the plan that produced them so callers can report created and
+// skipped counts alongside the blocking outcome.
 type ErrConflict struct {
 	Conflicts []Conflict
+	Result    *ImportResult
 }
 
 func (e *ErrConflict) Error() string {
-	return fmt.Sprintf("import rejected: %d collision(s)", len(e.Conflicts))
+	return fmt.Sprintf("import rejected: %d blocking conflict(s)", len(e.Conflicts))
 }
 
 // ErrPersistence is returned when the durable write fails.
@@ -27,6 +29,20 @@ func (e *ErrPersistence) Error() string {
 	return "import persistence failure: " + e.Err.Error()
 }
 
+// ImportResult is the outcome of an import plan, for a dry run or a real import.
+//
+// For a dry run Created/Skipped describe what the import would do; for a real
+// import they describe what it actually did. Skipped counts are existing
+// entities left untouched, never imported ones.
+type ImportResult struct {
+	DryRun    bool
+	CanImport bool
+	Created   storage.ImportCounts
+	Skipped   storage.ImportCounts
+	Total     storage.ImportCounts
+	Blocked   []Conflict
+}
+
 // ImportOrchestrator coordinates import validation and execution.
 type ImportOrchestrator struct {
 	repo storage.Repository
@@ -36,53 +52,90 @@ func NewImportOrchestrator(repo storage.Repository) *ImportOrchestrator {
 	return &ImportOrchestrator{repo: repo}
 }
 
-// ImportResult is the result of a successful import or dry-run.
-type ImportResult struct {
-	Runtimes  int `json:"runtimes"`
-	Models    int `json:"models"`
-	Pipelines int `json:"pipelines"`
-}
-
-// Import performs a full import of the bundle. If dryRun is true, validation
-// and collision detection are performed but zero mutation occurs.
+// Import plans a bundle against current repository state and, unless dryRun is
+// set, applies it with the SKIP EXISTING policy.
+//
+// A dry run is advisory: it plans against a snapshot taken without the write
+// lock. A real import always rebuilds the plan under that lock inside
+// Repository.ImportGraph, so a validation result that went stale in the
+// meantime cannot produce an unsafe write.
 func (o *ImportOrchestrator) Import(bundle *Bundle, dryRun bool) (*ImportResult, error) {
 	if err := validateBundle(bundle); err != nil {
 		return nil, err
 	}
 
+	runtimes, models, pipelines := convertBundle(bundle)
+
 	if dryRun {
-		conflicts, err := o.detectConflicts(bundle)
+		state, err := o.snapshot()
 		if err != nil {
 			return nil, err
 		}
-		if len(conflicts) > 0 {
-			return nil, &ErrConflict{Conflicts: conflicts}
-		}
-		return &ImportResult{
-			Runtimes:  len(bundle.Runtimes),
-			Models:    len(bundle.Models),
-			Pipelines: len(bundle.Pipelines),
-		}, nil
+		plan := storage.PlanGraphImport(state, runtimes, models, pipelines)
+		return planToResult(plan, true), nil
 	}
 
-	runtimes, models, pipelines := convertBundle(bundle)
-	if err := o.repo.ImportGraph(runtimes, models, pipelines); err != nil {
+	plan, err := o.repo.ImportGraph(runtimes, models, pipelines)
+	if err != nil {
 		var conflictErr *storage.ErrImportConflict
 		if errorsAs(err, &conflictErr) {
 			conflicts := make([]Conflict, len(conflictErr.Conflicts))
 			for i, c := range conflictErr.Conflicts {
-				conflicts[i] = Conflict{Type: c.Type, ID: c.ID, Reason: c.Reason, Name: c.Name}
+				conflicts[i] = Conflict{
+					Type:      c.Type,
+					ID:        c.ID,
+					Reason:    c.Reason,
+					Name:      c.Name,
+					RelatedID: c.RelatedID,
+				}
 			}
-			return nil, &ErrConflict{Conflicts: conflicts}
+			// ImportGraph reports the plan it rejected along with the conflict, so
+			// the caller can show the same summary a validation would.
+			return nil, &ErrConflict{Conflicts: conflicts, Result: planToResult(plan, false)}
 		}
 		return nil, &ErrPersistence{Err: err}
 	}
 
-	return &ImportResult{
-		Runtimes:  len(bundle.Runtimes),
-		Models:    len(bundle.Models),
-		Pipelines: len(bundle.Pipelines),
-	}, nil
+	return planToResult(plan, false), nil
+}
+
+// snapshot reads the current graph state for an advisory plan. Each list is
+// individually consistent; the authoritative plan is rebuilt under the lock.
+func (o *ImportOrchestrator) snapshot() (storage.ImportGraphState, error) {
+	var s storage.ImportGraphState
+	runtimes, err := o.repo.ListRuntimes()
+	if err != nil {
+		return s, err
+	}
+	models, err := o.repo.ListModels()
+	if err != nil {
+		return s, err
+	}
+	pipelines, err := o.repo.ListPipelines()
+	if err != nil {
+		return s, err
+	}
+	return storage.ImportGraphState{Runtimes: runtimes, Models: models, Pipelines: pipelines}, nil
+}
+
+func planToResult(plan *storage.ImportGraphPlan, dryRun bool) *ImportResult {
+	res := &ImportResult{
+		DryRun:    dryRun,
+		Created:   plan.Created,
+		Skipped:   plan.Skipped,
+		Total:     plan.Total,
+		CanImport: !plan.HasBlocked() && plan.WillCreate(),
+	}
+	for _, c := range plan.Blocked {
+		res.Blocked = append(res.Blocked, Conflict{
+			Type:      c.Type,
+			ID:        c.ID,
+			Name:      c.Name,
+			Reason:    c.Reason,
+			RelatedID: c.RelatedID,
+		})
+	}
+	return res
 }
 
 func errorsAs(err error, target **storage.ErrImportConflict) bool {
@@ -98,62 +151,6 @@ func errorsAs(err error, target **storage.ErrImportConflict) bool {
 		err = u.Unwrap()
 	}
 	return false
-}
-
-// detectConflicts checks the bundle against current repository state.
-// For dry-run this is advisory (no lock held); for real import the
-// authoritative check happens under the write lock inside ImportGraph.
-func (o *ImportOrchestrator) detectConflicts(b *Bundle) ([]Conflict, error) {
-	var conflicts []Conflict
-
-	existingRuntimes, err := o.repo.ListRuntimes()
-	if err != nil {
-		return nil, err
-	}
-	existingModels, err := o.repo.ListModels()
-	if err != nil {
-		return nil, err
-	}
-	existingPipelines, err := o.repo.ListPipelines()
-	if err != nil {
-		return nil, err
-	}
-
-	rtIDSet := make(map[string]bool, len(existingRuntimes))
-	rtNameSet := make(map[string]string, len(existingRuntimes))
-	for _, rt := range existingRuntimes {
-		rtIDSet[rt.ID] = true
-		rtNameSet[strings.ToLower(rt.Name)] = rt.ID
-	}
-	mIDSet := make(map[string]bool, len(existingModels))
-	for _, m := range existingModels {
-		mIDSet[m.ID] = true
-	}
-	pIDSet := make(map[string]bool, len(existingPipelines))
-	for _, p := range existingPipelines {
-		pIDSet[p.ID] = true
-	}
-
-	for _, rt := range b.Runtimes {
-		if rtIDSet[rt.ID] {
-			conflicts = append(conflicts, Conflict{Type: "runtime", ID: rt.ID, Reason: "id_exists"})
-		}
-		if _, exists := rtNameSet[strings.ToLower(rt.Name)]; exists {
-			conflicts = append(conflicts, Conflict{Type: "runtime", ID: rt.ID, Reason: "name_exists", Name: rt.Name})
-		}
-	}
-	for _, m := range b.Models {
-		if mIDSet[m.ID] {
-			conflicts = append(conflicts, Conflict{Type: "model", ID: m.ID, Reason: "id_exists"})
-		}
-	}
-	for _, p := range b.Pipelines {
-		if pIDSet[p.ID] {
-			conflicts = append(conflicts, Conflict{Type: "pipeline", ID: p.ID, Reason: "id_exists"})
-		}
-	}
-
-	return conflicts, nil
 }
 
 func convertBundle(b *Bundle) ([]*domain.RuntimeEntry, []*domain.ModelEntry, []*domain.PipelineEntry) {

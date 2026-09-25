@@ -521,7 +521,7 @@ HF_HOME=${GOAL_DATA}/hf-cache
 - **Restart** picks up environment changes: if you set `MY_VAR=B` after launching with `MY_VAR=A`, a Restart uses `B`.
 - **Undefined** `${MISSING}` or **malformed** `${123}` refuses the launch with a clear diagnostic.
 - **No recursion:** if `A` is set to `${B}`, then `${A}` resolves to the literal text `${B}` (not to B's value).
-- **Export/Import** of configurations is **not yet available**.
+- **Export/Import** carries these references **as written**: the bundle stores the raw `${VAR}` text, not the resolved path, so the target machine resolves it at launch time. Environment **values** are never exported (only their key names, as advisory metadata). See [Portable Configuration](#portable-configuration-export--import).
 
 ### Creating a Model
 
@@ -789,10 +789,13 @@ Navigate to **Settings → Portable Configuration**.
 3. Click **Download**. The browser saves `goal-portable-config.json`.
 
 **Import:**
-1. Click the file picker and select a `goal-portable-config.json` file.
-2. Click **Validate** (dry-run). The UI shows the entity counts or conflict details.
-3. If validation passes, click **Import** and confirm in the dialog.
-4. The imported entities appear immediately in the UI.
+1. Click **Choose file** and select a `goal-portable-config.json` file. The chosen file name is shown next to the button.
+2. Click **Validate**. The UI shows two separate things: whether the **file is valid**, and the **import plan** — per entity type how many entities are new, how many already exist in the repository, and how many are blocked. It also shows the totals *Will be imported* / *Will be skipped*.
+3. **Import** is enabled only when the plan contains at least one new entity and no blocked entities. If everything already exists, the UI reports "All entities already exist. Nothing to import." and Import stays disabled. If any entity is blocked, the UI reports "Configuration is valid, but the import cannot proceed" with a readable reason per blocked entity, and Import stays disabled.
+4. If Import is enabled, click **Import** and confirm in the dialog.
+5. The result states how many entities were **created** and how many were **skipped** (already present). The created entities appear immediately in the UI.
+
+Importing the same file twice is safe: the second run skips everything and changes nothing.
 
 The same API is available via `curl` for scripting:
 
@@ -817,7 +820,7 @@ The downloaded file is named `goal-portable-config.json`. It contains the full d
 ### Import
 
 ```bash
-# Dry-run (validates, checks collisions, but does NOT modify anything)
+# Dry-run (validates the file and returns the import plan, but does NOT modify anything)
 curl -b "goal_session=..." -X POST \
   "http://127.0.0.1:8088/api/v1/import?dry_run=true" \
   -d @goal-portable-config.json
@@ -830,13 +833,16 @@ curl -b "goal_session=..." -X POST -H "X-CSRF-Token: <token>" \
 
 **Import behavior:**
 - The exported JSON file can be imported directly as the POST body.
-- Import does **not** overwrite existing entities. If any ID or runtime name collides, the entire import is rejected (HTTP 409).
-- Import is **atomic**: either all entities are created or none are.
+- Conflict policy is **SKIP EXISTING**. Existing entities are never modified: there is no overwrite, merge, update, copy, or automatic ID remapping. An entity whose identity already exists in the repository is reported as *existing* and skipped, and the file's IDs are used as-is for reference matching.
+- Identity: a Runtime exists when its ID is present (a Runtime whose **name** is taken by a *different* ID is a blocking conflict, because names are unique case-insensitively); a Model or Pipeline exists when its ID is present.
+- Blocked entities are those that can be neither created nor safely skipped: a runtime whose **name** is already owned by a different ID, and any entity that depends on a blocked one. A bundle with at least one blocked entity imports **nothing** (HTTP 409 with the full plan and a reason per blocked entity). A reference to an entity that is not in the file at all is a file-validity error (HTTP 400), not a blocked plan.
+- Skip decisions are dependency-aware: a new entity is only created when every entity it references is either created in the same import or already exists in the repository.
+- Import is **atomic**: either all planned entities are created or none are. A plan with nothing to create leaves the repository file untouched.
+- The server **revalidates and rebuilds the plan at import time** under the repository write lock; a dry-run is advisory only. If the repository changed in between, the real import re-plans and may report a conflict instead of importing.
 - Import does **not** launch models or pipelines immediately. Preserved `Active`/`AutoStart` flags apply on the next normal server startup.
 - `environment_keys` in the bundle are advisory only and are NOT restored as Environment entries on the target machine.
 - Variable references (`${VAR}`) are validated for syntax. Undefined variables are accepted (they will be resolved at launch time on the target machine).
 - Maximum file size: 10 MiB.
-- Dry-run is advisory: repository changes between dry-run and real import may cause the real import to fail with 409.
 
 ---
 

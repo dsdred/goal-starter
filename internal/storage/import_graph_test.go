@@ -47,7 +47,7 @@ func TestImportGraph_SamePathPersistenceFailure(t *testing.T) {
 
 	// Step 5-6: import valid non-conflicting graph.
 	// The graph will be staged (appended to in-memory slices) before saveLocked.
-	err = r.ImportGraph(
+	_, err = r.ImportGraph(
 		[]*RuntimeEntry{{ID: "rt-new", Name: "NewRT", Executable: "/bin/new"}},
 		[]*ModelEntry{{ID: "m-new", Name: "NewModel", RuntimeID: "rt-new"}},
 		nil,
@@ -144,7 +144,7 @@ func TestImportGraph_SliceAliasingWithSpareCapacity(t *testing.T) {
 		return errors.New("injected write failure")
 	}
 
-	err = r.ImportGraph(
+	_, err = r.ImportGraph(
 		[]*RuntimeEntry{{ID: "import-rt", Name: "Import", Executable: "/bin/new"}},
 		nil, nil,
 	)
@@ -189,7 +189,7 @@ func TestImportGraph_ForcedLockOverlap_CaseA(t *testing.T) {
 
 	importDone := make(chan error, 1)
 	go func() {
-		err := r.ImportGraph(
+		_, err := r.ImportGraph(
 			[]*RuntimeEntry{{ID: "import-rt", Name: "ImportRT", Executable: "/bin/import"}},
 			nil, nil,
 		)
@@ -313,7 +313,7 @@ func TestImportGraph_ForcedLockOverlap_CaseB(t *testing.T) {
 	importDone := make(chan error, 1)
 	go func() {
 		close(importAttemptStarted)
-		err := r.ImportGraph(
+		_, err := r.ImportGraph(
 			[]*RuntimeEntry{{ID: "import-rt", Name: "ImportRT", Executable: "/bin/import"}},
 			nil, nil,
 		)
@@ -395,7 +395,7 @@ func TestImportGraph_ConcurrentSerialization(t *testing.T) {
 
 		go func(i int) {
 			defer wg.Done()
-			_ = r.ImportGraph(
+			_, _ = r.ImportGraph(
 				[]*RuntimeEntry{{ID: "import-rt", Name: "ImportRT", Executable: "/bin/import"}},
 				nil, nil,
 			)

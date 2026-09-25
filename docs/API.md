@@ -433,29 +433,54 @@ Query parameters:
 |-----------|---------|-----------------|
 | `dry_run` | `false` | `true`, `false` |
 
-`dry_run=true` performs full validation and collision detection but performs zero mutation.
-A dry-run success does **not** guarantee a subsequent real import will succeed (TOCTOU).
+`dry_run=true` builds the full import plan (validation plus classification against current repository state) and performs zero mutation and zero durable writes.
+A dry-run result is **advisory**: the real import rebuilds the plan under the repository write lock, so a file that validated earlier can still be rejected (or classify differently) if the repository changed in between.
 
 Maximum body size: **10 MiB** (10,485,760 bytes). Exceeding the limit returns `413`.
 
 Import behavior:
+
+- Conflict policy: **SKIP EXISTING** (ADR 014, amended 2026-09-25). An entity whose ID already exists in the repository is **skipped**: the stored record is never overwritten, merged, updated, copied, or ID-remapped.
+- Every bundle entity is classified exactly once: **new** (will be created), **existing** (skipped), or **blocked** (can be neither created nor safely skipped).
+- Any blocked entity stops the whole import — no partial write and no dangling reference. Blocking reasons: `runtime_name_taken_other_id` (the runtime name is already owned by a different ID), `runtime_ref_unresolved`, `model_ref_unresolved`, `dependency_blocked` (a dependency of this entity is itself blocked).
+- Identity is per entity type. Runtime: ID is identity, and the name is additionally unique case-insensitively, so same-name/different-ID is ambiguous and blocks. Model and Pipeline: ID only — a same-name/different-ID model or pipeline is a distinct, new entity.
+- Dependency closure requirement (unchanged from v1): every `models[].runtime_id` and every `pipelines[].models[].model_id` must reference an entity present **in the bundle** — a reference to something absent from the bundle is a `400` file-validity failure, not a plan verdict.
+- Within that closure, dependencies resolve in Runtime → Model → Pipeline order against both repository state and the entities this same import creates: a new entity may reference one the same plan creates (new) or one already in the repository (its bundled entry is then classified existing and skipped). A reference that resolves to neither — only possible when the plan is built directly, not through the bundle validator — is `runtime_ref_unresolved` / `model_ref_unresolved`.
+- Atomic: everything the plan creates is written in a single durable save and rolled back in memory if that save fails. A plan with nothing to create leaves the repository file untouched.
 - Does **not** launch models or pipelines. `Active`/`AutoStart` flags are preserved and apply on next normal server startup.
 - Does **not** restore `environment_keys` as Environment entries. They are advisory metadata only.
 - Variable references (`${VAR}`) are validated for grammar only. Undefined variables are accepted; malformed references are rejected.
-- Collision policy: **reject** (no overwrite, no merge, no remap).
 
-Response `200`:
+Response `200` — the import plan. `dry_run=true` and a real import return the same shape:
 
 ```json
-{ "dry_run": false, "runtimes": 2, "models": 3, "pipelines": 1 }
+{
+  "dry_run": true,
+  "can_import": true,
+  "summary": {
+    "runtimes":  { "total": 2, "new": 1, "existing": 1, "blocked": 0 },
+    "models":    { "total": 1, "new": 1, "existing": 0, "blocked": 0 },
+    "pipelines": { "total": 0, "new": 0, "existing": 0, "blocked": 0 }
+  },
+  "created": { "runtimes": 1, "models": 1, "pipelines": 0 },
+  "skipped": { "runtimes": 1, "models": 0, "pipelines": 0 },
+  "blocked": [],
+  "runtimes": 1, "models": 1, "pipelines": 0
+}
 ```
+
+- On a `200` real import, `created` and `skipped` are what actually happened. On a dry-run they are the plan's expected counts. On a `409` nothing was written, so any counts in that body are plan-only.
+- `can_import` is true only when at least one entity is new **and** none is blocked. `created = 0` with `blocked = 0` means every entity already exists — there is nothing to import.
+- The flat `runtimes` / `models` / `pipelines` fields mirror `created` (original response shape, kept).
+
+Response `409` — the plan is blocked and **nothing was written**. The body is the same plan object plus the error envelope (`error`, `code: "conflict"`, `details[]`). `blocked[]` lists each blocked entity as `{type, id, name, reason, related_id}`.
 
 Errors:
 
 | Status | Meaning |
 |--------|---------|
 | `400` | Malformed JSON, wrong format, unsupported version, structural validation failure, malformed variable reference, empty body, malformed `dry_run` value. |
-| `409` | Import collision (runtime ID, runtime name case-insensitive, model ID, or pipeline ID already exists). Response includes bounded conflict details. |
+| `409` | Import plan is blocked (see above). Nothing written. |
 | `413` | Request body exceeds 10 MiB. |
 | `500` | Persistence or internal failure. |
 

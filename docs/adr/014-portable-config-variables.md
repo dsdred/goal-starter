@@ -1,6 +1,7 @@
 # ADR 014: Portable Configuration — Variable Resolution and Secret-Safe Export/Import
 
 **Status:** Accepted — owner contract agreed 2026-09-13; **MVP complete and published 2026-09-15** (Slices 1, 2A, 2B, 3; final SHA `4624d81`, CI run `34889093837` 7/7 PASS). Deferred items (persisted variable store, secret-value export, merge/remap, relative-root) remain open for future Owner decisions.
+**Amended 2026-09-25 (implementation, pending Owner recheck):** the import conflict policy is **SKIP EXISTING**, replacing REJECT-on-collision — see [§ Import conflict policy — SKIP EXISTING](#import-conflict-policy--skip-existing-2026-09-25). The `REJECT` wording elsewhere in this ADR describes the original 2026-09-13 contract and is superseded on that one point.
 **Date:** 2026-09-13
 **Related:** ADR 004 (Config vs Repository ownership), ADR 010 (Pipeline), ADR 011 (Windows Service — owner decision 3: no new path resolution without Owner contract), ADR 013 (Pipeline repeatable entries), ADR 009 (Hot-reload — restart-class fields), ADR 006 (Secure Credential Storage), ADR 007 (Audit Logging), ROADMAP P1 "Portable Configuration & Path Variables"
 
@@ -385,7 +386,7 @@ A versioned JSON document:
 8. Variable syntax in all resolved fields is well-formed (balanced `${}`, valid names)
 9. Existing domain constraints (e.g., `Runtime.Executable` non-empty, `Model.Name` non-empty)
 
-**Collision policy — v1: REJECT.**
+**Collision policy — v1: REJECT.** *(superseded 2026-09-25 by SKIP EXISTING — see [§ Import conflict policy — SKIP EXISTING](#import-conflict-policy--skip-existing-2026-09-25))*
 
 If ANY entity ID in the bundle conflicts with an existing entity in the repository:
 
@@ -420,6 +421,8 @@ on failure: rollback in-memory state to pre-import; repository file unchanged
 The existing per-entity CRUD loops (one `saveLocked` per entity) are **NOT sufficient** — a failure mid-loop would leave a partial graph. The atomic primitive reuses the existing durable-write guarantees (`fsutil.WriteFileDurable`: fsync temp, read-back, `.bak`, atomic rename, directory fsync).
 
 No partial imported graph may survive a failure.
+
+**Amended 2026-09-25:** the "check for collisions" step is now a SKIP EXISTING classification (`storage.PlanGraphImport`), and the single durable write persists exactly the entities the fresh plan classifies as new. See [§ Import conflict policy — SKIP EXISTING](#import-conflict-policy--skip-existing-2026-09-25).
 
 ### D17 — API / Preview Implications
 
@@ -548,7 +551,7 @@ Slice 1 is independently shippable and testable. It changes launch-time behavior
 | Silent fallback (keep literal `${UNDEFINED}` or pass through malformed `${1BAD}` as text) | **Rejected** | Hides misconfiguration; a user who typo'd a variable name or wrote invalid syntax would get a silent broken path; explicit errors (`UndefinedVariable` / `InvalidVariableReference`) are safer |
 | Persisted user-variable store (MVP) | **Deferred** | Not needed for the core portability use case (machine paths via process env + `GOAL_DATA`); adds schema, CRUD, UI, and security surface without proportional value in v1 |
 | `includeSecrets` export flag (MVP) | **Deferred** | Requires a separate Owner security decision; the default is safe (keys only); adding opt-in secrets expands the attack surface of the bundle format |
-| Merge / remap import policies | **Deferred** | REJECT is the safe, simple v1; merge policies require detailed conflict-resolution semantics that need their own design |
+| Merge / remap import policies | **Deferred** | The 2026-09-25 amendment replaced REJECT with SKIP EXISTING, which covers the re-import case without ever touching stored state; merge and remap still require detailed conflict-resolution semantics that need their own design |
 | Relative-root path system (e.g., `~`, `$HOME` expansion beyond variable syntax) | **Deferred** | The existing `resolveExecutablePath` (relative to WorkingDirectory) + variable resolution covers the use case; a separate root system is redundant complexity |
 | Export `goal.json` / server settings | **Rejected** | Out of scope (D1); Portable Configuration is the product graph, not the server configuration |
 | ADR 012 for this topic | **Rejected** | ADR 012 is historically associated with the paused TLS direction; ADR 014 is the correct next number |
@@ -592,7 +595,7 @@ Slice 1 is independently shippable and testable. It changes launch-time behavior
 - Export → import → identical graph (round-trip)
 - Export excludes env values (secret-safe)
 - Export excludes instances, credentials
-- Import with collision → zero writes, bounded report
+- Import with collision → zero writes, bounded report *(as of 2026-09-25 a pure ID collision is skipped, not rejected, and writes nothing; see [§ Import conflict policy — SKIP EXISTING](#import-conflict-policy--skip-existing-2026-09-25))*
 - Import with invalid bundle → rejected, zero writes
 - Import atomicity: simulate write failure → zero partial writes
 - Import does not start active entities
@@ -830,3 +833,113 @@ Slice 3 (Product UI / Acceptance) is implemented.
 - >10 MiB: client-side rejection (localized error, no request sent, validate disabled), exact 10 MiB boundary (not rejected by client, reaches server).
 - Active/AutoStart safety: model with `active: true` imported, state preserved, zero instances created, instance count unchanged.
 - UI: RU/EN labels, scope selector visibility, warning box, responsive 430px, i18n completeness (no missing keys), no unexpected console errors, no 5xx.
+
+## Import conflict policy — SKIP EXISTING (2026-09-25)
+
+**Status:** implemented, pending Owner recheck. This section amends D15/D16 and supersedes the `REJECT` collision wording in this ADR. It does **not** close the ADR 014 remediation program and does **not** mark Manual Owner Acceptance as accepted.
+
+### Why
+
+Manual Owner Acceptance produced finding **OWNER-IMPORT-01**: the UI presented the raw collision tokens (`id_exists`, `name_exists`) as the primary result and gave no safe way to import a file that contained entities already present in the repository. Under REJECT, re-importing an already-imported bundle — the most common portability action after a partial setup — failed wholesale with no way forward except hand-editing JSON. The original v1 choice of REJECT optimised for simplicity, not for the user's actual workflow.
+
+### Policy
+
+**One** conflict policy, no modes:
+
+- An entity whose identity already exists in the repository is classified **existing** and **skipped**. Its stored record is never modified.
+- Import never overwrites, merges, updates in place, creates a copy of, or remaps the ID of an existing entity.
+- The existing repository is never modified merely because an imported entity conflicts with it.
+- An import that contains nothing but existing entities is **valid**: it reports "nothing to import", writes nothing, and leaves the durable repository file untouched.
+- Import stops only on **blocking** conflicts — entities that can be neither created nor safely skipped.
+
+### Identity per entity type
+
+| Type | Classified `existing` when | Note |
+|------|---------------------------|------|
+| Runtime | an entry with the same `id` exists | `name` is additionally unique case-insensitively |
+| Model | an entry with the same `id` exists | name is not identity |
+| Pipeline | an entry with the same `id` exists | name is not identity |
+
+A model or pipeline whose name matches an existing entity but whose ID differs is a **different** entity and classifies as `new`. A runtime in that same situation cannot be classified as `new`: its name is already owned by another ID, so the entry is neither provably the same entity (ID differs) nor safely creatable (name would violate uniqueness), and the import contract has no ID-mapping mechanism to reconcile it. That is a blocking conflict, not a skip.
+
+### Classification and blocking reasons
+
+Every entity in the bundle gets exactly one status: `new`, `existing`, or `blocked`. A blocked entity carries a reason code:
+
+| Reason | Meaning |
+|--------|---------|
+| `runtime_name_taken_other_id` | Runtime name is owned by a different ID (`related_id` = that ID) |
+| `runtime_ref_unresolved` | Model references a Runtime that exists neither in the repository nor among the entities this import creates |
+| `model_ref_unresolved` | Pipeline references a Model that exists neither in the repository nor among the entities this import creates |
+| `dependency_blocked` | A dependency of this entity is itself blocked (`related_id` = that dependency) |
+
+`ImportBlockedRuntimeRef` / `ImportBlockedModelRef` are reachable through the pure planner; the bundle-level referential validation (D15 items 5–6) rejects a bundle that references an ID absent from the bundle itself before planning runs, so over HTTP the missing-dependency case normally surfaces as `dependency_blocked`.
+
+### Dependency-aware skipping
+
+Planning runs in dependency order Runtime → Model → Pipeline, and resolves each reference against **both** the repository snapshot and the entities this same plan creates. Therefore:
+
+- a new entity may depend on an already-existing one;
+- a new entity may depend on another entity created by the same import (a fully new chain imports fully);
+- an entity whose dependency is blocked is itself blocked (`dependency_blocked`), so **no dangling reference is ever written**;
+- references are never rewritten to point at a similar-looking existing entity.
+
+**Reachability caveat.** Bundle validation (D15 items 5–6) still requires every reference to resolve **inside the bundle**, so over HTTP a new entity depends on an existing one by carrying that entity's entry too, which the plan then classifies existing and skips. The closure requirement and the skip policy are therefore compatible: the file stays self-contained and machine-independent, while the plan — not the file — decides what is written. `runtime_ref_unresolved` / `model_ref_unresolved` remain part of the planner's contract because `PlanGraphImport` is a pure function over arbitrary graphs; through the HTTP surface they are shadowed by the `400` closure validation.
+
+### One planning boundary, revalidated under the write lock
+
+`storage.PlanGraphImport(state, runtimes, models, pipelines)` is a pure classification over a repository snapshot — it locks nothing, mutates nothing, and writes nothing. `JSONRepository.ImportGraph` calls that **same function** against the state read under its exclusive write lock, and then persists exactly `plan.CreateRuntimes/CreateModels/CreatePipelines` through the existing single `saveLocked`/`WriteFileDurable` path — or nothing at all when the fresh plan has a blocked entity or nothing to create.
+
+Consequences:
+
+- The advisory (dry-run) and authoritative (real import) plans cannot diverge in semantics; there is no second implementation of the policy to drift.
+- D16 atomicity is preserved unchanged: one durable write, rollback of in-memory state on failure, no partial graph.
+- A dry-run remains advisory. If the repository changed between validation and import, the import-time plan is the one that wins; the response simply reports the new classification.
+
+### Observable HTTP contract
+
+Both `dry_run=true` and a real import return the same plan object on `200`:
+
+```json
+{
+  "dry_run": true,
+  "can_import": true,
+  "summary": {
+    "runtimes":  {"total": 2, "new": 1, "existing": 1, "blocked": 0},
+    "models":    {"total": 1, "new": 1, "existing": 0, "blocked": 0},
+    "pipelines": {"total": 0, "new": 0, "existing": 0, "blocked": 0}
+  },
+  "created":   {"runtimes": 1, "models": 1, "pipelines": 0},
+  "skipped":   {"runtimes": 1, "models": 0, "pipelines": 0},
+  "blocked":   [],
+  "runtimes":  1, "models": 1, "pipelines": 0
+}
+```
+
+`created`/`skipped` are the plan's verdict on a dry-run and the actual outcome on a real import. The flat `runtimes`/`models`/`pipelines` fields are the created counts, kept for the pre-amendment consumers.
+
+`409` is returned **only** for a blocked plan, and its body is that same plan plus the error envelope (`error`, `code: "conflict"`, `details[]`). A pure ID collision is no longer a `409`. `400` remains the file-validity failure (malformed JSON, wrong format/version, structural or variable-syntax violations) and is distinct from every plan verdict.
+
+### UI contract (OWNER-UX-01, OWNER-IMPORT-01)
+
+Validation separates three things that the pre-amendment UI merged:
+
+- **A — file validity:** is this a readable GoAl configuration? (`400` class)
+- **B — import plan:** per entity type `new` / `already exist` / `blocked`, plus totals *Will be imported* / *Will be skipped*
+- **C — blocking conflicts:** one readable, localized sentence per blocked entity; the raw reason token is available only inside a collapsed "Technical details" block, never as the primary message
+
+Button rule: **Import is enabled iff `new > 0` and `blocked == 0`.** `new == 0 && blocked == 0` shows "All entities already exist. Nothing to import." with Import disabled rather than a destructive button that cannot do anything. A blocked plan shows "Configuration is valid, but the import cannot proceed" with Import disabled. After a real import the result states created and skipped separately, so a skipped entity is never reported as imported, and a blocked or failed import is never reported as success.
+
+The three statements are also mutually exclusive in the negative direction: a check that failed for a reason that is neither the file nor the repository (an authorization or server fault) is reported as a failed check. The UI never borrows the invalid-file caption or the conflict wording for it, because doing so would attribute a server-side fault to the user's file.
+
+### Evidence
+
+- Planner: `internal/storage/import_plan.go`; tests `internal/storage/import_plan_test.go` (identity per type, non-mutation of state, dependency resolution, skip-without-overwrite, blocked plan writes nothing, nothing-to-create leaves the file untouched).
+- Orchestration: `internal/application/portable/import_test.go` (ID collision skips, name collision blocks, model name is not identity, mixed plans, `active` entities not launched, TOCTOU revalidation, no-dangling-write, created-vs-skipped result counts, new-on-existing and new-chain dependency cases).
+- Storage: `internal/storage/import_graph_test.go` (persistence-failure rollback, slice aliasing, forced lock overlap, concurrent serialization) — unchanged guarantees, re-verified against the planning boundary.
+- HTTP: `internal/webui/handlers/portable_import_plan_test.go` (409 carries the plan, all-existing dry-run, blocked reported as plan not error, mixed created/skipped, stale-plan rejection).
+- Browser: `tests/browser/portable.cjs` (GoAl-owned file picker and dark export select, secondary warning box, plan and totals in RU and EN, nothing-to-import, blocked plan with readable reason, mixed import with created/skipped outcome, repository bytes unchanged after a hostile same-ID re-import).
+
+### Historical records
+
+D15–D16 and D18/D20 above, and the Slice 1/2A/2B/3 evidence sections, are kept as dated records of what was agreed on 2026-09-13 and shipped on 2026-09-14/15. Where they state REJECT-on-collision ("Conflict detection (all collisions, bounded report)", "collision rejection", "Import flow → conflict report", `ErrImportConflict` collision detection under lock, "Collision = REJECT, zero writes", and the browser-check lists that mention collision 409), this section is the current contract. Deferred items (persisted variable store, secret-value export, merge/remap policies, relative-root paths) remain deferred and are not reopened here.

@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -83,25 +82,33 @@ type Repository interface {
 	ValidateCrossReferences(ctx context.Context) error
 	CountActiveInstances() int
 
-	ImportGraph(runtimes []*RuntimeEntry, models []*ModelEntry, pipelines []*PipelineEntry) error
+	// ImportGraph classifies the given entities against current repository
+	// state under the exclusive write lock and creates only the ones that are
+	// safe to create (SKIP EXISTING). It returns the authoritative plan, which
+	// reports created and skipped counts, plus a *ErrImportConflict listing the
+	// blocking conflicts when the plan cannot be applied safely.
+	ImportGraph(runtimes []*RuntimeEntry, models []*ModelEntry, pipelines []*PipelineEntry) (*ImportGraphPlan, error)
 }
 
 // ErrImportConflict is returned by ImportGraph when one or more imported
-// entities collide with existing repository state.
+// entities can be neither created nor safely skipped. Existing entities are
+// never overwritten, so an ID collision alone is not a conflict: it is a skip.
 type ErrImportConflict struct {
 	Conflicts []ImportConflict
 }
 
 func (e *ErrImportConflict) Error() string {
-	return fmt.Sprintf("import conflict: %d collision(s)", len(e.Conflicts))
+	return fmt.Sprintf("import conflict: %d blocking conflict(s)", len(e.Conflicts))
 }
 
-// ImportConflict describes a single collision.
+// ImportConflict describes a single blocking collision.
 type ImportConflict struct {
 	Type   string
 	ID     string
 	Reason string
 	Name   string
+	// RelatedID is the colliding or unresolvable counterpart of ID.
+	RelatedID string
 }
 
 // JSONRepository implements Repository using a single atomic JSON file.
@@ -1081,47 +1088,44 @@ func (r *JSONRepository) ListPipelines() ([]*PipelineEntry, error) {
 // ImportGraph atomically imports runtimes, models, and pipelines into the
 // repository. Collision detection, mutation, and durable write happen under
 // a single exclusive lock. On save failure, in-memory state is rolled back.
-func (r *JSONRepository) ImportGraph(runtimes []*RuntimeEntry, models []*ModelEntry, pipelines []*PipelineEntry) error {
+// ImportGraph atomically plans and applies a graph import. Classification,
+// mutation, and the durable write happen under a single exclusive lock, so the
+// plan cannot go stale against concurrent CRUD. Policy is SKIP EXISTING: an
+// entity whose ID already exists is skipped and the existing record is left
+// untouched. When any entity is blocked, nothing is written and the returned
+// error is a *ErrImportConflict. On save failure, in-memory state is rolled
+// back.
+func (r *JSONRepository) ImportGraph(runtimes []*RuntimeEntry, models []*ModelEntry, pipelines []*PipelineEntry) (*ImportGraphPlan, error) {
 	r.mu.Lock()
 	if r.importLockHook != nil {
 		r.importLockHook()
 	}
 	defer r.mu.Unlock()
 
-	// Collision detection under lock.
-	var conflicts []ImportConflict
-	for _, rt := range runtimes {
-		for _, existing := range r.runtimes {
-			if existing.ID == rt.ID {
-				conflicts = append(conflicts, ImportConflict{Type: "runtime", ID: rt.ID, Reason: "id_exists"})
-				break
-			}
+	plan := PlanGraphImport(ImportGraphState{
+		Runtimes:  r.runtimes,
+		Models:    r.models,
+		Pipelines: r.pipelines,
+	}, runtimes, models, pipelines)
+
+	if plan.HasBlocked() {
+		conflicts := make([]ImportConflict, 0, len(plan.Blocked))
+		for _, c := range plan.Blocked {
+			conflicts = append(conflicts, ImportConflict{
+				Type:      c.Type,
+				ID:        c.ID,
+				Reason:    c.Reason,
+				Name:      c.Name,
+				RelatedID: c.RelatedID,
+			})
 		}
-		for _, existing := range r.runtimes {
-			if strings.EqualFold(existing.Name, rt.Name) {
-				conflicts = append(conflicts, ImportConflict{Type: "runtime", ID: rt.ID, Reason: "name_exists", Name: rt.Name})
-				break
-			}
-		}
+		return plan, &ErrImportConflict{Conflicts: conflicts}
 	}
-	for _, m := range models {
-		for _, existing := range r.models {
-			if existing.ID == m.ID {
-				conflicts = append(conflicts, ImportConflict{Type: "model", ID: m.ID, Reason: "id_exists"})
-				break
-			}
-		}
-	}
-	for _, p := range pipelines {
-		for _, existing := range r.pipelines {
-			if existing.ID == p.ID {
-				conflicts = append(conflicts, ImportConflict{Type: "pipeline", ID: p.ID, Reason: "id_exists"})
-				break
-			}
-		}
-	}
-	if len(conflicts) > 0 {
-		return &ErrImportConflict{Conflicts: conflicts}
+
+	if !plan.WillCreate() {
+		// Everything already exists: the repository and its durable file stay
+		// untouched.
+		return plan, nil
 	}
 
 	// Capture rollback state (copy slice headers, not backing arrays).
@@ -1132,19 +1136,19 @@ func (r *JSONRepository) ImportGraph(runtimes []*RuntimeEntry, models []*ModelEn
 	prevPipelines := make([]*PipelineEntry, len(r.pipelines))
 	copy(prevPipelines, r.pipelines)
 
-	// Mutate in-memory state.
-	r.runtimes = append(r.runtimes, runtimes...)
-	r.models = append(r.models, models...)
-	r.pipelines = append(r.pipelines, pipelines...)
+	// Mutate in-memory state with the planned creates only.
+	r.runtimes = append(r.runtimes, plan.CreateRuntimes...)
+	r.models = append(r.models, plan.CreateModels...)
+	r.pipelines = append(r.pipelines, plan.CreatePipelines...)
 
 	// Single durable write.
 	if err := r.saveLocked(); err != nil {
 		r.runtimes = prevRuntimes
 		r.models = prevModels
 		r.pipelines = prevPipelines
-		return err
+		return nil, err
 	}
-	return nil
+	return plan, nil
 }
 
 // ─── Instance CRUD ───

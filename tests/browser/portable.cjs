@@ -22,6 +22,11 @@ function makeBundle(overrides) {
   return b;
 }
 
+async function list(page, urlPath) {
+  const r = await H.pageApi(page, 'GET', urlPath);
+  return Array.isArray(r.data) ? r.data : [];
+}
+
 async function main() {
   const ws = H.makeWorkspace('portable');
   const goalBin = H.buildGoal(ws);
@@ -108,6 +113,56 @@ async function main() {
     await page.waitForTimeout(200);
     suite.log('3.3 Entity selector hidden for All scope', !(await entitySel.isVisible()));
 
+    // 3.4-3.6 (OWNER-UX-01) the scope select must carry the GoAl form
+    // language, not the white native control. Compared against the live theme
+    // tokens so the check holds in both dark and light.
+    const selStyle = await scopeSel.evaluate(el => {
+      const rootCS = getComputedStyle(document.documentElement);
+      const probe = document.createElement('div');
+      probe.style.display = 'none';
+      document.body.appendChild(probe);
+      const token = (name) => {
+        const p = probe.style;
+        p.backgroundColor = p.color = p.borderColor = rootCS.getPropertyValue(name).trim();
+        const cs = getComputedStyle(probe);
+        return { bg: cs.backgroundColor, color: cs.color, border: cs.borderColor };
+      };
+      const tokens = { input: token('--bg-input'), text: token('--text-primary'), border: token('--border') };
+      probe.remove();
+      const cs = getComputedStyle(el);
+      return { bg: cs.backgroundColor, color: cs.color, border: cs.borderTopColor, borderWidth: cs.borderTopWidth, radius: cs.borderRadius, padding: cs.padding, tokens };
+    });
+    suite.log('3.4 Scope select paints the GoAl input token, not the UA default', selStyle.bg === selStyle.tokens.input.bg && selStyle.bg !== 'rgb(255, 255, 255)', `bg=${selStyle.bg} want=${selStyle.tokens.input.bg}`);
+    suite.log('3.5 Scope select text/border use GoAl tokens', selStyle.color === selStyle.tokens.text.color && selStyle.border === selStyle.tokens.border.border && selStyle.borderWidth === '1px', `color=${selStyle.color} border=${selStyle.border}/${selStyle.borderWidth}`);
+    suite.log('3.6 Scope select matches GoAl field radius/padding', selStyle.radius === '6px' && selStyle.padding === '5px 10px', `radius=${selStyle.radius} padding=${selStyle.padding}`);
+
+    // 3.7 (OWNER-UX-01) the environment/Args warning stays present but is
+    // visually secondary: no filled panel, muted text.
+    const warnStyle = await page.locator('.portable-warning-box').evaluate(el => {
+      const cs = getComputedStyle(el);
+      return { bg: cs.backgroundColor, topBorder: cs.borderTopColor, leftBorder: cs.borderLeftColor, font: parseFloat(getComputedStyle(el.querySelector('.hint-text')).fontSize) };
+    });
+    suite.log('3.7 Warning box no longer paints a filled panel', warnStyle.bg === 'rgba(0, 0, 0, 0)', `bg=${warnStyle.bg}`);
+    suite.log('3.8 Warning text stays visible and muted-small', warnStyle.font > 0 && warnStyle.font <= 12 && warnStyle.leftBorder !== warnStyle.topBorder, `font=${warnStyle.font} left=${warnStyle.leftBorder} top=${warnStyle.topBorder}`);
+
+    // 3.9-3.11 (OWNER-UX-01) GoAl-owned picker replaces the native caption.
+    const chooseBtn = page.locator('#portable-choose-file-btn');
+    suite.log('3.9 GoAl picker button is the visible control', await chooseBtn.isVisible() && (await chooseBtn.textContent()).trim() === 'Выбрать файл', `text=${(await chooseBtn.textContent()).trim()}`);
+    const nativeInfo = await page.locator('#portable-import-file').evaluate(el => {
+      const cs = getComputedStyle(el);
+      const r = el.getBoundingClientRect();
+      return { type: el.type, opacity: cs.opacity, w: r.width, h: r.height, tagName: el.tagName };
+    });
+    suite.log('3.10 Native input is still a real input[type=file]', nativeInfo.tagName === 'INPUT' && nativeInfo.type === 'file', JSON.stringify(nativeInfo));
+    suite.log('3.11 Native input is not the visible UI', parseFloat(nativeInfo.opacity) === 0 && nativeInfo.w <= 2 && nativeInfo.h <= 2, `opacity=${nativeInfo.opacity} box=${nativeInfo.w}x${nativeInfo.h}`);
+    suite.log('3.12 No file selected shows the GoAl RU caption', (await page.locator('#portable-import-filename').textContent()).trim() === 'Файл не выбран');
+    // EN owns the picker text too (never the OS locale).
+    await page.evaluate(() => window.setLanguage('en'));
+    await page.waitForTimeout(400);
+    suite.log('3.13 EN picker captions', (await chooseBtn.textContent()).trim() === 'Choose file' && (await page.locator('#portable-import-filename').textContent()).trim() === 'No file selected');
+    await page.evaluate(() => window.setLanguage('ru'));
+    await page.waitForTimeout(400);
+
     // ═══ SECTION 4: Export all (download) ═══
     await scopeSel.selectOption('');
     await page.waitForTimeout(200);
@@ -148,7 +203,7 @@ async function main() {
       suite.log('5.2 Root export has its runtime (closure)', false, 'skipped');
     }
 
-    // ═══ SECTION 6: Import happy path ═══
+    // ═══ SECTION 6: Import happy path (all entities NEW) ═══
     const bundle1 = makeBundle();
     const bundle1Path = path.join(ws.dir, 'import-happy.json');
     fs.writeFileSync(bundle1Path, JSON.stringify(bundle1));
@@ -156,6 +211,7 @@ async function main() {
     await page.setInputFiles('#portable-import-file', bundle1Path);
     await page.waitForFunction(() => !document.querySelector('#portable-validate-btn').disabled, { timeout: 5000 });
     suite.log('6.1 Validate button enabled after file select', true);
+    suite.log('6.1b Selected filename is shown by the GoAl picker', (await page.locator('#portable-import-filename').textContent()).trim() === 'import-happy.json');
 
     // Click Validate (dry-run)
     await page.click('#portable-validate-btn');
@@ -164,7 +220,8 @@ async function main() {
       return el && el.style.display !== 'none' && el.innerHTML.includes('portable-result-success');
     }, { timeout: 10000 });
     const resultText = await page.locator('#portable-import-result').textContent();
-    suite.log('6.2 Dry-run success shown', resultText.includes('1 Runtime'), `got="${resultText.trim()}"`);
+    suite.log('6.2 Plan states file validity and the per-type breakdown', resultText.includes('Конфигурация корректна') && resultText.includes('новые 1') && resultText.includes('уже существуют 0'), `got="${resultText.trim()}"`);
+    suite.log('6.2b Plan states what will be imported', resultText.includes('Будет импортировано: 2'), `got="${resultText.trim()}"`);
     suite.log('6.3 Import button enabled after dry-run', !(await page.locator('#portable-import-btn').isDisabled()));
 
     // Click Import → confirmation dialog appears
@@ -176,9 +233,10 @@ async function main() {
     await page.click('#confirm-yes');
     await page.waitForFunction(() => {
       const el = document.querySelector('#portable-import-result');
-      return el && el.innerHTML.includes('Импорт выполнен');
+      return el && el.innerHTML.includes('Импорт завершён');
     }, { timeout: 10000 });
-    suite.log('6.5 Import success shown', true);
+    const importText = await page.locator('#portable-import-result').textContent();
+    suite.log('6.5 Import result separates created from skipped', importText.includes('добавлено 2') && importText.includes('пропущено 0'), `got="${importText.trim()}"`);
 
     // Verify entities exist via API
     const modelsRes = await H.pageApi(page, 'GET', '/api/v1/models');
@@ -193,9 +251,15 @@ async function main() {
     const newInsts = (Array.isArray(instRes.data) ? instRes.data : []).filter(i => i.model_id === 'model-portable');
     suite.log('6.8 No instances started by import', newInsts.length === 0, `count=${newInsts.length}`);
 
-    // ═══ SECTION 7: Import collision ═══
-    const bundle2 = makeBundle(); // same IDs as bundle1
-    const bundle2Path = path.join(ws.dir, 'import-collision.json');
+    // ═══ SECTION 7: Re-importing the same entities — SKIP EXISTING ═══
+    // Same IDs, different field values: an ID match is the identity evidence, so
+    // every entry is EXISTING and the repository must keep its own bytes.
+    const bundle2 = makeBundle({
+      runtimes: [{ id: 'rt-portable', name: 'Hijacked Name', executable: 'hijacked.exe', working_directory: '/tmp/hijack', environment_keys: [] }],
+      models: [{ id: 'model-portable', name: 'Hijacked Model', runtime_id: 'rt-portable', args: ['--stolen'], active: true, environment_keys: [] }],
+      pipelines: [],
+    });
+    const bundle2Path = path.join(ws.dir, 'import-existing.json');
     fs.writeFileSync(bundle2Path, JSON.stringify(bundle2));
 
     await page.setInputFiles('#portable-import-file', bundle2Path);
@@ -203,11 +267,129 @@ async function main() {
     await page.click('#portable-validate-btn');
     await page.waitForFunction(() => {
       const el = document.querySelector('#portable-import-result');
-      return el && el.style.display !== 'none' && (el.innerHTML.includes('portable-result-conflicts') || el.innerHTML.includes('portable-result-error'));
+      return el && el.style.display !== 'none' && el.innerHTML.includes('portable-result-info');
     }, { timeout: 10000 });
-    const conflictText = await page.locator('#portable-import-result').textContent();
-    suite.log('7.1 Conflict displayed', conflictText.includes('rt-portable') || conflictText.toLowerCase().includes('conflict') || conflictText.includes('конфликт'), `got="${conflictText.trim().substring(0, 100)}"`);
-    suite.log('7.2 Import button disabled on conflict', await page.locator('#portable-import-btn').isDisabled());
+    const existingText = await page.locator('#portable-import-result').textContent();
+    suite.log('7.1 Same entities read as "nothing to import", not as an error', existingText.includes('Все сущности уже существуют. Импортировать нечего.'), `got="${existingText.trim()}"`);
+    suite.log('7.2 Existing entities are reported per type', (existingText.match(/уже существуют 1/g) || []).length === 2 && existingText.includes('Будет пропущено: 2'), `got="${existingText.trim()}"`);
+    suite.log('7.3 Import button stays disabled with nothing to create', await page.locator('#portable-import-btn').isDisabled());
+    suite.log('7.4 No raw reason token is the primary message', !existingText.includes('id_exists') && !existingText.includes('name_exists'), `got="${existingText.trim()}"`);
+    const rtNow = (await list(page, '/api/v1/runtimes')).find(r => r.id === 'rt-portable');
+    const mNow = (await list(page, '/api/v1/models')).find(m => m.id === 'model-portable');
+    suite.log('7.5 Repository keeps its own runtime bytes', rtNow && rtNow.name === 'Portable RT' && rtNow.executable === 'test.exe', `got=${JSON.stringify(rtNow && { n: rtNow.name, e: rtNow.executable })}`);
+    suite.log('7.6 Repository keeps its own model bytes', mNow && mNow.name === 'Portable Model' && mNow.active === false, `got=${JSON.stringify(mNow && { n: mNow.name, a: mNow.active })}`);
+
+    // ═══ SECTION 7B: Ambiguous runtime identity → BLOCKED plan ═══
+    // Same runtime NAME owned by a different ID: the repository contract makes
+    // runtime names unique, but nothing proves the two IDs are the same entity,
+    // so the entry can be neither created nor safely skipped. Its model depends
+    // on it and is blocked too — no dangling object may be created.
+    const bundleBlocked = makeBundle({
+      runtimes: [{ id: 'rt-clone', name: 'Portable RT', executable: 'clone.exe', working_directory: '/opt/clone', environment_keys: [] }],
+      models: [{ id: 'model-clone', name: 'Clone Model', runtime_id: 'rt-clone', args: [], active: false, environment_keys: [] }],
+      pipelines: [],
+    });
+    const blockedPath = path.join(ws.dir, 'import-blocked.json');
+    fs.writeFileSync(blockedPath, JSON.stringify(bundleBlocked));
+    await page.setInputFiles('#portable-import-file', blockedPath);
+    await page.waitForFunction(() => !document.querySelector('#portable-validate-btn').disabled, { timeout: 5000 });
+    await page.click('#portable-validate-btn');
+    await page.waitForFunction(() => {
+      const el = document.querySelector('#portable-import-result');
+      return el && el.style.display !== 'none' && el.innerHTML.includes('portable-result-error');
+    }, { timeout: 10000 });
+    const blockedText = await page.locator('#portable-import-result').textContent();
+    suite.log('7B.1 File validity and repository conflict stay separate statements', blockedText.includes('Конфигурация корректна, но импорт невозможен'), `got="${blockedText.trim()}"`);
+    suite.log('7B.1b Per-type plan line accounts for the blocked entity', blockedText.includes('Runtime: новые 0, уже существуют 0, заблокировано 1'), `got="${blockedText.trim().substring(0, 160)}"`);
+    suite.log('7B.2 Blocked reason is human-readable, token is secondary', blockedText.includes('имя уже занято') && blockedText.includes('runtime_name_taken_other_id'), `got="${blockedText.trim().substring(0, 160)}"`);
+    suite.log('7B.3 Dependent model is blocked, not silently dropped', blockedText.includes('Clone Model') && blockedText.includes('зависит от заблокированной'), `got="${blockedText.trim().substring(0, 260)}"`);
+    const tokenPlacement = await page.evaluate(() => {
+      const box = document.querySelector('#portable-import-result');
+      const details = box.querySelector('.portable-plan-details');
+      const title = box.querySelector('.portable-plan-title');
+      return {
+        hasDetails: !!details,
+        tokenInsideDetails: !!details && details.textContent.includes('runtime_name_taken_other_id'),
+        tokenInTitle: !!title && title.textContent.includes('runtime_name_taken_other_id'),
+        open: !!details && details.open,
+      };
+    });
+    suite.log('7B.4 Technical tokens live in a collapsed details block', tokenPlacement.hasDetails && tokenPlacement.tokenInsideDetails && !tokenPlacement.tokenInTitle && !tokenPlacement.open, JSON.stringify(tokenPlacement));
+    suite.log('7B.5 Import disabled while the plan is blocked', await page.locator('#portable-import-btn').isDisabled());
+    const afterBlocked = await H.pageApi(page, 'GET', '/api/v1/runtimes');
+    suite.log('7B.6 Blocked plan wrote nothing', !(Array.isArray(afterBlocked.data) ? afterBlocked.data : []).some(r => r.id === 'rt-clone'), `count=${(Array.isArray(afterBlocked.data) ? afterBlocked.data : []).length}`);
+
+    // ═══ SECTION 7C: Mixed plan — one NEW, one EXISTING → import enabled ═══
+    const bundleMixed = {
+      format: 'goal-portable-config',
+      version: 1,
+      runtimes: [
+        { id: 'rt-portable', name: 'Portable RT', executable: 'test.exe', working_directory: '/opt/test', environment_keys: [] },
+        { id: 'rt-second', name: 'Second RT', executable: 'second.exe', working_directory: '/opt/second', environment_keys: [] },
+      ],
+      models: [{ id: 'model-second', name: 'Second Model', runtime_id: 'rt-second', args: [], active: false, environment_keys: [] }],
+      pipelines: [],
+    };
+    const mixedPath = path.join(ws.dir, 'import-mixed.json');
+    fs.writeFileSync(mixedPath, JSON.stringify(bundleMixed));
+    await page.setInputFiles('#portable-import-file', mixedPath);
+    await page.waitForFunction(() => !document.querySelector('#portable-validate-btn').disabled, { timeout: 5000 });
+    await page.click('#portable-validate-btn');
+    await page.waitForFunction(() => {
+      const el = document.querySelector('#portable-import-result');
+      return el && el.style.display !== 'none' && el.innerHTML.includes('portable-result-success');
+    }, { timeout: 10000 });
+    const mixedText = await page.locator('#portable-import-result').textContent();
+    suite.log('7C.1 Mixed plan counts new and existing separately', mixedText.includes('Runtime: новые 1, уже существуют 1') && mixedText.includes('Модели: новые 1, уже существуют 0'), `got="${mixedText.trim()}"`);
+    suite.log('7C.2 Mixed plan enables Import (create new + skip existing)', !(await page.locator('#portable-import-btn').isDisabled()));
+    await page.click('#portable-import-btn');
+    await page.waitForSelector('#confirm-modal', { state: 'visible', timeout: 5000 });
+    await page.click('#confirm-yes');
+    await page.waitForFunction(() => {
+      const el = document.querySelector('#portable-import-result');
+      return el && el.innerHTML.includes('добавлено 2, пропущено 1');
+    }, { timeout: 10000 });
+    suite.log('7C.3 Result reports created and skipped counts', true);
+    const rtList = await H.pageApi(page, 'GET', '/api/v1/runtimes');
+    const rtPort = (Array.isArray(rtList.data) ? rtList.data : []).find(r => r.id === 'rt-portable');
+    suite.log('7C.4 Skipped entity kept its original state', rtPort && rtPort.executable === 'test.exe', `exe=${rtPort ? rtPort.executable : 'N/A'}`);
+
+    // ═══ SECTION 7D: The same plan contract in EN ═══
+    // The plan wording is user-facing in BOTH locales: an EN string that lost a
+    // parameter or drifted back to a raw token must fail here, not silently.
+    await page.evaluate(() => window.setLanguage('en'));
+    await page.waitForTimeout(500);
+    await page.setInputFiles('#portable-import-file', bundle2Path);
+    await page.waitForFunction(() => !document.querySelector('#portable-validate-btn').disabled, { timeout: 5000 });
+    await page.click('#portable-validate-btn');
+    await page.waitForFunction(() => {
+      const el = document.querySelector('#portable-import-result');
+      return el && el.style.display !== 'none' && el.innerHTML.includes('portable-result-info');
+    }, { timeout: 10000 });
+    const enExisting = (await page.locator('#portable-import-result').textContent()).trim();
+    suite.log('7D.1 EN nothing-to-import wording', enExisting.includes('All entities already exist. Nothing to import.'), `got="${enExisting.substring(0, 160)}"`);
+    suite.log('7D.2 EN plan is per type with totals', (enExisting.match(/1 already exist/g) || []).length === 2 && enExisting.includes('Will be skipped: 2') && !enExisting.includes('Will be imported'), `got="${enExisting.substring(0, 200)}"`);
+    suite.log('7D.3 EN keeps Import disabled with nothing to create', await page.locator('#portable-import-btn').isDisabled());
+
+    await page.setInputFiles('#portable-import-file', blockedPath);
+    await page.waitForFunction(() => !document.querySelector('#portable-validate-btn').disabled, { timeout: 5000 });
+    await page.click('#portable-validate-btn');
+    await page.waitForFunction(() => {
+      const el = document.querySelector('#portable-import-result');
+      return el && el.style.display !== 'none' && el.innerHTML.includes('portable-result-error');
+    }, { timeout: 10000 });
+    const enBlocked = (await page.locator('#portable-import-result').textContent()).trim();
+    // Raw tokens live only below the collapsed details block.
+    const enBlockedPlain = await page.evaluate(() => {
+      const clone = document.querySelector('#portable-import-result').cloneNode(true);
+      clone.querySelectorAll('details').forEach(d => d.remove());
+      return clone.textContent.replace(/\s+/g, ' ').trim();
+    });
+    suite.log('7D.4 EN blocked headline is validity + impossibility', enBlocked.includes('Configuration is valid, but the import cannot proceed'), `got="${enBlocked.substring(0, 160)}"`);
+    suite.log('7D.5 EN blocked reason is readable, not a raw token', enBlockedPlain.includes('the name is already taken by another Runtime') && enBlockedPlain.includes('depends on the blocked entity') && !enBlockedPlain.includes('runtime_name_taken_other_id') && !enBlockedPlain.includes('dependency_blocked'), `got="${enBlockedPlain.substring(0, 260)}"`);
+    await page.evaluate(() => window.setLanguage('ru'));
+    await page.waitForTimeout(500);
+
 
     // ═══ SECTION 8: Invalid file ═══
     const badPath = path.join(ws.dir, 'import-invalid.json');
@@ -221,6 +403,27 @@ async function main() {
     }, { timeout: 10000 });
     suite.log('8.1 Invalid format shows error', true);
     suite.log('8.2 Import button disabled on invalid', await page.locator('#portable-import-btn').isDisabled());
+
+    // A check that failed for a reason other than the file or the repository
+    // must not be presented as either of those. (403 is used as the injected
+    // failure so the suite's real 5xx guard below stays unmodified.)
+    await page.route('**/api/v1/import*', route => route.fulfill({
+      status: 403,
+      contentType: 'application/json',
+      body: JSON.stringify({ error: 'injected failure', code: 'forbidden' }),
+    }));
+    await page.click('#portable-validate-btn');
+    let faultText = '';
+    try {
+      await page.waitForFunction(() => {
+        const el = document.querySelector('#portable-import-result');
+        return el && el.style.display !== 'none' && el.textContent.includes('Не удалось проверить конфигурацию');
+      }, { timeout: 10000 });
+      faultText = (await page.locator('#portable-import-result').textContent()).trim();
+    } catch (e) { faultText = 'timeout: ' + e.message; }
+    await page.unroute('**/api/v1/import*');
+    suite.log('8.3 Non-file/non-conflict failure is not presented as an invalid file or a blocked plan', faultText.includes('Не удалось проверить конфигурацию') && !faultText.includes('не является корректной') && !faultText.includes('импорт невозможен'), `got="${faultText.substring(0, 160)}"`);
+    suite.log('8.4 Import stays disabled after a failed check', await page.locator('#portable-import-btn').isDisabled());
 
     // ═══ SECTION 9: Undefined variable ═══
     const bundle3 = makeBundle({
@@ -244,7 +447,7 @@ async function main() {
     await page.click('#confirm-yes');
     await page.waitForFunction(() => {
       const el = document.querySelector('#portable-import-result');
-      return el && el.innerHTML.includes('Импорт выполнен');
+      return el && el.innerHTML.includes('Импорт завершён');
     }, { timeout: 10000 });
     const rtsRes2 = await H.pageApi(page, 'GET', '/api/v1/runtimes');
     const undefRt = (Array.isArray(rtsRes2.data) ? rtsRes2.data : []).find(r => r.id === 'rt-undef-var');
@@ -325,7 +528,7 @@ async function main() {
     await page.click('#confirm-yes');
     await page.waitForFunction(() => {
       const el = document.querySelector('#portable-import-result');
-      return el && el.innerHTML.includes('Импорт выполнен');
+      return el && el.innerHTML.includes('Импорт завершён');
     }, { timeout: 10000 });
     const modelsActive = await H.pageApi(page, 'GET', '/api/v1/models');
     const autoModel = (Array.isArray(modelsActive.data) ? modelsActive.data : []).find(m => m.id === 'model-autostart');
@@ -367,7 +570,8 @@ async function main() {
     suite.log('16.3 Warning mentions environment values', warningText.toLowerCase().includes('значения') || warningText.includes('VALUES'));
 
     // ═══ SECTION 17: Console errors + 5xx ═══
-    const unexpectedErrors = suite.consoleErrors.filter(e => !e.includes('409') && !e.includes('400'));
+    // 400/409 are exercised by design; 403 is the injected failed-check case (8.3).
+    const unexpectedErrors = suite.consoleErrors.filter(e => !e.includes('409') && !e.includes('400') && !e.includes('403'));
     suite.log('17.1 No unexpected console errors', unexpectedErrors.length === 0, unexpectedErrors.slice(0, 3).join('; ') || 'clean');
     suite.log('17.2 No 5xx responses', suite.serverErrors.length === 0, suite.serverErrors.length ? JSON.stringify(suite.serverErrors[0]) : 'clean');
 

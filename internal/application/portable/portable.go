@@ -96,13 +96,16 @@ func (e *ErrValidation) Error() string {
 	return "bundle validation: " + e.Reason
 }
 
-// Conflict describes a single collision between an imported entity and
-// existing repository state.
+// Conflict describes one blocking collision between an imported entity and
+// existing repository state. An entity that merely shares an ID with an
+// existing entity is not a conflict: it is skipped.
 type Conflict struct {
 	Type   string `json:"type"`
 	ID     string `json:"id"`
 	Reason string `json:"reason"`
 	Name   string `json:"name,omitempty"`
+	// RelatedID is the repository or bundle entity that blocks ID.
+	RelatedID string `json:"related_id,omitempty"`
 }
 
 // ParseBundle strictly parses a portable bundle from raw JSON bytes.

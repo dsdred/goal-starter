@@ -487,8 +487,12 @@
                         <div class="portable-subsection">
                             <h4 data-i18n="portable.import.title">Импорт</h4>
                             <div class="form-group">
-                                <label for="portable-import-file" data-i18n="portable.import.file">Файл конфигурации</label>
-                                <input type="file" id="portable-import-file" accept=".json,application/json" onchange="portableOnFileChange()">
+                                <label data-i18n="portable.import.file">Файл конфигурации</label>
+                                <div class="file-picker" id="portable-file-picker">
+                                    <input type="file" id="portable-import-file" class="file-picker-native" accept=".json,application/json" onchange="portableOnFileChange()" tabindex="-1" aria-hidden="true">
+                                    <button type="button" class="btn btn-ghost btn-sm file-picker-btn" id="portable-choose-file-btn" onclick="portableChooseFile()" data-i18n="portable.import.choose">Выбрать файл</button>
+                                    <span class="file-picker-name" id="portable-import-filename" aria-live="polite" data-i18n="portable.import.no_file">Файл не выбран</span>
+                                </div>
                             </div>
                             <div class="portable-import-actions">
                                 <button class="btn btn-ghost btn-sm" id="portable-validate-btn" onclick="portableValidate()" disabled data-i18n="portable.import.validate">Проверить</button>
@@ -550,9 +554,9 @@
             <form id="pipeline-form" onsubmit="return handlePipelineSubmit(event)">
                 <input type="hidden" name="id">
                 <div class="form-group"><label data-i18n="pipelines.field.name">Имя *</label><input type="text" id="pl-name" name="name" required></div>
-                <div class="form-group">
-                    <label class="filter-switch"><span class="toggle-switch toggle-pipeline"><input type="checkbox" name="active"><span class="toggle-slider"></span></span><span data-i18n="pipelines.field.active">Автостарт GoAl</span></label>
-                    <div><small class="hint" data-i18n="pipelines.field.active_hint">Запускает пайплайн при старте GoAl. На кнопку «Старт» не влияет.</small></div>
+                <div class="form-group form-group-autostart">
+                    <label class="filter-switch pipeline-autostart" for="pl-active"><span class="toggle-switch toggle-pipeline"><input type="checkbox" id="pl-active" name="active"><span class="toggle-slider"></span></span><span data-i18n="pipelines.field.active">Автостарт GoAl</span></label>
+                    <small class="hint" data-i18n="pipelines.field.active_hint">Запускает пайплайн при старте GoAl. На кнопку «Старт» не влияет.</small>
                 </div>
                 <div class="form-group">
                     <label data-i18n="pipelines.field.models">Модели (порядок запуска) *</label>
