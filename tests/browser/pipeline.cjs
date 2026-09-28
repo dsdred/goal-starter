@@ -19,35 +19,76 @@ async function poll(pred, timeoutMs, intervalMs = 300) {
   }
 }
 
-// autostartLayout measures the pipeline AutoStart row against the form grid it
-// must sit in (OWNER-UX-02): one inline control, left-aligned with the Name and
-// Models fields, helper text belonging to the same field.
+// autostartLayout measures the pipeline form head against the final OWNER-UX-02
+// Owner contract: the AutoStart caption label sits ABOVE its switch, the Name
+// label above its input, both labels on one level, the two groups share the same
+// `.pl-form-head` horizontal row (AutoStart compact left, Name filling the rest)
+// and Models starts on the next row at the full form width. No helper text may
+// render in the form. Structural/computed-layout relations only — no
+// pixel-perfect coordinates.
 async function autostartLayout(page) {
   return page.evaluate(() => {
     const form = document.getElementById('pipeline-form');
-    const row = form.querySelector('label.pipeline-autostart');
-    const group = row.closest('.form-group');
-    const nameGroup = document.getElementById('pl-name').closest('.form-group');
+    const switchLabel = form.querySelector('label.pipeline-autostart');
+    const group = switchLabel.closest('.form-group');
+    const head = group.parentElement;
+    const caption = group.querySelector('label[data-i18n="pipelines.field.active"]');
+    const nameInput = document.getElementById('pl-name');
+    const nameGroup = nameInput.closest('.form-group');
+    const nameLabel = nameGroup.querySelector('label');
     const modelsGroup = document.getElementById('pl-models-container').closest('.form-group');
-    const hint = group.querySelector('.hint');
-    const sw = row.querySelector('.toggle-switch').getBoundingClientRect();
-    const tx = row.querySelector('span[data-i18n="pipelines.field.active"]').getBoundingClientRect();
+    const sw = switchLabel.getBoundingClientRect();
+    const c = caption.getBoundingClientRect();
+    const nl = nameLabel.getBoundingClientRect();
+    const ni = nameInput.getBoundingClientRect();
     const g = group.getBoundingClientRect();
-    const cs = getComputedStyle(row);
+    const n = nameGroup.getBoundingClientRect();
+    const m = modelsGroup.getBoundingClientRect();
+    const h = head.getBoundingClientRect();
+    const overlap = Math.max(g.top, n.top) < Math.min(g.bottom, n.bottom);
     return {
-      display: cs.display,
-      alignItems: cs.alignItems,
+      headClass: head.className,
+      // 1-2: caption label above the switch, in the same column
+      captionAboveSwitch: c.bottom <= sw.top + 1 && Math.abs(c.left - sw.left) < 2 && sw.top > c.top,
+      // 3: Name label above the Name input
+      nameLabelAboveInput: nl.bottom <= ni.top + 1 && ni.top > nl.top,
+      // 4: both captions read on one visual level
+      labelsSameLevel: Math.abs(c.top - nl.top) < 2,
+      // 5: the switch is not stretched toward the Name input box
+      switchNotStretched: sw.width < ni.width && sw.height <= ni.height + 1,
+      // 6: the AutoStart group bottom hugs the switch (no leftover height, no helper)
+      noLeftoverHeight: Math.abs(g.bottom - sw.bottom) < 1,
+      captionDisplay: getComputedStyle(caption).display,
+      switchLabelDisplay: getComputedStyle(switchLabel).display,
+      captionTop: Math.round(c.top),
+      switchTop: Math.round(sw.top),
+      switchBottom: Math.round(sw.bottom),
+      switchWidth: Math.round(sw.width),
+      nameInputTop: Math.round(ni.top),
+      nameLabelTop: Math.round(nl.top),
       groupLeft: g.left,
-      nameLeft: nameGroup.getBoundingClientRect().left,
-      modelsLeft: modelsGroup.getBoundingClientRect().left,
-      hintText: hint ? hint.textContent.trim() : null,
-      hintLeft: hint ? hint.getBoundingClientRect().left : null,
-      hintBottom: hint ? hint.getBoundingClientRect().bottom : null,
+      groupTop: Math.round(g.top),
+      groupWidth: Math.round(g.width),
       groupBottom: g.bottom,
-      switchTextGap: tx.left - sw.right,
-      sameLine: Math.max(sw.top, tx.top) < Math.min(sw.bottom, tx.bottom),
-      labelText: row.querySelector('span[data-i18n="pipelines.field.active"]').textContent.trim(),
-      checked: row.querySelector('input[type=checkbox]').checked,
+      nameLeft: n.left,
+      nameTop: Math.round(n.top),
+      nameWidth: Math.round(n.width),
+      nameInputWidth: Math.round(ni.width),
+      modelsLeft: m.left,
+      modelsTop: Math.round(m.top),
+      modelsWidth: Math.round(m.width),
+      headWidth: Math.round(h.width),
+      hintText: (form.querySelector('.hint') || null) ? form.querySelector('.hint').textContent.trim() : null,
+      hintCountInForm: form.querySelectorAll('.hint').length,
+      hintInAutoStartGroup: !!group.querySelector('.hint'),
+      sameRow: overlap,
+      autoLeftOfName: g.right <= n.left + 1,
+      autoCompact: g.width < n.width,
+      rowSpansForm: Math.abs(h.width - m.width) < 2 && Math.abs(h.left - m.left) < 1,
+      nameReachesEdge: Math.abs(n.right - m.right) < 2,
+      modelsBelowRow: m.top >= Math.max(g.bottom, n.bottom) - 1,
+      labelText: caption.textContent.trim(),
+      checked: switchLabel.querySelector('input[type=checkbox]').checked,
     };
   });
 }
@@ -175,8 +216,9 @@ async function main() {
     const blockAutoToggles = await page.locator('#pl-models-container .pl-autostart').count();
     const blockAutoLabels = await page.locator('#pl-models-container .pl-autostart-label').count();
     suite.log('2.7 No per-block autostart control in the builder', blockAutoToggles === 0 && blockAutoLabels === 0, `toggles=${blockAutoToggles} labels=${blockAutoLabels}`);
-    // The pipeline-level Active toggle remains (the single autostart setting).
-    const pipeAutoDom = ((await page.locator('#pipeline-form span[data-i18n="pipelines.field.active"]').first().textContent() || '').trim());
+    // The pipeline-level Active toggle remains (the single autostart setting),
+    // captioned by the block label above the switch (OWNER-UX-02).
+    const pipeAutoDom = ((await page.locator('#pipeline-form label[data-i18n="pipelines.field.active"]').first().textContent() || '').trim());
     suite.log('2.8 Pipeline-level Active toggle present in the form head', pipeAutoDom !== '', `pipe=${JSON.stringify(pipeAutoDom)}`);
     // (reorder) chevron up/down icon buttons with tooltips/aria-labels; with a
     // single block BOTH are disabled (boundary).
@@ -200,17 +242,44 @@ async function main() {
     const addKey = await page.evaluate(() => t('pipelines.btn.add_model'));
     suite.log('2.13 Add-model continuation control present', addText === addKey && addText !== '', `text=${JSON.stringify(addText)}`);
 
-    // ── (OWNER-UX-02) AutoStart row: inline control aligned with the grid ──
+    // ── (OWNER-UX-02) form head: AutoStart label ABOVE its toggle, Name label
+    // above its input, both groups on ONE row, Models below ──
     const layCreate = await autostartLayout(page);
-    suite.log('2.13a AutoStart switch and text form one inline control', layCreate.display === 'inline-flex' && layCreate.alignItems === 'center' && layCreate.sameLine && layCreate.switchTextGap > 0, JSON.stringify(layCreate));
-    suite.log('2.13b AutoStart row aligns with Name and Models fields', Math.abs(layCreate.groupLeft - layCreate.nameLeft) < 1 && Math.abs(layCreate.groupLeft - layCreate.modelsLeft) < 1, `auto=${layCreate.groupLeft} name=${layCreate.nameLeft} models=${layCreate.modelsLeft}`);
-    suite.log('2.13c Helper text belongs to the AutoStart field', layCreate.hintText !== null && Math.abs(layCreate.hintLeft - layCreate.groupLeft) < 1 && layCreate.hintBottom <= layCreate.groupBottom + 1, `hintLeft=${layCreate.hintLeft} groupLeft=${layCreate.groupLeft}`);
-    suite.log('2.13d Helper text is localized by GoAl', layCreate.hintText === (await page.evaluate(() => t('pipelines.field.active_hint'))), `got=${JSON.stringify(layCreate.hintText)}`);
-    // Switch and label act as one control: clicking the text toggles the input.
-    await page.click('#pipeline-form label.pipeline-autostart span[data-i18n="pipelines.field.active"]');
+    suite.log('2.13a AutoStart label sits above the toggle', layCreate.captionAboveSwitch === true, `captionTop=${layCreate.captionTop} switchTop=${layCreate.switchTop}`);
+    suite.log('2.13a2 Name label sits above the Name input', layCreate.nameLabelAboveInput === true, `nameLabelTop=${layCreate.nameLabelTop} nameInputTop=${layCreate.nameInputTop}`);
+    suite.log('2.13a3 The two labels start on the same visual level', layCreate.labelsSameLevel === true, `autoCaptionTop=${layCreate.captionTop} nameCaptionTop=${layCreate.nameLabelTop}`);
+    suite.log('2.13a4 The toggle is not stretched toward the Name input', layCreate.switchNotStretched === true, `switch=${layCreate.switchWidth}px wide, nameInput=${layCreate.nameInputWidth}px`);
+    suite.log('2.13b AutoStart and Name occupy the same horizontal row', layCreate.headClass.includes('pl-form-head') && layCreate.sameRow === true && layCreate.autoLeftOfName === true, `sameRow=${layCreate.sameRow} autoRight<nameLeft=${layCreate.autoLeftOfName} head=${JSON.stringify(layCreate.headClass)}`);
+    suite.log('2.13b2 AutoStart column stays compact, Name fills the rest', layCreate.autoCompact === true && layCreate.groupWidth < layCreate.headWidth * 0.5 && layCreate.nameInputWidth >= 200, `auto=${layCreate.groupWidth}px name=${layCreate.nameWidth}px input=${layCreate.nameInputWidth}px head=${layCreate.headWidth}px`);
+    suite.log('2.13b3 Models starts on the next row at full form width', layCreate.modelsBelowRow === true && layCreate.rowSpansForm === true && layCreate.nameReachesEdge === true, `modelsLeft=${layCreate.modelsLeft} modelsWidth=${layCreate.modelsWidth} headWidth=${layCreate.headWidth} nameRight-aligned=${layCreate.nameReachesEdge}`);
+    suite.log('2.13c No helper text under AutoStart in the pipeline form', layCreate.hintInAutoStartGroup === false && layCreate.hintCountInForm === 0, `inGroup=${layCreate.hintInAutoStartGroup} formHints=${layCreate.hintCountInForm} hintText=${JSON.stringify(layCreate.hintText)}`);
+    suite.log('2.13d AutoStart caption is localized by GoAl', layCreate.labelText === (await page.evaluate(() => t('pipelines.field.active'))), `label=${JSON.stringify(layCreate.labelText)}`);
+    // The caption label and the switch label both target #pl-active: clicking
+    // either still toggles the same checkbox (semantics unchanged).
+    await page.click('#pipeline-form label[data-i18n="pipelines.field.active"]');
     suite.log('2.13e Clicking the AutoStart label toggles the setting', (await autostartLayout(page)).checked === true);
-    await page.click('#pipeline-form label.pipeline-autostart span[data-i18n="pipelines.field.active"]');
+    await page.click('#pipeline-form label[data-i18n="pipelines.field.active"]');
     suite.log('2.13f Clicking again toggles it back', (await autostartLayout(page)).checked === false);
+    const layNoGap = await autostartLayout(page);
+    suite.log('2.13g No leftover height under the AutoStart toggle', layNoGap.noLeftoverHeight === true && layNoGap.hintInAutoStartGroup === false, `groupBottom=${Math.round(layNoGap.groupBottom)} switchBottom=${layNoGap.switchBottom}`);
+    // Fourth required variant: the same head measured in EN with the Create
+    // modal open — the contract is structural, so a different caption width must
+    // not change label→control or row membership.
+    await page.evaluate(async () => { await window.setLanguage('en'); });
+    await page.waitForTimeout(250);
+    const layCreateEn = await autostartLayout(page);
+    suite.log('2.13h Create EN: label above toggle, captions on one level, one row, Models below, no helper', layCreateEn.captionAboveSwitch === true && layCreateEn.nameLabelAboveInput === true && layCreateEn.labelsSameLevel === true && layCreateEn.sameRow === true && layCreateEn.autoLeftOfName === true && layCreateEn.modelsBelowRow === true && layCreateEn.autoCompact === true && layCreateEn.switchNotStretched === true && layCreateEn.noLeftoverHeight === true && layCreateEn.hintCountInForm === 0, JSON.stringify({ captionAboveSwitch: layCreateEn.captionAboveSwitch, nameLabelAboveInput: layCreateEn.nameLabelAboveInput, labelsSameLevel: layCreateEn.labelsSameLevel, sameRow: layCreateEn.sameRow, autoCompact: layCreateEn.autoCompact, switchNotStretched: layCreateEn.switchNotStretched, noLeftoverHeight: layCreateEn.noLeftoverHeight, hints: layCreateEn.hintCountInForm }));
+    suite.log('2.13i Create EN caption is the GoAl-owned EN label, distinct from RU', layCreateEn.labelText === (await page.evaluate(() => t('pipelines.field.active'))) && layCreateEn.labelText !== layCreate.labelText, `en=${JSON.stringify(layCreateEn.labelText)} ru=${JSON.stringify(layCreate.labelText)}`);
+    await page.evaluate(async () => { await window.setLanguage('ru'); });
+    await page.waitForTimeout(250);
+    const layCreateBack = await autostartLayout(page);
+    suite.log('2.13j Returning to RU restores the Create head with the setting untouched', layCreateBack.captionAboveSwitch === true && layCreateBack.sameRow === true && layCreateBack.checked === false && layCreateBack.hintCountInForm === 0, `captionAboveSwitch=${layCreateBack.captionAboveSwitch} sameRow=${layCreateBack.sameRow} checked=${layCreateBack.checked}`);
+    // The caption and the switch are two labels for ONE control, so a direct
+    // click on the switch must still change the state exactly once.
+    await page.locator('#pipeline-form label.pipeline-autostart .toggle-slider').click();
+    suite.log('2.13k Clicking the switch itself toggles exactly once', (await autostartLayout(page)).checked === true);
+    await page.locator('#pipeline-form label.pipeline-autostart .toggle-slider').click();
+    suite.log('2.13l Clicking the switch again toggles it back', (await autostartLayout(page)).checked === false);
 
     // ── Build: block 1 = model A, Custom args ──
     await page.fill('#pl-name', 'Cluster A');
@@ -374,23 +443,37 @@ async function main() {
     await actionClick('#pipeline-list .model-row', 'editPipeline');
     await page.waitForTimeout(400);
     const layEdit = await autostartLayout(page);
-    suite.log('9b.1 Edit modal keeps the same inline, grid-aligned row', layEdit.display === 'inline-flex' && layEdit.sameLine && Math.abs(layEdit.groupLeft - layEdit.nameLeft) < 1 && Math.abs(layEdit.groupLeft - layEdit.modelsLeft) < 1, JSON.stringify(layEdit));
+    suite.log('9b.1 Edit modal keeps the label-above-toggle head on one row', layEdit.captionAboveSwitch === true && layEdit.nameLabelAboveInput === true && layEdit.sameRow === true && layEdit.autoLeftOfName === true && layEdit.modelsBelowRow === true, JSON.stringify({ captionAboveSwitch: layEdit.captionAboveSwitch, nameLabelAboveInput: layEdit.nameLabelAboveInput, sameRow: layEdit.sameRow, autoLeftOfName: layEdit.autoLeftOfName, modelsBelowRow: layEdit.modelsBelowRow }));
+    suite.log('9b.1b Edit modal geometry matches Create (single shared form)', layEdit.groupWidth === layCreate.groupWidth && layEdit.nameWidth === layCreate.nameWidth && layEdit.modelsWidth === layCreate.modelsWidth, `edit(auto/name/models)=${layEdit.groupWidth}/${layEdit.nameWidth}/${layEdit.modelsWidth} create=${layCreate.groupWidth}/${layCreate.nameWidth}/${layCreate.modelsWidth}`);
+    suite.log('9b.1c Edit modal labels are above their controls and on one level, with no helper', layEdit.captionAboveSwitch === true && layEdit.nameLabelAboveInput === true && layEdit.labelsSameLevel === true && layEdit.switchNotStretched === true && layEdit.noLeftoverHeight === true && layEdit.hintCountInForm === 0, JSON.stringify({ captionAboveSwitch: layEdit.captionAboveSwitch, nameLabelAboveInput: layEdit.nameLabelAboveInput, labelsSameLevel: layEdit.labelsSameLevel, switchNotStretched: layEdit.switchNotStretched, noLeftoverHeight: layEdit.noLeftoverHeight, hints: layEdit.hintCountInForm }));
     suite.log('9b.2 Edit prefills AutoStart from the stored flag (semantics unchanged)', layEdit.checked === true, `checked=${layEdit.checked}`);
     const enLabels = await page.evaluate(async () => {
       await window.setLanguage('en');
       const row = document.querySelector('#pipeline-form label.pipeline-autostart');
       const out = {
-        label: row.querySelector('span[data-i18n="pipelines.field.active"]').textContent.trim(),
-        hint: row.closest('.form-group').querySelector('.hint').textContent.trim(),
+        label: row.closest('.form-group').querySelector('label[data-i18n="pipelines.field.active"]').textContent.trim(),
+        hintsInForm: document.querySelectorAll('#pipeline-form .hint').length,
         want: t('pipelines.field.active'),
-        wantHint: t('pipelines.field.active_hint'),
         checked: row.querySelector('input[type=checkbox]').checked,
       };
-      await window.setLanguage('ru');
       return out;
     });
-    suite.log('9b.3 EN renders GoAl-owned AutoStart label and helper', enLabels.label === enLabels.want && enLabels.hint === enLabels.wantHint && enLabels.label !== layEdit.labelText, `label=${JSON.stringify(enLabels.label)} hint=${JSON.stringify(enLabels.hint)}`);
+    suite.log('9b.3 EN renders the GoAl-owned AutoStart label and no helper', enLabels.label === enLabels.want && enLabels.hintsInForm === 0 && enLabels.label !== layEdit.labelText, `label=${JSON.stringify(enLabels.label)} hintsInForm=${enLabels.hintsInForm}`);
+    const layEditEn = await autostartLayout(page);
+    suite.log('9b.3b EN keeps the same label-above-toggle one-row head', layEditEn.captionAboveSwitch === true && layEditEn.labelsSameLevel === true && layEditEn.sameRow === true && layEditEn.autoLeftOfName === true && layEditEn.modelsBelowRow === true && layEditEn.hintCountInForm === 0, `sameRow=${layEditEn.sameRow} captionAboveSwitch=${layEditEn.captionAboveSwitch} labelsSameLevel=${layEditEn.labelsSameLevel} auto=${layEditEn.groupWidth}px name=${layEditEn.nameWidth}px`);
+    await page.evaluate(async () => { await window.setLanguage('ru'); });
+    await page.waitForTimeout(200);
     suite.log('9b.4 Language switch does not disturb the setting', enLabels.checked === true);
+    // Removing the helper markup must not leave a raw i18n key rendered in the form.
+    const formI18n = await page.evaluate(() => {
+      const form = document.getElementById('pipeline-form');
+      return {
+        leakedKeyText: /\b[a-z]+\.[a-z_]+\.[a-z_]+\b/.test(form.innerText || ''),
+        missing: Object.keys(window.i18nMissing || {}),
+        hints: form.querySelectorAll('.hint').length,
+      };
+    });
+    suite.log('9b.4b No raw i18n key or missing translation in the pipeline form', formI18n.leakedKeyText === false && formI18n.missing.length === 0 && formI18n.hints === 0, `leaked=${formI18n.leakedKeyText} missing=${JSON.stringify(formI18n.missing.slice(0, 3))} hints=${formI18n.hints}`);
     await page.evaluate(() => closeModal('pipeline-modal'));
     await page.waitForTimeout(200);
     const afterEdit = (await api('GET', '/api/v1/pipelines')).data.find(x => x.id === pipeId);
@@ -770,6 +853,12 @@ async function main() {
     suite.log('12c.3 Mobile builder: custom args textarea usable', mbVal === '--port 8087 --ctx 4096', `val=${JSON.stringify(mbVal)}`);
     const mbOverflow = await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1);
     suite.log('12c.4 Mobile builder at 414px: no horizontal overflow', mbOverflow);
+    // (OWNER-UX-02, narrow) the head stacks instead of forcing two cramped
+    // columns: AutoStart, then Name, then Models — and Name stays usable.
+    const layMob = await autostartLayout(page);
+    suite.log('12c.4b @414px: AutoStart → Name → Models stack in that order', layMob.sameRow === false && layMob.groupTop < layMob.nameTop && layMob.nameTop < layMob.modelsTop, `autoTop=${layMob.groupTop} nameTop=${layMob.nameTop} modelsTop=${layMob.modelsTop} sameRow=${layMob.sameRow}`);
+    suite.log('12c.4c @414px: stacked Name is full width and still no helper under AutoStart', layMob.nameInputWidth >= 300 && layMob.hintInAutoStartGroup === false && layMob.hintCountInForm === 0 && layMob.noLeftoverHeight === true, `nameInput=${layMob.nameInputWidth}px groupWidth=${layMob.groupWidth}px hints=${layMob.hintCountInForm}`);
+    suite.log('12c.4d @414px: each label stays above its own control after stacking', layMob.captionAboveSwitch === true && layMob.nameLabelAboveInput === true && layMob.switchNotStretched === true, `captionTop=${layMob.captionTop} switchTop=${layMob.switchTop} nameLabelTop=${layMob.nameLabelTop} nameInputTop=${layMob.nameInputTop}`);
     await H.screenshot(page, ws, '08-builder-mobile');
     await page.click('#pipeline-modal .modal-actions .btn-ghost');
     await page.waitForTimeout(200);

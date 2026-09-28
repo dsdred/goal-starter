@@ -433,17 +433,14 @@ code { font-family: var(--font-mono); font-size: 0.9em; background: var(--bg-inp
 /* Active toggle: visually distinct from the model autostart "A" badge and
    from the manual Start action (persistent setting, accent color). */
 .toggle-pipeline input:checked + .toggle-slider { background: var(--accent); }
-/* Pipeline AutoStart row. Inside .form-group the generic `label` rule wins on
-   specificity and forces display:block, which stacked the switch above its text
-   and left both off the Name/Models grid. Restore the inline switch layout and
-   attach the helper text to the same field. */
-#pipeline-form .form-group-autostart { margin-bottom: 1rem; }
+/* Pipeline AutoStart switch label. The caption is a separate .form-group label
+   above the switch (OWNER-UX-02), so this element wraps only the toggle and must
+   not inherit the block label layout that .form-group label imposes. */
 #pipeline-form label.pipeline-autostart {
-    display: inline-flex; align-items: center; gap: 8px; margin-bottom: 0;
-    font-size: 0.9rem; font-weight: 500; color: var(--text-secondary); cursor: pointer;
+    display: inline-flex; align-items: center; margin-bottom: 0;
+    color: var(--text-secondary); cursor: pointer;
 }
 #pipeline-form label.pipeline-autostart:hover { color: var(--text-primary); }
-#pipeline-form .form-group-autostart .hint { display: block; margin-top: 4px; }
 .pl-chips-wrap { flex-wrap: wrap; gap: 2px; white-space: normal; }
 /* Per-entry model-name chip: constrain to the available width. At narrow
    viewports (125%/150% browser zoom, narrow desktop windows) an unconstrained
@@ -457,14 +454,14 @@ code { font-family: var(--font-mono); font-size: 0.9em; background: var(--bg-inp
    remove controls (disabled at the bounds); the pipeline-level Active toggle
    lives in the form head, not per block. */
 .pl-builder { display: flex; flex-direction: column; gap: 10px; }
-/* Pipeline form head: the Name field (left) and the pipeline-level Active
-   toggle (right) are two clearly separated columns. The Name column keeps a
-   comfortable minimum width and the Active column is bounded (the long hint
-   wraps within it), so the Name field is never squeezed to a narrow sliver and
-   the two controls never overlap. */
-.pl-form-head { display: grid; grid-template-columns: minmax(200px, 1fr) minmax(0, 340px); gap: 1rem; align-items: start; margin-bottom: 1rem; }
+/* Pipeline form head (OWNER-UX-02): the AutoStart group (caption label above its
+   switch) and the Name group share ONE horizontal row, both labels at the same
+   level; Models starts on the next row at the full form width. The AutoStart
+   column hugs its content (max-content) so no dead space is left under the
+   switch, and Name takes everything left over — the Name input is never squeezed
+   to a sliver. Below 768px the row stacks in DOM order: AutoStart, Name, Models. */
+.pl-form-head { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 1rem; align-items: start; margin-bottom: 1rem; }
 .pl-form-head .form-group { margin-bottom: 0; min-width: 0; }
-.pl-active-group { display: flex; flex-direction: column; gap: 4px; align-items: flex-start; min-width: 0; }
 .pl-block {
     width: 100%; padding: 12px 14px;
     border: 1px solid var(--border); border-radius: var(--radius);
