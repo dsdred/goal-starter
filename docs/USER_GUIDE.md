@@ -786,7 +786,7 @@ Navigate to **Settings → Portable Configuration**.
 **Export:**
 1. Choose a scope: **All** (default), **Runtime**, **Model**, or **Pipeline**.
 2. If a specific scope is selected, choose the entity from the dropdown.
-3. Click **Download**. The browser saves `goal-portable-config.json`.
+3. Click **Download**. When the page is served over a **secure origin** (HTTPS, or `localhost` / `127.0.0.1`) in a browser that provides the native save-dialog capability, GoAl opens the system save dialog, where you choose the file name and the destination; the suggested file name is `goal-portable-config.json`. GoAl does not learn or store the destination you select. On a **plain-HTTP address reached by a non-loopback host name** (for example `http://server-name:8088`) the browser does not expose that capability at all, and in any other unsupported browser, GoAl falls back to the ordinary browser download: `goal-portable-config.json` is written to the browser's own download location according to the browser's settings, and GoAl cannot offer a destination choice there.
 
 **Import:**
 1. Click **Choose file** and select a `goal-portable-config.json` file. The chosen file name is shown next to the button.

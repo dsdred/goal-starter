@@ -292,6 +292,8 @@
   "portable.export.button": "Скачать",
   "portable.export.success": "Конфигурация экспортирована",
   "portable.export.error": "Ошибка экспорта",
+  "portable.export.save_error": "Не удалось сохранить файл",
+  "portable.export.write_error": "Не удалось записать файл",
   "portable.warning": "Значения переменных окружения НЕ экспортируются. Экспортируются только имена ключей. Args экспортируются как есть и могут содержать конфиденциальные данные (API-ключи, токены, пути). GoAl не выполняет детекцию секретов в Args.",
   "portable.import.title": "Импорт",
   "portable.import.file": "Файл конфигурации",

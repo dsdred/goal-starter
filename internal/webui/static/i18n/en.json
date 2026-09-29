@@ -292,6 +292,8 @@
   "portable.export.button": "Download",
   "portable.export.success": "Configuration exported",
   "portable.export.error": "Export failed",
+  "portable.export.save_error": "Could not save the file",
+  "portable.export.write_error": "Could not write the file",
   "portable.warning": "Environment VALUES are NOT exported. Only key names are included. Args are exported as-is and may contain sensitive values (API keys, tokens, private paths). GoAl does not detect or redact secrets in Args.",
   "portable.import.title": "Import",
   "portable.import.file": "Configuration file",

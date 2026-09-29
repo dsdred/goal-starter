@@ -27,6 +27,82 @@ async function list(page, urlPath) {
   return Array.isArray(r.data) ? r.data : [];
 }
 
+// OWNER-EXPORT-01 testability: the native save dialog is outside the page, so
+// headless acceptance controls the capability instead of driving the dialog.
+// mode: absent | ok | abort | fail | create_fail | write_fail | close_fail
+async function setSaveCapability(page, mode) {
+  await page.evaluate((m) => {
+    window.__pickerCalls = [];
+    window.__exportTrace = [];
+    window.__toasts = [];
+    window.__saved = null;
+    window.__aborted = false;
+    window.__fakeDest = 'C:\\Users\\leak-marker-8f2d\\Chosen Folder\\chosen-name.json';
+    if (!window.__toastObserver) {
+      window.__toastObserver = new MutationObserver((muts) => {
+        for (const mu of muts) {
+          for (const n of mu.addedNodes) {
+            if (n.nodeType === 1) window.__toasts.push({ text: n.textContent, cls: n.className, trace: window.__exportTrace.slice() });
+          }
+        }
+      });
+      window.__toastObserver.observe(document.getElementById('toast-container'), { childList: true });
+    }
+    if (!window.__fetchWrapped) {
+      const orig = window.fetch;
+      window.fetch = function (input) {
+        const url = typeof input === 'string' ? input : (input && input.url) || '';
+        if (url.indexOf('/api/v1/export') !== -1) window.__exportTrace.push('fetch');
+        return orig.apply(this, arguments);
+      };
+      window.__fetchWrapped = true;
+    }
+    const slot = { configurable: true, writable: true };
+    if (m === 'absent') {
+      Object.defineProperty(window, 'showSaveFilePicker', Object.assign(slot, { value: undefined }));
+      return;
+    }
+    const picker = async (options) => {
+      window.__pickerCalls.push(options);
+      window.__exportTrace.push('picker');
+      if (m === 'abort') { const e = new Error('cancelled'); e.name = 'AbortError'; throw e; }
+      if (m === 'fail') { const e = new Error('picker unavailable'); e.name = 'NotAllowedError'; throw e; }
+      const handle = {
+        name: (options && options.suggestedName) || 'unnamed.json',
+        __fakeDest: window.__fakeDest,
+        createWritable: async () => {
+          if (m === 'create_fail') throw new Error('createWritable failed');
+          window.__exportTrace.push('writable');
+          const chunks = [];
+          return {
+            write: async (b) => { if (m === 'write_fail') throw new Error('write failed'); chunks.push(b); },
+            close: async () => {
+              if (m === 'close_fail') throw new Error('close failed');
+              window.__saved = {
+                name: handle.name,
+                size: chunks.length ? chunks[0].size : 0,
+                text: chunks.length ? await chunks[0].text() : '',
+              };
+              window.__exportTrace.push('close');
+            },
+            abort: async () => { window.__aborted = true; },
+          };
+        },
+      };
+      return handle;
+    };
+    Object.defineProperty(window, 'showSaveFilePicker', Object.assign(slot, { value: picker }));
+  }, mode);
+}
+
+function traceOf(page) {
+  return page.evaluate(() => window.__exportTrace.slice());
+}
+
+function toastsOf(page) {
+  return page.evaluate(() => window.__toasts.map(x => ({ text: x.text, cls: x.cls, trace: x.trace })));
+}
+
 async function main() {
   const ws = H.makeWorkspace('portable');
   const goalBin = H.buildGoal(ws);
@@ -52,6 +128,14 @@ async function main() {
   const page = await ctx.newPage();
   const suite = H.newSuite('Portable Configuration (export/import UI)');
   suite.watchPage(page);
+  let downloadCount = 0;
+  page.on('download', () => { downloadCount++; });
+  const exportRequests = [];
+  page.on('request', (req) => {
+    if (req.url().indexOf('/api/v1/export') !== -1) {
+      exportRequests.push({ url: req.url(), method: req.method(), headers: req.headers(), body: req.postData() });
+    }
+  });
 
   try {
     await H.login(page, BASE, ADMIN_USER, ADMIN_PASS);
@@ -163,9 +247,14 @@ async function main() {
     await page.evaluate(() => window.setLanguage('ru'));
     await page.waitForTimeout(400);
 
-    // ═══ SECTION 4: Export all (download) ═══
+    // ═══ SECTION 4: Export all — FALLBACK branch (save capability absent) ═══
+    // Headless Chromium does expose showSaveFilePicker on this loopback origin,
+    // so the fallback contract is asserted with the capability explicitly removed.
+    await setSaveCapability(page, 'absent');
     await scopeSel.selectOption('');
     await page.waitForTimeout(200);
+    suite.log('4.0 Save-dialog capability detected as absent (fallback branch)', (await page.evaluate(() => typeof window.showSaveFilePicker)) !== 'function');
+    const dlBefore4 = downloadCount;
     const [download] = await Promise.all([
       page.waitForEvent('download', { timeout: 10000 }),
       page.click('#portable-export-btn'),
@@ -182,11 +271,12 @@ async function main() {
     const hasEnvValues = exportContent.runtimes.some(rt => rt.environment && Object.keys(rt.environment).length > 0);
     suite.log('4.6 No environment values in export', !hasEnvValues);
 
-    // ═══ SECTION 5: Export model root ═══
+    // ═══ SECTION 5: Export model root (still the fallback branch) ═══
     await scopeSel.selectOption('model');
     await page.waitForTimeout(200);
     const modelOptions = await entitySel.locator('option').allTextContents();
     const modelOpt = modelOptions.find(o => o.includes('Seed Model'));
+    const dlBefore5 = downloadCount;
     if (modelOpt) {
       await entitySel.selectOption({ label: modelOpt });
       await page.waitForTimeout(200);
@@ -202,6 +292,117 @@ async function main() {
       suite.log('5.1 Root export has the model', false, 'model option not found');
       suite.log('5.2 Root export has its runtime (closure)', false, 'skipped');
     }
+    suite.log('5.3 Fallback made exactly one download per export', downloadCount - dlBefore5 === 1, `delta=${downloadCount - dlBefore5}`);
+    suite.log('5.4 Fallback never requested a save dialog', (await page.evaluate(() => window.__pickerCalls.length)) === 0);
+
+    // ═══ SECTION 5B: Preferred path — save dialog available (OWNER-EXPORT-01) ═══
+    // The dialog itself is Manual Owner Acceptance; here a controlled picker
+    // proves the product semantics: order, suggested name, JSON filter, written
+    // bytes, close-before-success, and no browser download on this path.
+    await setSaveCapability(page, 'ok');
+    await scopeSel.selectOption('');
+    await page.waitForTimeout(200);
+    const dlBefore5B = downloadCount;
+    await page.click('#portable-export-btn');
+    await page.waitForFunction(() => window.__saved || window.__toasts.length > 0, { timeout: 10000 });
+    const trace5B = await traceOf(page);
+    const toasts5B = await toastsOf(page);
+    const saved5B = await page.evaluate(() => window.__saved);
+    const pickerOpts = await page.evaluate(() => window.__pickerCalls[0] || null);
+    suite.log('5B.1 Save dialog is requested before the export fetch', trace5B[0] === 'picker' && trace5B.indexOf('fetch') === 1, `trace=${JSON.stringify(trace5B)}`);
+    suite.log('5B.2 Suggested name is the ADR 014 SC-5 filename', !!(pickerOpts && pickerOpts.suggestedName === 'goal-portable-config.json'), `got=${pickerOpts ? pickerOpts.suggestedName : 'none'}`);
+    suite.log('5B.3 JSON filter is offered for the save dialog', !!(pickerOpts && Array.isArray(pickerOpts.types) && pickerOpts.types[0] && pickerOpts.types[0].accept && pickerOpts.types[0].accept['application/json'] && pickerOpts.types[0].accept['application/json'].includes('.json')), `types=${JSON.stringify(pickerOpts ? pickerOpts.types : null)}`);
+    suite.log('5B.4 Export bytes are written to the chosen handle', !!(saved5B && saved5B.size > 0), `size=${saved5B ? saved5B.size : 0}`);
+    let savedBundle = null;
+    try { savedBundle = JSON.parse(saved5B.text); } catch {}
+    suite.log('5B.5 Saved file is a valid Bundle v1', !!savedBundle && savedBundle.format === 'goal-portable-config' && savedBundle.version === 1);
+    suite.log('5B.6 Saved bundle carries the seeded entities', !!savedBundle && Array.isArray(savedBundle.runtimes) && savedBundle.runtimes.length >= 1 && Array.isArray(savedBundle.models) && savedBundle.models.length >= 1, savedBundle ? `runtimes=${savedBundle.runtimes.length} models=${savedBundle.models.length}` : 'unparsable');
+    suite.log('5B.7 Saved bundle carries no environment values', !!savedBundle && !savedBundle.runtimes.some(rt => rt.environment && Object.keys(rt.environment).length > 0));
+    suite.log('5B.8 Success is reported only after close()', toasts5B.length === 1 && toasts5B[0].text === 'Конфигурация экспортирована' && toasts5B[0].cls.includes('success') && toasts5B[0].trace.includes('close'), `toasts=${JSON.stringify(toasts5B.map(x => x.text))}`);
+    suite.log('5B.9 Preferred path produces no browser download', downloadCount - dlBefore5B === 0, `delta=${downloadCount - dlBefore5B}`);
+    suite.log('5B.10 Button is restored and enabled after a saved export', !(await page.locator('#portable-export-btn').isDisabled()));
+
+    // ═══ SECTION 5C: Cancel (AbortError) — the operation simply ends ═══
+    await setSaveCapability(page, 'abort');
+    const dlBefore5C = downloadCount;
+    await page.click('#portable-export-btn');
+    await page.waitForFunction(() => window.__exportTrace.length > 0, { timeout: 10000 });
+    await page.waitForTimeout(700);
+    const trace5C = await traceOf(page);
+    const toasts5C = await toastsOf(page);
+    suite.log('5C.1 Cancel calls the picker only', JSON.stringify(trace5C) === JSON.stringify(['picker']), `trace=${JSON.stringify(trace5C)}`);
+    suite.log('5C.2 Cancel shows no toast at all', toasts5C.length === 0, `toasts=${JSON.stringify(toasts5C.map(x => x.text))}`);
+    suite.log('5C.3 Cancel fires no fallback download', downloadCount - dlBefore5C === 0);
+    suite.log('5C.4 Cancel does not run the export fetch', !trace5C.includes('fetch'));
+    suite.log('5C.5 Button is restored after cancel', !(await page.locator('#portable-export-btn').isDisabled()) && (await page.locator('#portable-export-btn').textContent()).trim() === 'Скачать');
+
+    // ═══ SECTION 5D: Picker failure (non-AbortError) — no silent download ═══
+    await setSaveCapability(page, 'fail');
+    const dlBefore5D = downloadCount;
+    await page.click('#portable-export-btn');
+    await page.waitForFunction(() => window.__toasts.length > 0, { timeout: 10000 });
+    const trace5D = await traceOf(page);
+    const toasts5D = await toastsOf(page);
+    suite.log('5D.1 Picker failure shows the neutral RU save error', toasts5D.length === 1 && toasts5D[0].text === 'Не удалось сохранить файл' && toasts5D[0].cls.includes('error'), `toasts=${JSON.stringify(toasts5D.map(x => x.text))}`);
+    suite.log('5D.2 Picker failure does NOT start a fallback download', downloadCount - dlBefore5D === 0, `delta=${downloadCount - dlBefore5D}`);
+    suite.log('5D.3 Picker failure fetches nothing and claims no success', !trace5D.includes('fetch') && !toasts5D.some(x => x.cls.includes('success')));
+    suite.log('5D.4 Button is restored after a picker failure', !(await page.locator('#portable-export-btn').isDisabled()));
+    // EN owns the same caption (a missing EN key would surface here, not in 15.x)
+    await page.evaluate(() => window.setLanguage('en'));
+    await page.waitForTimeout(400);
+    await page.evaluate(() => { window.__toasts = []; });
+    await page.click('#portable-export-btn');
+    await page.waitForFunction(() => window.__toasts.length > 0, { timeout: 10000 });
+    suite.log('5D.5 Picker failure EN caption is localized', (await toastsOf(page))[0].text === 'Could not save the file', `got="${(await toastsOf(page)).map(x => x.text).join('|')}"`);
+
+    // ═══ SECTION 5E: Write / close failure — write error, no success claim ═══
+    await page.evaluate(() => window.setLanguage('ru'));
+    await page.waitForTimeout(400);
+    for (const [label, mode] of [['5E', 'write_fail'], ['5E2', 'close_fail']]) {
+      await setSaveCapability(page, mode);
+      await page.evaluate(() => { window.__toasts = []; });
+      await page.click('#portable-export-btn');
+      await page.waitForFunction(() => window.__toasts.length > 0, { timeout: 10000 });
+      const t2 = await toastsOf(page);
+      const saved = await page.evaluate(() => window.__saved);
+      suite.log(`${label}.1 ${mode} reports the write error, not success`, t2.length === 1 && t2[0].text === 'Не удалось записать файл' && t2[0].cls.includes('error'), `toasts=${JSON.stringify(t2.map(x => x.text))}`);
+      suite.log(`${label}.2 ${mode} claims no saved file`, saved === null);
+      suite.log(`${label}.3 ${mode} leaves no success toast and re-enables the button`, !(await page.locator('#portable-export-btn').isDisabled()));
+    }
+    suite.log('5E.3b A failed write releases the stream so a retry is possible', await page.evaluate(() => window.__aborted === true));
+
+    // ═══ SECTION 5F: Security boundary — no client path ever reaches GoAl ═══
+    // The fake handle advertises an absolute destination path; none of it may
+    // appear on the wire, and the export request must stay the documented
+    // selector contract (ADR 014 SC-1).
+    await setSaveCapability(page, 'ok');
+    await page.evaluate(() => { window.__toasts = []; });
+    exportRequests.length = 0;
+    await page.click('#portable-export-btn');
+    await page.waitForFunction(() => window.__saved, { timeout: 10000 });
+    await scopeSel.selectOption('model');
+    await page.waitForTimeout(200);
+    const modelOptions5F = await entitySel.locator('option').allTextContents();
+    const modelOpt5F = modelOptions5F.find(o => o.includes('Seed Model'));
+    if (modelOpt5F) {
+      await entitySel.selectOption({ label: modelOpt5F });
+      await page.waitForTimeout(200);
+    }
+    await page.evaluate(() => { window.__saved = null; });
+    await page.click('#portable-export-btn');
+    await page.waitForFunction(() => window.__saved, { timeout: 10000 });
+    const reqDump = await page.evaluate((reqs) => JSON.stringify(reqs), exportRequests);
+    const marker = await page.evaluate(() => window.__fakeDest);
+    const entityVal5F = await entitySel.inputValue();
+    const markerTokens = ['leak-marker-8f2d', 'Chosen Folder', 'chosen-name', 'C:\\Users'];
+    const urlObjs = exportRequests.map(r => new URL(r.url));
+    const urlShapes = urlObjs.map(u => u.pathname + (u.search || ''));
+    const queryKeys = urlObjs.map(u => Array.from(u.searchParams.keys()));
+    suite.log('5F.1 Export requests stay on the documented GET endpoint', exportRequests.length === 2 && exportRequests.every(r => r.method === 'GET' && new URL(r.url).pathname === '/api/v1/export'), `urls=${JSON.stringify(urlShapes)}`);
+    suite.log('5F.2 Query is exactly the documented selector contract', urlShapes[0] === '/api/v1/export' && urlShapes[1] === '/api/v1/export?model_id=' + encodeURIComponent(entityVal5F), `got=${JSON.stringify(urlShapes)}`);
+    suite.log('5F.3 No undocumented selector key appears in any export query', queryKeys.every(ks => ks.every(k => ['runtime_id', 'model_id', 'pipeline_id'].includes(k))), `keys=${JSON.stringify(queryKeys)}`);
+    suite.log('5F.4 No destination path leaks into URL, query, headers or body', !markerTokens.some(tok => reqDump.includes(tok)), `marker=${JSON.stringify(marker)}`);
+    suite.log('5F.5 The export carries no request body', exportRequests.every(r => r.body === null || r.body === ''));
 
     // ═══ SECTION 6: Import happy path (all entities NEW) ═══
     const bundle1 = makeBundle();

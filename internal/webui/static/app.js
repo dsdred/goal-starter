@@ -2506,6 +2506,10 @@ function portableSelectScope() {
     portableUpdateEntitySelector();
 }
 
+// ADR 014 SC-5 fixes the exported file name. The save picker only suggests it:
+// the browser/OS dialog owns the destination, and GoAl never learns that path.
+const PORTABLE_EXPORT_FILENAME = 'goal-portable-config.json';
+
 async function portableExport() {
     const btn = document.getElementById('portable-export-btn');
     const scopeSel = document.getElementById('portable-export-scope');
@@ -2518,7 +2522,23 @@ async function portableExport() {
     btn.disabled = true;
     const oldLabel = btn.textContent;
     btn.textContent = t('common.loading');
+    let handle = null;
     try {
+        // The save picker consumes the click's transient user activation, so it is
+        // opened before the export fetch; the destination file is not created or
+        // truncated until createWritable() runs on the handle the user chose.
+        if (typeof window.showSaveFilePicker === 'function') {
+            try {
+                handle = await window.showSaveFilePicker({
+                    suggestedName: PORTABLE_EXPORT_FILENAME,
+                    types: [{ description: 'JSON', accept: { 'application/json': ['.json'] } }],
+                });
+            } catch (e) {
+                if (e && e.name === 'AbortError') return;
+                showToast(t('portable.export.save_error'), 'error');
+                return;
+            }
+        }
         const r = await fetch('/api/v1/export' + query, { headers: { 'Accept': 'application/json' } });
         if (!r.ok) {
             let msg = r.statusText;
@@ -2526,10 +2546,24 @@ async function portableExport() {
             throw new Error(msg);
         }
         const blob = await r.blob();
+        if (handle) {
+            let writable = null;
+            try {
+                writable = await handle.createWritable();
+                await writable.write(blob);
+                await writable.close();
+            } catch (e) {
+                if (writable) { try { await writable.abort(); } catch {} }
+                showToast(t('portable.export.write_error'), 'error');
+                return;
+            }
+            showToast(t('portable.export.success'), 'success');
+            return;
+        }
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = 'goal-portable-config.json';
+        a.download = PORTABLE_EXPORT_FILENAME;
         document.body.appendChild(a);
         a.click();
         a.remove();
