@@ -1,11 +1,17 @@
 package config
 
 import (
+	"crypto/tls"
+	"crypto/x509"
+	"errors"
 	"fmt"
 	"net"
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
+	"strconv"
+	"time"
 
 	"github.com/dsdred/goal/internal/webui/validation"
 )
@@ -29,6 +35,12 @@ func (c Config) ValidateFull() error {
 	// Validate listen address.
 	if err := validateAddress(c.ListenAddress, c.WebPort); err != nil {
 		return fmt.Errorf("listen address: %w", err)
+	}
+
+	// Validate the optional native HTTPS block before anything is served:
+	// an enabled block that cannot be loaded must fail startup (ADR 019 §D8).
+	if err := c.validateTLS(); err != nil {
+		return err
 	}
 
 	// Validate runtimes.
@@ -76,6 +88,114 @@ func validateAddress(host string, port int) error {
 		_ = l.Close()
 	}
 	return nil
+}
+
+// validateTLS checks the optional native HTTPS block (ADR 019 §D8/§D9). It runs
+// in ValidateFull, i.e. before any listener exists, so an enabled block that
+// cannot be served fails startup instead of claiming HTTPS availability it does
+// not have. Disabled shapes never read the other fields. Failure messages name
+// the field, the reason and the file path, never the file contents (§D19). An
+// absent tls.port and an explicit 0 are two different §D3 rows, which is why the
+// port is a pointer.
+func (c Config) validateTLS() error {
+	if c.TLS == nil || !c.TLS.Enabled {
+		warnDisabledTLS(c.TLS)
+		return nil
+	}
+	t := c.TLS
+	if t.Port == nil {
+		return errors.New("tls.port is required when tls.enabled is true")
+	}
+	if *t.Port < 1 || *t.Port > 65535 {
+		return fmt.Errorf("tls.port out of range 1-65535, got %d", *t.Port)
+	}
+	if *t.Port == c.WebPort {
+		return fmt.Errorf("tls.port %d must differ from webPort %d: both listeners would bind the same address", *t.Port, c.WebPort)
+	}
+	if t.CertFile == "" {
+		return errors.New("tls.certFile is required")
+	}
+	if t.KeyFile == "" {
+		return errors.New("tls.keyFile is required")
+	}
+	if !filepath.IsAbs(t.CertFile) {
+		return fmt.Errorf("tls.certFile must be an absolute path: %s", t.CertFile)
+	}
+	if !filepath.IsAbs(t.KeyFile) {
+		return fmt.Errorf("tls.keyFile must be an absolute path: %s", t.KeyFile)
+	}
+
+	certPEM, err := os.ReadFile(t.CertFile)
+	if err != nil {
+		return fmt.Errorf("tls.certFile %s is not readable: %w", t.CertFile, err)
+	}
+	keyPEM, err := os.ReadFile(t.KeyFile)
+	if err != nil {
+		return fmt.Errorf("tls.keyFile %s is not readable: %w", t.KeyFile, err)
+	}
+	// The same call the HTTPS server will use, so a pair that loads here can be
+	// served; no chain assembly, reordering or issuer lookup happens here (§D5).
+	pair, err := tls.X509KeyPair(certPEM, keyPEM)
+	if err != nil {
+		return fmt.Errorf("tls certificate/key pair (%s, %s) failed to load: %w", t.CertFile, t.KeyFile, err)
+	}
+
+	// Go does not check the validity window when loading a key pair, so the
+	// window is checked explicitly against the local clock (§D9).
+	leaf, err := x509.ParseCertificate(pair.Certificate[0])
+	if err != nil {
+		return fmt.Errorf("tls.certFile %s has no parseable leaf certificate: %w", t.CertFile, err)
+	}
+	now := time.Now()
+	if now.Before(leaf.NotBefore) {
+		return fmt.Errorf("tls.certFile %s certificate is not yet valid: notBefore=%s", t.CertFile, leaf.NotBefore.Format(time.RFC3339))
+	}
+	if now.After(leaf.NotAfter) {
+		return fmt.Errorf("tls.certFile %s certificate has expired: notAfter=%s", t.CertFile, leaf.NotAfter.Format(time.RFC3339))
+	}
+
+	warnWorldReadableKey(t.KeyFile)
+	return nil
+}
+
+// warnDisabledTLS reports inert tls values (§D3, §D9): configured but never
+// applied. §D3's one distinguishable disabled shape is a non-zero field, so an
+// absent block, a nil or zero port and empty paths stay silent.
+func warnDisabledTLS(t *TLSConfig) {
+	if t == nil {
+		return
+	}
+	portSet := t.Port != nil && *t.Port != 0
+	if !portSet && t.CertFile == "" && t.KeyFile == "" {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "WARNING: tls configured but disabled; tls.port=%s tls.certFile=%s tls.keyFile=%s are ignored while tls.enabled is false.\n",
+		portText(t.Port), t.CertFile, t.KeyFile)
+}
+
+// portText renders an optional port for the disabled-block warning, naming an
+// absent key instead of printing the same 0 an explicit 0 would print.
+func portText(p *int) string {
+	if p == nil {
+		return "unset"
+	}
+	return strconv.Itoa(*p)
+}
+
+// warnWorldReadableKey warns about group/other-readable key files. POSIX-only
+// by decision: file modes are not reliable on Windows and a hard failure there
+// would break normal ACL layouts (§D9).
+func warnWorldReadableKey(path string) {
+	if runtime.GOOS == "windows" {
+		return
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return
+	}
+	if perm := info.Mode().Perm(); perm&0o044 != 0 {
+		fmt.Fprintf(os.Stderr, "WARNING: tls.keyFile %s is readable by group or other (mode %04o); restrict it to the account running GoAl.\n", path, perm)
+	}
 }
 
 // validateRuntime checks runtime configuration.

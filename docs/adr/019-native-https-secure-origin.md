@@ -64,14 +64,14 @@ Out of scope (each with its own reason):
 | Fact | Evidence |
 |---|---|
 | Exactly one plain HTTP listener; no TLS path anywhere | `internal/webui/server.go:211-252` — `http.Server{Addr: ListenAddress:WebPort}`, `server.ListenAndServe()`, `select { <-ctx.Done() / serverErr }`, `server.Shutdown(10s)` |
-| No TLS/cert/key/scheme config field exists | `internal/config/config.go:17-30` |
-| Unknown config keys are ignored on load | `config.go:161,203,227` — `json.Unmarshal` with no `DisallowUnknownFields` |
-| **But** saving rewrites the file from the struct, so keys absent from the struct are dropped | `config.go:279-283` (`json.MarshalIndent(cfg, …)`), called by `internal/webui/handlers/system.go:251` |
-| Optional nested config block precedent | `config.go:117` `HealthCheck *RuntimeHealthCheck \`json:"healthCheck,omitempty"\`` — nil = disabled |
+| No TLS/cert/key/scheme config field exists (design-time baseline; implementation slice 1 adds `tls`, §D3) | `internal/config/config.go:17-30` at published `d7191f8` — the same field list is `:17-33` in the slice 1 bytes, which append `TLS *TLSConfig` |
+| Unknown config keys are ignored on load | `config.go:164,220,244` — `json.Unmarshal` with no `DisallowUnknownFields` |
+| **But** saving rewrites the file from the struct, so keys absent from the struct are dropped | `config.go:296-300` (`func Save` → `json.MarshalIndent(cfg, …)`), called by `internal/webui/handlers/system.go:251` |
+| Optional nested config block precedent | `config.go:120` `HealthCheck *RuntimeHealthCheck \`json:"healthCheck,omitempty"\`` — nil = disabled |
 | Session cookie is hard-coded non-secure with the TLS TODO | `internal/webui/security/session.go:125-134` (`Secure: false, // will be set to true in middleware for HTTPS`, `SameSite: Lax`, `HttpOnly: true`) |
 | CSRF cookie | `internal/webui/security/csrf.go:109-121` — `goal_csrf_token`, `HttpOnly: false` (must stay JS-readable for the double-submit copy), `SameSite: Strict`; scope: applied only when `authEnabled=true` (`docs/SECURITY.md:59-61`) |
 | The session **clear** path omits both `Secure` and `SameSite` | `internal/webui/security/session.go:139-148` — `ClearSessionCookie` sets only `Name`/`Value:""`/`Path:"/"/`HttpOnly:true`/`MaxAge:-1`, so its attribute set does **not** match the cookie it clears once `Secure` is derived (§D18 rule covers this path) |
-| Non-loopback + `authEnabled=false` is warned, never blocked | `internal/config/validate.go:20-26` + `validateLocalhostOnly` at `:200-211`; `docs/SECURITY.md:69-74` |
+| Non-loopback + `authEnabled=false` is warned, never blocked | `internal/config/validate.go:26-32` + `validateLocalhostOnly` at `:320-331`; `docs/SECURITY.md:69-74` |
 | Audit and login rate limiting deliberately key on the TCP peer | `internal/webui/handlers/helpers.go:147-153`, `handlers/routes.go:307`, tests `routes_rate_limit_test.go:108`, `audit_integration_test.go:253` |
 | The request log already trusts `X-Forwarded-For` | `internal/webui/logger/logger.go:70`, `internal/webui/middleware/logging.go:59` — inconsistent with the row above |
 | SPA is scheme-agnostic (relative URLs only) | `internal/webui/static/app.js` — `fetch('/api/v1/…')`, `new EventSource('/api/v1/instances/…/logs/stream')` at `:1117-1122`; no absolute origin |
@@ -108,7 +108,8 @@ TLS is **opt-in and off by default**. The whole feature is gated by one optional
 }
 ```
 
-Go shape: `TLS *TLSConfig \`json:"tls,omitempty"\`` — `nil` means disabled, exactly the existing `healthCheck,omitempty` pattern (`config.go:117`).
+Go shape: `TLS *TLSConfig \`json:"tls,omitempty"\`` — `nil` means disabled, exactly the existing `healthCheck,omitempty` pattern (`config.go:120`).
+Inside the block, `port` is a `*int`: the semantics table below fixes two different diagnostics for an absent key and for an explicit `0`, and a plain `int` cannot tell them apart. This is the representation the accepted schema needs, not an operator-facing choice — it adds no key, no default and no knob.
 
 Rationale and rejected options:
 
@@ -127,6 +128,7 @@ No additional knobs are added: no `minVersion`, no cipher list, no curve list, n
 | `tls` key absent | disabled | proceeds; single HTTP listener (unchanged) |
 | `"tls": {}` | disabled | proceeds, **no warning** — after unmarshal this is the *same struct* as `enabled:false`, and inventing a distinguishable "present but empty" state would require a `*bool` knob for no benefit |
 | `"tls": { "enabled": false }` | disabled | proceeds; no warning (explicit opt-out) |
+| `"tls": { "port": 0 }` with `enabled` absent, or `{ "enabled": false, "port": 0 }` | disabled | proceeds, **no warning** — a zero port is an inert value, so it is the `{}` case, not the configured-but-disabled case below. Clarification of the ratified `port *int` representation, not a new decision: the pointer exists ONLY so the two `enabled:true` port diagnostics below can differ; presence never turns a disabled shape into a warning or a failure |
 | `"tls": { "enabled": false, "port": 8443, "certFile": …, "keyFile": … }` | disabled | proceeds; **warning** `tls configured but disabled` — inert values are never used, never partially applied (this is the one distinguishable disabled shape: a non-zero field while `enabled` is false) |
 | `"tls": { "enabled": true }` with **no** `port` | invalid | **startup fails** (`tls.port is required when tls.enabled is true`) — no default port is chosen for an opt-in listener (§D4) |
 | `"tls": { "enabled": true, "port": 0 }` | invalid | **startup fails** (`tls.port out of range 1-65535`) — `0` is not "auto" |
@@ -134,7 +136,9 @@ No additional knobs are added: no `minVersion`, no cipher list, no curve list, n
 | `"tls": { "enabled": true }` with **no** `certFile` | invalid | **startup fails** (`tls.certFile is required`) |
 | `"tls": { "enabled": true }` with **no** `keyFile` | invalid | **startup fails** (`tls.keyFile is required`) |
 | `enabled: true` + port + both paths, files valid | enabled | proceeds with **two** listeners |
-| unknown key inside `tls` (e.g. `certfile`, `httpsPort`) | parsed-and-ignored on load | **fails only indirectly**: config load has no `DisallowUnknownFields` (`config.go:161,203,227`), so the typo surfaces as the missing required field above, and §D24 records that a later save drops the unknown key entirely |
+| unknown key inside `tls` (e.g. `certificate`, `httpsPort`) | parsed-and-ignored on load | **fails only indirectly**: config load has no `DisallowUnknownFields` (`config.go:164,220,244`), so the typo surfaces as the missing required field above, and §D24 records that a later save drops the unknown key entirely |
+
+Key matching is `encoding/json`'s own: an exact tag name wins, and failing that a case-insensitive match is used. So `certfile`, `CERTFILE` and `certFile` all populate the same field — a case variant is an alias of the real key, not an unknown key, and the next `config.Save` rewrites it in the canonical spelling. Only a key that matches no field at all (like `certificate`, or `httpsPort` against `port`) is silently dropped. Enabling still requires an explicit truthy `enabled`, so no key spelling can open a listener implicitly.
 
 The rule that keeps this table honest is §D8: **`enabled == true` requires every field to be present, valid, absolute and loadable**; anything else is disabled, and disabled never reads the other fields.
 
@@ -255,7 +259,7 @@ The ADR separates five things that are routinely conflated:
 
 ### D19 — Warnings, authentication requirements, logging, diagnostics
 
-- The existing `authEnabled=false` + non-loopback warning (`validate.go:20-26`) is **extended in wording, not in force**: it must fire for the HTTPS listener as well, and its text must say that an unauthenticated admin API over the LAN is exposed regardless of scheme. **Startup is still not blocked** and no configuration is mutated (Owner decision D7). Making non-loopback binding require auth is a separate product decision (Owner decision P6; see §Open questions).
+- The existing `authEnabled=false` + non-loopback warning (`validate.go:26-32`) is **extended in wording, not in force**: it must fire for the HTTPS listener as well, and its text must say that an unauthenticated admin API over the LAN is exposed regardless of scheme. **Startup is still not blocked** and no configuration is mutated (Owner decision D7). Making non-loopback binding require auth is a separate product decision (Owner decision P6; see §Open questions).
 - Startup log must name both listeners distinctly, e.g. `starting HTTP server addr=…` and `starting HTTPS server addr=… (tls enabled, cert=<path>, expires=<RFC3339>, san=<list>)`. **Private-key material must never appear in any log line, error message, or diagnostic**; failure messages name the *path* and the *reason*, never the contents. Test obligation 8.
 - Shutdown/serve logs distinguish which listener errored.
 
@@ -284,7 +288,7 @@ Recorded accurately, without expanding this ADR into a proxy-identity redesign (
 
 - Absent `tls` ⇒ byte-identical behavior; every documented HTTP workflow keeps working, including `curl -b goal_session=… http://…/api/v1/export|import` (`docs/USER_GUIDE.md:806-831`) and the health probe used by the UI's connection indicator.
 - Enabling TLS is additive and reversible: delete the `tls` block (or set `enabled:false`) and restart ⇒ prior state exactly.
-- **Rollback hazard, recorded:** `config.Save` rewrites `goal.json` from the struct (`config.go:279-283`, called by `handlers/system.go:251`). Keys **absent from the struct are dropped**. So (a) telling operators to add a `tls` block before the release that parses it would let any settings save silently erase it, and (b) downgrading the binary past the TLS release and then saving settings loses the block. Documentation must state both, and the schema and the docs must ship in the same release.
+- **Rollback hazard, recorded:** `config.Save` rewrites `goal.json` from the struct (`config.go:296-300`, called by `handlers/system.go:251`). Keys **absent from the struct are dropped**. So (a) telling operators to add a `tls` block before the release that parses it would let any settings save silently erase it, and (b) downgrading the binary past the TLS release and then saving settings loses the block. Documentation must state both, and the schema and the docs must ship in the same release.
 
 ### D25 — Portable Configuration exclusion
 

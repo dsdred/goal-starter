@@ -28,6 +28,9 @@ type Config struct {
 	// LogLevel is the application log level: debug, info, warn, or error.
 	// Empty means info (ADR 009: hot field).
 	LogLevel string `json:"logLevel,omitempty"`
+	// TLS is the optional native HTTPS configuration (ADR 019 §D3).
+	// nil means disabled, exactly the healthCheck,omitempty pattern.
+	TLS *TLSConfig `json:"tls,omitempty"`
 }
 
 // BcryptCost is the bcrypt work factor used for password hashing.
@@ -174,6 +177,20 @@ type ProfileHealthCheck struct {
 	Timeout    int    `json:"timeout"`    // seconds per check
 	HTTPPath   string `json:"httpPath"`   // HTTP path to check (e.g., /health)
 	HTTPStatus int    `json:"httpStatus"` // expected HTTP status code
+}
+
+// TLSConfig holds the optional native HTTPS settings (ADR 019 §D3).
+// Only goal.json configures it: no HTTP API or Settings-UI surface accepts
+// these fields, and cert/key paths never leave the host filesystem (§D16).
+type TLSConfig struct {
+	Enabled bool `json:"enabled"`
+	// Port is the HTTPS listen port, required when Enabled is true. A pointer
+	// because §D3 fixes two different diagnostics for an absent key and for an
+	// explicit 0; it adds no configuration key and no operator knob.
+	Port *int `json:"port,omitempty"`
+	// CertFile and KeyFile are absolute PEM paths, required when Enabled is true.
+	CertFile string `json:"certFile"`
+	KeyFile  string `json:"keyFile"`
 }
 
 func Default() Config {

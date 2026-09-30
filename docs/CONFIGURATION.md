@@ -16,6 +16,7 @@ Configuration is loaded from a JSON file (default: `goal.json`) at application s
 | `adminPasswordHash` | string | Conditional | `""` | Bcrypt hash of the admin password (cost 12, 60 chars). Required when `authEnabled=true`. Never plaintext. |
 | `authEnabled` | bool | No | `false` | Enable session-based authentication and CSRF. |
 | `logLevel` | string | No | `info` | Application log level: `debug`, `info`, `warn`, `error`. Absent means `info`. Hot field (applied by reload, no restart). |
+| `tls` | object | No | absent | Optional native HTTPS settings ([TLS configuration](#tls-configuration-adr-019)). Absent means disabled. Restart field. |
 | `runtimes` | array | No | `[]` | Initial runtime definitions (seeded once). |
 | `models` | array | No | `[]` | Initial model definitions (seeded once). |
 | `profiles` | array | No | `[]` | Initial profile definitions (seeded once). |
@@ -213,6 +214,27 @@ in the GoAl 2.0 domain.
 
 The profile JSON accepts both `args` and `arguments` as the key for additional command-line arguments. The parser treats them as equivalent for backward compatibility.
 
+## TLS configuration (ADR 019)
+
+`tls` is an optional block in `goal.json` only. No HTTP endpoint and no Settings-UI form accepts it, and it never enters a Portable Configuration bundle ([ADR 019 §D16, §D25](adr/019-native-https-secure-origin.md)). It is configured by an operator who can already place files on the host.
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `enabled` | bool | No | `false` | Turns native HTTPS on. Any shape that is not `true` means disabled. |
+| `port` | int | When `enabled` | — | HTTPS listen port (1–65535) on the same `listenAddress` as HTTP. No default port is chosen; it must differ from `webPort`. An absent key and an explicit `0` are both invalid and are reported as two different failures (`tls.port is required…` and `tls.port out of range…`): `0` is never treated as "auto". |
+| `certFile` | string | When `enabled` | — | **Absolute** path to a PEM certificate chain, leaf first. GoAl serves exactly the blocks in the file — no chain assembly, no fetching, no reordering. |
+| `keyFile` | string | When `enabled` | — | **Absolute** path to the PEM private key. Keep it readable only by the account that runs GoAl. |
+
+Disabled shapes — the key absent, `"tls": null`, `"tls": {}` and `{"enabled": false}` — are the same value after parsing, so no configuration shape other than a complete `enabled: true` block can open a second listener. An `enabled: false` block that still carries a non-zero port or paths is accepted as disabled and logs a `tls configured but disabled` warning; those inert values are never applied.
+
+Startup validation is fail-closed and runs before any listener is created. When `enabled` is true, the port must be present, in range and different from `webPort`; both paths must be absolute; both files must be readable, parse as a matching certificate/key pair, and lie inside the certificate validity window. Any of these failures aborts startup with a message naming the field, the reason and the file path — never the file contents. A relative path is an error rather than a warning because the Windows Service control manager and systemd give the process no dependable working directory. A group- or other-readable `keyFile` is a POSIX-only warning and startup proceeds.
+
+`tls` is **not** a hot field: reload validates the file and reports `tls` under `restart_required` without applying anything. Certificate renewal is replace-files-then-restart; startup validation then confirms the new chain.
+
+Because `config.Save` rewrites `goal.json` from the parsed struct, keys it does not know are dropped. Key lookup is Go's `encoding/json` matching — exact name first, then case-insensitive — so a case variant such as `certfile` is read as `certFile` and is rewritten in the canonical spelling by the next save; only a key that matches no field at all (like `certificate`) is lost. A `tls` block written by a TLS-aware binary and then saved by an older one that has no `tls` field is lost with that save — keep the binary and the configuration contract in step.
+
+**Delivered scope:** the TLS block is validated and a broken one refuses to start GoAl. The HTTPS listener itself is the next step of the same design ([ADR 019](adr/019-native-https-secure-origin.md), implementation slicing item 2), so an enabled block today guarantees the configuration is correct, while GoAl still serves HTTP only.
+
 ## Storage migration
 
 On first startup, GoAl automatically migrates `goal_repo.json` to the current schema (v8). Legacy files with schema ≤5 or 6 are migrated to v7 (profiles become models, physical models folded into args, `profile_id` renamed to `model_id`); v7 loads directly as v8 (the `pipelines` key is additive). Instance history is preserved and resolved-command semantics are maintained.
@@ -232,6 +254,7 @@ Field classification is authoritative per [ADR 009](adr/009-hot-reload-wiring.md
 | `dataDir` | **restart** | Repository and audit-log paths are fixed at startup. |
 | `authEnabled` | **restart** | Baked into the route registry at startup. |
 | `adminUser` | **restart** | Baked into the route registry at startup. |
+| `tls` | **restart** | The HTTPS listener is bound at startup; reload never applies a TLS change, it only reports `tls` (ADR 019 §D4, §D23). |
 | `runtimes`, `models`, `profiles` | **seed-only, never re-applied** | Seed once into `goal_repo.json` at startup; live editing happens via API. Reload never re-seeds (it would overwrite user data). |
 
 Trigger: `POST /api/v1/admin/reload` (auth + CSRF protected). There is no file watching, no SIGHUP, and no polling — a reload happens only when explicitly requested. The endpoint re-reads and validates `goal.json`, applies hot fields, and responds with `{"status":"reloaded","applied":[...],"restart_required":[...]}` (field names only). A rejected reload (unreadable or invalid file) returns `400 {"status":"rejected",...}` and changes nothing: the file on disk is never modified by reload and live values are untouched. Every reload attempt emits a `config.reload` audit event (field names only).

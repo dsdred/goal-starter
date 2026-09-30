@@ -36,5 +36,31 @@ func DiffHot(file, live Config) HotReloadDiff {
 	if file.AdminUser != live.AdminUser {
 		restart = append(restart, "adminUser")
 	}
+	if tlsDiffers(file.TLS, live.TLS) {
+		restart = append(restart, "tls")
+	}
 	return HotReloadDiff{Applied: applied, RestartRequired: restart}
+}
+
+// tlsDiffers compares the optional tls blocks field by field. tls is
+// restart-required (ADR 019 §D4, §D23), so any difference in the block —
+// including appearing or disappearing — must be reported rather than silently
+// treated as "no change". The fields are compared individually because Port is
+// a pointer: comparing the structs would compare port addresses, and two blocks
+// parsed from the same text would then look different on every reload.
+func tlsDiffers(a, b *TLSConfig) bool {
+	if a == nil || b == nil {
+		return a != b
+	}
+	if a.Enabled != b.Enabled || a.CertFile != b.CertFile || a.KeyFile != b.KeyFile {
+		return true
+	}
+	return portDiffers(a.Port, b.Port)
+}
+
+func portDiffers(a, b *int) bool {
+	if a == nil || b == nil {
+		return a != b
+	}
+	return *a != *b
 }
