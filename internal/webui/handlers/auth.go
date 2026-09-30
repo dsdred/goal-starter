@@ -72,10 +72,10 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to create session")
 		return
 	}
-	security.SetSessionCookie(w, session.Token)
+	security.SetSessionCookie(w, r, session.Token)
 
 	// The CSRF token is generated with and bound to this session.
-	security.SetCSRFCookie(w, session.CSRFToken)
+	security.SetCSRFCookie(w, r, session.CSRFToken)
 
 	h.auditLogin(audit.EventLoginSuccess, creds.Username, r)
 
@@ -111,7 +111,7 @@ func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
 		}
 		_ = h.sess.DestroySession(token)
 	}
-	security.ClearSessionCookie(w)
+	security.ClearSessionCookie(w, r)
 	if h.audit != nil {
 		_ = h.audit.Log(audit.AuditEvent{
 			Event:    audit.EventSessionLogout,

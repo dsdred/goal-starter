@@ -105,8 +105,9 @@ func (c *CSRF) ValidateSessionCSRF(r *http.Request, session *Session) error {
 	return nil
 }
 
-// SetCSRFCookie sets the CSRF token in a secure cookie.
-func SetCSRFCookie(w http.ResponseWriter, token string) {
+// SetCSRFCookie emits the double-submit token cookie. Its `Secure` flag follows
+// the same connection-derived rule as the session cookie (ADR 019 §D18).
+func SetCSRFCookie(w http.ResponseWriter, r *http.Request, token string) {
 	cookie := &http.Cookie{
 		Name:  csrfCookieName,
 		Value: token,
@@ -114,6 +115,7 @@ func SetCSRFCookie(w http.ResponseWriter, token string) {
 		// The double-submit token must be readable by same-origin JavaScript so
 		// it can be copied into X-CSRF-Token after a page reload.
 		HttpOnly: false,
+		Secure:   secureForConnection(r),
 		SameSite: http.SameSiteStrictMode,
 		MaxAge:   int(24 * time.Hour.Seconds()),
 	}

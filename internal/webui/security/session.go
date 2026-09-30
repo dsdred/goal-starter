@@ -121,27 +121,37 @@ func (s *SessionStore) GetSessionUser(token string) (string, error) {
 	return session.User, nil
 }
 
+// secureForConnection is the only place ADR 019 §D18's `Secure` rule is
+// derived: a cookie is `Secure` if and only if the connection that produced
+// this response was TLS. Never from config, port, bind address or headers (§D20).
+func secureForConnection(r *http.Request) bool {
+	return r.TLS != nil
+}
+
 // SetSessionCookie sets the session cookie in the response.
-func SetSessionCookie(w http.ResponseWriter, token string) {
+func SetSessionCookie(w http.ResponseWriter, r *http.Request, token string) {
 	cookie := &http.Cookie{
 		Name:     sessionCookieName,
 		Value:    token,
 		Path:     "/",
 		HttpOnly: true,
-		Secure:   false, // will be set to true in middleware for HTTPS
+		Secure:   secureForConnection(r),
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   int(sessionTTL.Seconds()),
 	}
 	http.SetCookie(w, cookie)
 }
 
-// ClearSessionCookie removes the session cookie.
-func ClearSessionCookie(w http.ResponseWriter) {
+// ClearSessionCookie removes the session cookie. The clear path carries the
+// same connection-derived `Secure` as the path that set it, so a clear issued
+// over TLS cannot downgrade the jar entry it removes.
+func ClearSessionCookie(w http.ResponseWriter, r *http.Request) {
 	cookie := &http.Cookie{
 		Name:     sessionCookieName,
 		Value:    "",
 		Path:     "/",
 		HttpOnly: true,
+		Secure:   secureForConnection(r),
 		MaxAge:   -1,
 	}
 	http.SetCookie(w, cookie)

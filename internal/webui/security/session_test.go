@@ -131,7 +131,7 @@ func TestSetSessionCookie(t *testing.T) {
 	}
 
 	w := httptest.NewRecorder()
-	SetSessionCookie(w, sess.Token)
+	SetSessionCookie(w, httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", nil), sess.Token)
 
 	cookies := w.Result().Cookies()
 	if len(cookies) != 1 {
@@ -291,7 +291,7 @@ func TestCSRF_ValidateRequest(t *testing.T) {
 
 func TestClearSessionCookie(t *testing.T) {
 	w := httptest.NewRecorder()
-	ClearSessionCookie(w)
+	ClearSessionCookie(w, httptest.NewRequest(http.MethodPost, "/api/v1/auth/logout", nil))
 
 	cookies := w.Result().Cookies()
 	if len(cookies) != 1 {

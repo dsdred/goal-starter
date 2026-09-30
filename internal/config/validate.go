@@ -28,7 +28,7 @@ func (c Config) ValidateFull() error {
 	// log a prominent warning but do NOT block startup.
 	if !c.AuthEnabled {
 		if err := validateLocalhostOnly(c.ListenAddress); err != nil {
-			fmt.Fprintf(os.Stderr, "WARNING: GoAl Web UI is exposed without authentication. Anyone with network access to this address can control this GoAl instance.\n")
+			fmt.Fprint(os.Stderr, unauthenticatedExposureWarning(c))
 		}
 	}
 
@@ -328,4 +328,18 @@ func validateLocalhostOnly(host string) error {
 		return fmt.Errorf("listen address %s is not a loopback address; refusing to start without authentication", host)
 	}
 	return fmt.Errorf("listen address %s is not a loopback address; refusing to start without authentication", host)
+}
+
+// unauthenticatedExposureWarning phrases the non-loopback-without-auth warning
+// over the listeners this configuration actually opens (ADR 019 §D19): HTTPS
+// shares the bind address, so exposure is stated per listener and regardless of
+// scheme. Warning only — startup is never blocked and no configuration is
+// mutated (Owner decisions D7 and P6).
+func unauthenticatedExposureWarning(c Config) string {
+	listeners := "HTTP on " + net.JoinHostPort(c.ListenAddress, strconv.Itoa(c.WebPort))
+	if c.TLS != nil && c.TLS.Enabled && c.TLS.Port != nil {
+		listeners += ", HTTPS on " + net.JoinHostPort(c.ListenAddress, strconv.Itoa(*c.TLS.Port))
+	}
+	return "WARNING: GoAl Web UI is exposed without authentication. Anyone with network access to this address can control this GoAl instance.\n" +
+		"WARNING: the unauthenticated admin API is reachable from the local network over " + listeners + ", regardless of scheme; HTTPS encrypts the transport and authenticates nothing.\n"
 }
