@@ -114,12 +114,13 @@ The `goal.json` file is located in the same directory as the binary. It is **exc
 | Field | Description | Default | Required |
 |-------|-------------|---------|----------|
 | `version` | Configuration schema version | 2 | No |
-| `listenAddress` | HTTP server listen address | `127.0.0.1` | No |
+| `listenAddress` | Server bind address — HTTP, and HTTPS when `tls` is enabled | `127.0.0.1` | No |
 | `webPort` | HTTP server port | `8088` | No |
 | `dataDir` | Directory for storing data | `./data` | No |
 | `adminUser` | Administrator username | `admin` | No |
 | `adminPasswordHash` | Bcrypt hash of the administrator password (required when `authEnabled=true`; normally set via Web UI Settings — plaintext is never persisted) | `""` | Conditional |
 | `authEnabled` | Enable authentication | `false` | No |
+| `tls` | Optional native HTTPS block (`enabled`, `port`, absolute `certFile` / `keyFile`) — see [HTTPS access and secure origin](#https-access-and-secure-origin) | absent (= disabled) | No |
 | `runtimes` | List of AI runtimes | `[]` | No |
 | `models` | List of models | `[]` | No |
 | `profiles` | List of launch profiles | `[]` | No |
@@ -786,7 +787,7 @@ Navigate to **Settings → Portable Configuration**.
 **Export:**
 1. Choose a scope: **All** (default), **Runtime**, **Model**, or **Pipeline**.
 2. If a specific scope is selected, choose the entity from the dropdown.
-3. Click **Download**. When the page is served over a **secure origin** (HTTPS, or `localhost` / `127.0.0.1`) in a browser that provides the native save-dialog capability, GoAl opens the system save dialog, where you choose the file name and the destination; the suggested file name is `goal-portable-config.json`. GoAl does not learn or store the destination you select. On a **plain-HTTP address reached by a non-loopback host name** (for example `http://server-name:8088`) the browser does not expose that capability at all, and in any other unsupported browser, GoAl falls back to the ordinary browser download: `goal-portable-config.json` is written to the browser's own download location according to the browser's settings, and GoAl cannot offer a destination choice there.
+3. Click **Download**. When the page is served over a **secure origin** (HTTPS, or `localhost` / `127.0.0.1`) in a browser that provides the native save-dialog capability, GoAl opens the system save dialog, where you choose the file name and the destination; the suggested file name is `goal-portable-config.json`. GoAl does not learn or store the destination you select. On a **plain-HTTP address reached by a non-loopback host name** (for example `http://server-name:8088`) the browser does not expose that capability at all — this is a property of the address, not of GoAl: serve GoAl over HTTPS, or use it from the machine itself, to get the dialog back (see [HTTPS access and secure origin](#https-access-and-secure-origin)). In any other unsupported browser, GoAl falls back to the ordinary browser download: `goal-portable-config.json` is written to the browser's own download location according to the browser's settings, and GoAl cannot offer a destination choice there.
 
 **Import:**
 1. Click **Choose file** and select a `goal-portable-config.json` file. The chosen file name is shown next to the button.
@@ -852,7 +853,8 @@ curl -b "goal_session=..." -X POST -H "X-CSRF-Token: <token>" \
 
 | Parameter | Value |
 |-----------|-------|
-| Authentication | HTTP-only cookies, session-based (bcrypt credential validation) |
+| Authentication | Session-based, cookie `goal_session` (bcrypt credential validation) |
+| Transport | Plain HTTP by default; native HTTPS on a second port when the optional `tls` block is enabled — no reverse proxy required |
 | CSRF Protection | Yes, for all unsafe methods (double-submit cookie) |
 | Rate Limiting | Login: 100 requests/min per client address → HTTP 429 |
 | Limit Request Body | http.MaxBytesReader |
@@ -870,7 +872,7 @@ When `authEnabled=true`:
 When `authEnabled=false`:
 - All endpoints are accessible without credentials.
 - The sidebar shows "—" (no user). No login form is shown.
-- A prominent warning is emitted if bound to a non-loopback address.
+- A prominent warning is emitted if bound to a non-loopback address, naming each listener that is open (HTTP, and HTTPS when `tls` is enabled).
 
 ### Configuring for Network Access
 
@@ -891,6 +893,42 @@ To make GoAl accessible from the network:
   "adminPasswordHash": "$2a$12$..."
 }
 ```
+
+### HTTPS access and secure origin
+
+Some browser capabilities work only on a **secure origin**: `https://…`, or `http://localhost` / `http://127.0.0.1`. A plain-HTTP address reached by a host name (`http://server-name:8088`) is **not** a secure origin, no matter which machine it points at. This is what limits the native save dialog in [Portable Configuration export](#portable-configuration-export--import).
+
+GoAl serves HTTPS itself — no reverse proxy required:
+
+1. Place a certificate and its private key on the machine running GoAl. Paths in `goal.json` must be **absolute** (a relative path is a startup error, because the service has no dependable working directory).
+2. Add the `tls` block and restart GoAl:
+
+```json
+{
+  "listenAddress": "0.0.0.0",
+  "webPort": 8088,
+  "authEnabled": true,
+  "tls": {
+    "enabled": true,
+    "port": 8443,
+    "certFile": "C:\\certs\\aids.crt",
+    "keyFile": "C:\\certs\\aids.key"
+  }
+}
+```
+
+3. Open the HTTPS address in the browser: `https://server-name:8443`.
+
+What to expect:
+
+- **HTTP stays available** on `8088`. GoAl never redirects HTTP → HTTPS and never disables it when TLS is on; both addresses work at once.
+- GoAl does not obtain or install certificates. If your browser does not already trust the certificate, it shows a warning; continuing past the warning still gives a secure origin (the native save dialog works), and a warning-free setup needs a certificate chaining to a root that browser trusts, whose **SAN covers the exact name you type** (`DNS:server-name`, plus `IP:192.168.3.245` if you connect by address).
+- A missing, unreadable, mismatched or expired certificate/key **stops GoAl at startup** instead of quietly serving HTTP only; the message names the field, the reason and the file path.
+- The private key file must be readable by the account running GoAl and, on Linux, by nothing else (a group- or other-readable key produces a startup warning).
+- **HTTPS encrypts the connection; it does not authenticate anyone.** Authentication remains the `authEnabled` setting, and an unauthenticated admin API over the LAN is exposed on both addresses.
+- Service mode behaves identically: the Windows service and the systemd unit run the same startup path, so a TLS misconfiguration fails the service start loudly rather than half-listening.
+
+**One address per browser.** HTTP and HTTPS on the same host name share a single cookie jar in the browser, so the session cookie can only be marked `Secure` or not. After you log in **over HTTPS**, that cookie is no longer sent to the plain-HTTP address (it looks logged out) and, while it lives, a login attempted over HTTP cannot store its own session cookie. Logging in over HTTP **first** does carry over to HTTPS. The practical rule is: pick one address per browser and stay on it; to move back to HTTP cleanly, log out over HTTPS (or clear the cookie). Different host names never share a session. See [SECURITY.md](SECURITY.md#https-and-secure-origin-adr-019) for the full cookie semantics.
 
 ### Security audit log
 

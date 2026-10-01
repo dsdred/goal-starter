@@ -11,7 +11,7 @@ This document describes the security model of GoAl 2.0 as implemented in product
 | Cookie name | `goal_session` |
 | HttpOnly | `true` |
 | SameSite | `Lax` |
-| Secure | `false` (set to `true` when HTTPS middleware is added) |
+| Secure | derived per response: `true` if and only if the connection that produced that response was TLS (`r.TLS != nil`), `false` over plain HTTP. Never from the `tls` config block, the port, the bind address, or a forwarded header ([ADR 019 §D18/§D20](adr/019-native-https-secure-origin.md)) |
 | Password store | bcrypt hash (cost 12); persisted in `goal.json` as `adminPasswordHash`, loaded into an in-memory store at startup |
 | Default credentials | None (store starts empty; `adminUser` + `adminPasswordHash` required in config when `authEnabled=true`) |
 
@@ -35,7 +35,7 @@ When `authEnabled=false`:
 - All routes are accessible without authentication.
 - The login endpoint returns `200` immediately (no credentials parsed).
 - The session endpoint reports `user: "public"`.
-- A prominent warning is emitted if the bind address is non-loopback.
+- A prominent warning is emitted if the bind address is non-loopback, naming every listener the configuration opens (HTTP, and HTTPS when `tls.enabled`).
 
 ### Password storage
 
@@ -56,6 +56,8 @@ Sessions are stored in memory with automatic cleanup of expired sessions. There 
 
 The middleware validates that the cookie and header values match for unsafe methods (POST, PUT, DELETE). GET, HEAD, and OPTIONS are not CSRF-protected.
 
+`goal_csrf_token` carries the same connection-derived `Secure` flag as the session cookie, from the same rule: it is `Secure` on a response produced over TLS and non-`Secure` on a plain-HTTP one. Everything else about it is unchanged — `HttpOnly: false` (the double-submit copy must stay readable by same-origin JavaScript), `SameSite: Strict`, `Path: /`, host-only. Logout clears the session cookie only; the CSRF cookie stays until its `MaxAge` expires or a new login replaces it.
+
 ### Scope
 
 CSRF protection applies to all routes when `authEnabled=true`. When `authEnabled=false`, CSRF middleware is not applied.
@@ -73,6 +75,45 @@ GoAl has a single admin user. There are no roles or permissions — if the user 
 | `0.0.0.0` | `true` | Public access, session required. |
 | Custom IP | `true` | Network access, session required. |
 
+The table describes the Web UI on **every listener the configuration opens**. With `tls.enabled` true the same rows apply unchanged to the HTTPS port, because HTTPS reuses `listenAddress` ([HTTPS and secure origin](#https-and-secure-origin-adr-019)); `authEnabled` is global, never per listener. With `authEnabled=false` on a non-loopback address, the startup warning names each listener that is actually exposed (HTTP, and HTTPS when TLS is enabled) and states that HTTPS encrypts the transport while authenticating nothing. Startup is never blocked by this condition, and no configuration is mutated.
+
+## HTTPS and secure origin (ADR 019)
+
+GoAl terminates TLS in its own process when the optional `tls` block is present and enabled in `goal.json` ([CONFIGURATION.md](CONFIGURATION.md#tls-configuration-adr-019)); no reverse proxy is required. An absent or disabled block leaves the shipped behavior byte-identical: one plain HTTP listener and non-`Secure` cookies.
+
+**Listeners.** HTTP (`listenAddress` + `webPort`) is always present. Enabling TLS adds a second, independent HTTPS listener on the same `listenAddress` with `tls.port`. GoAl never redirects HTTP → HTTPS and never disables HTTP when TLS is on, so both origins are live at the same time. Every intended listener is bound before any request is served: if a bind fails or the certificate pair cannot be loaded at that point, startup fails and no port is left listening. The minimum protocol version is TLS 1.2 — a constant of this contract, not configuration — with TLS 1.3 served wherever the client supports it and Go's default cipher suites.
+
+**What HTTPS provides and what it does not.**
+
+| Concern | With `tls` enabled |
+|---------|--------------------|
+| Transport encryption browser → GoAl | Yes |
+| Browser trust (no certificate warning) | **Not provided by GoAl** — only if the operator-supplied chain validates in that browser |
+| Secure-context browser APIs (e.g. the native Save As used by portable export) | Yes, as a consequence of an `https:` origin the browser treats as trustworthy |
+| Authentication | **No** — `authEnabled` is an independent switch; HTTPS authenticates nothing |
+| Authorization, CSRF, session model | Unchanged |
+
+**Certificate duties (operator-owned).** GoAl loads and serves exactly the PEM blocks `tls.certFile` carries: no chain assembly, no issuer lookup, no fetching, no ACME, no automatic trust-store installation. The certificate's SAN must cover every name or address clients actually type — `DNS:aids` for `https://aids:8443`, and separately `IP:192.168.3.245` for address access. GoAl performs no hostname or SAN validation of its own certificate and cannot know the names clients will use. Renewal is replace-files-then-restart; startup validation confirms the new chain and the HTTPS startup line logs its new expiry and SAN list. Expiry monitoring is an operator duty; GoAl's contribution is failing loudly at startup rather than serving a dead or expired certificate.
+
+**One cookie jar: the session ratchet under coexistence.** HTTP and HTTPS on the same host name share **one** browser cookie jar — a cookie's key is (name, domain, path); neither the scheme nor the port participates. Because `Secure` is derived per response, enabling TLS produces a one-way ratchet that operators must understand:
+
+| Sequence | Observed consequence |
+|----------|----------------------|
+| Login over `http://host:8088`, then open `https://host:8443` | The session cookie **is** sent to HTTPS: the HTTP session carries up, no re-login |
+| Login over `https://host:8443`, then open `http://host:8088` | The `Secure` cookie is **not** sent to HTTP: the user appears logged out there |
+| HTTP login while that `Secure` cookie exists | The browser **refuses the write**; HTTP login is a no-op until the cookie expires or is cleared over HTTPS (downgrade/session-fixation protection, not a defect) |
+| HTTP → HTTPS → HTTP **without** an HTTPS re-login | If HTTPS never re-issued the cookie (for example the visit was not authenticated), the same non-`Secure` cookie travels back down and the HTTP session **continues** — the ratchet is set by the emit, not by visiting the port |
+| HTTP page after an HTTPS `Secure` replacement | `goal_csrf_token` is absent from that page too, including from `document.cookie`, so a request issued from the HTTP page cannot produce the double-submit header |
+| Logout over HTTPS | Clears the entry on the scheme that set it; plain HTTP can neither read nor clear a `Secure` cookie |
+
+The supported rule is therefore **work in one scheme per browser**, not one session everywhere. Different host strings are different jars: `https://aids:8443` and `https://192.168.3.245:8443` never share a session. Cookie names, `Path: "/"`, host-only scope (no `Domain`), `HttpOnly` and `SameSite` values are unchanged, and no `__Host-`/`__Secure-` prefix is used — a prefix would force `Secure` and break plain-HTTP compatibility.
+
+**Key material.** The private key lives only at `tls.keyFile` on the host filesystem. It is never in `goal.json`, never in `goal.json.bak`, never in a Portable Configuration bundle or import plan, and never in a log line: startup validation and serve failures name the field, the reason and the file **path**, never file contents. Restrict the key to the account that runs GoAl — POSIX mode (a group- or other-readable key is a startup warning, and startup proceeds; modes are not reliable on Windows) or a Windows ACL on its directory.
+
+**Rollback hazard.** `config.Save` rewrites `goal.json` from the parsed struct, so a binary without the `tls` field drops the block on the next settings save. Enabling TLS therefore requires a binary that parses it, and downgrading past that binary loses the block — keep the binary and the configuration contract in step.
+
+**Reverse proxy remains an alternative, not the primary path.** A TLS-terminating proxy is supported, and GoAl adds **no trusted-proxy semantics**: it does not honor `X-Forwarded-Proto`, `Forwarded` or `X-Real-IP` for any security decision. Consequences: behind such a proxy GoAl's own connection is plaintext, so the session cookie stays non-`Secure`; audit `src_ip` and login rate limiting keep using the TCP peer address, which means all proxied clients share one rate-limit bucket (add proxy-level limiting as well).
+
 ## Secrets management
 
 | Secret | Location | Cleared on save |
@@ -80,6 +121,7 @@ GoAl has a single admin user. There are no roles or permissions — if the user 
 | `adminPasswordHash` | `goal.json` → `AdminPasswordHash` field (bcrypt hash; plaintext never persisted); previous generation also present in `goal.json.bak` | No; protect both files with POSIX permissions or a Windows ACL |
 | Session tokens | In-memory store | Yes (expiry-based) |
 | CSRF tokens | Cookie + header | Rotated on login |
+| TLS private key | The file named by `tls.keyFile` — only that **path** is stored in `goal.json`; the key material is never in `goal.json`, `goal.json.bak`, a portable bundle or any log line | No; restrict it to the account running GoAl (POSIX mode or a Windows ACL) |
 
 Runtime and model process environment values can contain sensitive
 configuration. They are stored in the local `goal_repo.json` without encryption
@@ -104,7 +146,9 @@ omitted.
 | Feature | Status |
 |---------|--------|
 | Default bind loopback | `127.0.0.1` |
-| External bind warning | `authEnabled=false` + non-loopback → prominent WARN (not blocked) |
+| External bind warning | `authEnabled=false` + non-loopback → prominent WARN naming every listener the config opens (HTTP, and HTTPS when `tls.enabled`) — not blocked |
+| Transport encryption | Plain HTTP by default; native HTTPS on `listenAddress` + `tls.port` when the `tls` block is enabled, minimum TLS 1.2 (constant), Go default cipher suites |
+| Secure cookie flag | `Secure` on every cookie emitted over a TLS connection; forwarded headers never influence it |
 | Request body size limit | `http.MaxBytesReader` |
 | Login rate limiting | **Implemented**: per-client-address fixed window on `POST /api/v1/auth/login` (100 req/min → HTTP 429 `rate_limited`) |
 | Runtime path validation | Executable and working directory validated against allowed roots |
@@ -157,12 +201,32 @@ For network access:
 
 The password is normally set once via **Web UI → Settings → Server** (it is stored as `adminPasswordHash`); a pre-generated bcrypt hash may also be written directly.
 
+For remote/LAN use where the browser needs a **secure origin** (native Save As, and generally any `[SecureContext]` API), serve HTTPS from the binary instead of adding a proxy. Paths must be absolute, and `tls.port` must differ from `webPort`:
+
+```json
+{
+  "listenAddress": "0.0.0.0",
+  "webPort": 8088,
+  "authEnabled": true,
+  "adminUser": "admin",
+  "adminPasswordHash": "$2a$12$...",
+  "tls": {
+    "enabled": true,
+    "port": 8443,
+    "certFile": "C:\\certs\\aids.crt",
+    "keyFile": "C:\\certs\\aids.key"
+  }
+}
+```
+
+Then open `https://<that host>:8443`. HTTP stays reachable on `8088`; the browser's secure-context decision comes from the URL you type, not from this file. The certificate's SAN must cover the name you use, and its chain must be trusted by the client browser if you want no warning — see [HTTPS and secure origin](#https-and-secure-origin-adr-019).
+
 For maximum security:
 
 1. Set `authEnabled: true`
 2. Set a strong admin password (stored as `adminPasswordHash`)
 3. Bind to a non-loopback address
-4. Run behind a reverse proxy with TLS
+4. Serve HTTPS from the binary (`tls` block, absolute cert/key paths, key readable only by the GoAl account) — or keep plain HTTP behind a TLS-terminating reverse proxy where that is preferred, accepting that GoAl then sees a plaintext connection and issues non-`Secure` cookies
 5. Use `deploy/systemd/goal.service` (Linux) or `goal --service install` (Windows, in-binary SCM registration per ADR 011 — LocalSystem account; install pre-flight requires every path the service depends on to be absolute or deterministically anchored to an absolute working directory, so no runtime path resolves against the SCM working directory) for managed process lifecycle
 
 ## Windows code signing
@@ -189,8 +253,8 @@ Authenticode code signing is a possible future improvement. It is not currently 
 
 ## Security notes
 
-- **Public mode warning:** If `authEnabled=false` and GoAl is accessible from the network, all API endpoints are accessible without authentication. A prominent WARN is emitted at startup.
-- **No HTTPS in binary:** TLS is not terminated inside GoAl. Use a reverse proxy for HTTPS.
+- **Public mode warning:** If `authEnabled=false` and GoAl is accessible from the network, all API endpoints are accessible without authentication. A prominent WARN is emitted at startup, naming each exposed listener (HTTP, and HTTPS when `tls.enabled`) and stating that HTTPS encrypts the transport and authenticates nothing. Startup is not blocked.
+- **HTTPS:** TLS is terminated inside the GoAl binary when the optional `tls` block is enabled — a second listener on the same `listenAddress` at `tls.port`, minimum TLS 1.2, no reverse proxy required ([ADR 019](adr/019-native-https-secure-origin.md)). Plain HTTP remains available and is never disabled or redirected automatically. A TLS-terminating reverse proxy stays a supported alternative; behind one, GoAl's own connection is plaintext and cookies stay non-`Secure`.
 - **No token-based auth:** Only session cookies are supported. No API keys or bearer tokens.
 - **No multi-user:** Single admin user only. No roles or permissions.
 - **Login rate limiting:** Enforced on `POST /api/v1/auth/login` — at most 100 requests per minute per client address (TCP peer), then HTTP 429 with code `rate_limited`. `X-Forwarded-For`/`X-Real-IP` are intentionally not trusted (client-supplied headers would allow bypass). Behind a reverse proxy all clients share the proxy's bucket; for exposed deployments add proxy-level limiting as well. The limit bounds request rate; a failure-count lockout (e.g. 5 failures / 5 min) is not implemented.

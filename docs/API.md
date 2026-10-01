@@ -12,6 +12,8 @@ All endpoints are under the `/api/v1` prefix. Base URL is `http://127.0.0.1:8088
 Session cookie: `goal_session` (HTTP-only, SameSite=Lax).
 CSRF cookie: `goal_csrf_token` (double-submit pattern). Send the same value in `X-CSRF-Token` for unsafe authenticated requests.
 
+`Secure` on every cookie GoAl emits — session set, session **clear** and CSRF — is decided per response: `true` if and only if the connection that produced that response is TLS, `false` over plain HTTP. It is never derived from the `tls` configuration block, the port, the bind address, or a forwarded header ([ADR 019 §D18/§D20](adr/019-native-https-secure-origin.md)).
+
 ## Error responses
 
 All errors return JSON with an `error` string. Two shapes occur:

@@ -9,8 +9,8 @@ Configuration is loaded from a JSON file (default: `goal.json`) at application s
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
 | `version` | int | No | `2` | Configuration schema version. Auto-migrated on load. |
-| `listenAddress` | string | Yes | `127.0.0.1` | HTTP server bind address. |
-| `webPort` | int | No | `8088` | HTTP server port (1–65535). |
+| `listenAddress` | string | Yes | `127.0.0.1` | Bind address of the Web UI listeners — HTTP always, plus HTTPS when `tls.enabled` (both use this address). |
+| `webPort` | int | No | `8088` | HTTP server port (1–65535). Must differ from `tls.port` when TLS is enabled. |
 | `dataDir` | string | No | `./data` | Directory for `goal_repo.json` and runtime data. |
 | `adminUser` | string | No | `admin` | Administrator username. Required when `authEnabled` is true. |
 | `adminPasswordHash` | string | Conditional | `""` | Bcrypt hash of the admin password (cost 12, 60 chars). Required when `authEnabled=true`. Never plaintext. |
@@ -222,18 +222,37 @@ The profile JSON accepts both `args` and `arguments` as the key for additional c
 |-------|------|----------|---------|-------------|
 | `enabled` | bool | No | `false` | Turns native HTTPS on. Any shape that is not `true` means disabled. |
 | `port` | int | When `enabled` | — | HTTPS listen port (1–65535) on the same `listenAddress` as HTTP. No default port is chosen; it must differ from `webPort`. An absent key and an explicit `0` are both invalid and are reported as two different failures (`tls.port is required…` and `tls.port out of range…`): `0` is never treated as "auto". |
-| `certFile` | string | When `enabled` | — | **Absolute** path to a PEM certificate chain, leaf first. GoAl serves exactly the blocks in the file — no chain assembly, no fetching, no reordering. |
+| `certFile` | string | When `enabled` | — | **Absolute** path to a PEM certificate chain, leaf first. GoAl serves exactly the blocks in the file — no chain assembly, no fetching, no reordering. The SAN must cover every name or address clients use and the chain must be trusted by those browsers; GoAl is not a CA and installs nothing. |
 | `keyFile` | string | When `enabled` | — | **Absolute** path to the PEM private key. Keep it readable only by the account that runs GoAl. |
 
-Disabled shapes — the key absent, `"tls": null`, `"tls": {}` and `{"enabled": false}` — are the same value after parsing, so no configuration shape other than a complete `enabled: true` block can open a second listener. An `enabled: false` block that still carries a non-zero port or paths is accepted as disabled and logs a `tls configured but disabled` warning; those inert values are never applied.
+Disabled shapes are the same value after parsing, so no configuration shape other than a complete `enabled: true` block can open a second listener. The exhaustive shape table:
+
+| Config shape | Meaning | Startup outcome |
+|--------------|---------|-----------------|
+| `tls` key absent | disabled | proceeds; single HTTP listener (unchanged behavior) |
+| `"tls": {}` | disabled | proceeds, **no warning** — after parsing this is the same struct as `enabled: false` |
+| `"tls": null` | disabled | proceeds, no warning (the pointer stays nil) |
+| `"tls": { "enabled": false }` | disabled | proceeds, no warning (explicit opt-out) |
+| `"tls": { "port": 0 }` with `enabled` absent or `false` | disabled | proceeds, **no warning** — a zero port is inert, so this is the `{}` case |
+| `"tls": { "enabled": false, "port": 8443, "certFile": …, "keyFile": … }` | disabled | proceeds; **warning** `tls configured but disabled`, and those inert values are never applied or partially applied |
+| `"tls": { "enabled": true }` with **no** `port` | invalid | **startup fails**: `tls.port is required when tls.enabled is true` — no default port is chosen for an opt-in listener |
+| `"tls": { "enabled": true, "port": 0 }` | invalid | **startup fails**: `tls.port out of range 1-65535, got 0` — `0` is never treated as "auto" |
+| `"tls": { "enabled": true, "port": -1 }` or `"port": 70000` | invalid | **startup fails**, same range rule |
+| `enabled: true` with `tls.port` equal to `webPort` | invalid | **startup fails**, naming both fields: both listeners would bind the same address |
+| `"tls": { "enabled": true }` with **no** `certFile` / **no** `keyFile` | invalid | **startup fails**: `tls.certFile is required` / `tls.keyFile is required` |
+| `enabled: true` with a **relative** `certFile` / `keyFile` | invalid | **startup fails**: `tls.certFile must be an absolute path: <path>` |
+| `enabled: true` + port + both paths, files valid | enabled | proceeds with **two** listeners |
+| Unknown key inside `tls` (e.g. `certificate`) | parsed and ignored on load | fails only **indirectly**: config load has no `DisallowUnknownFields`, so the typo surfaces as the missing required field above, and the next `config.Save` drops the unknown key |
 
 Startup validation is fail-closed and runs before any listener is created. When `enabled` is true, the port must be present, in range and different from `webPort`; both paths must be absolute; both files must be readable, parse as a matching certificate/key pair, and lie inside the certificate validity window. Any of these failures aborts startup with a message naming the field, the reason and the file path — never the file contents. A relative path is an error rather than a warning because the Windows Service control manager and systemd give the process no dependable working directory. A group- or other-readable `keyFile` is a POSIX-only warning and startup proceeds.
+
+The same fail-closed rule governs the listeners themselves: GoAl binds **every** intended listener before it serves a single request, and the TLS pair is loaded into each listener before its bind. If a bind or that load fails, the already-bound listeners are closed and startup fails — no port is left published while another intended port is not. Each listener is named in the startup log (`starting HTTP server addr=…`, `starting HTTPS server addr=… tls=enabled cert=<path> expires=<RFC3339> san=<list>`); private-key material and file contents never appear in any log line. Stopping is symmetric: every listener is shut down **concurrently against one shared 10 s deadline**, so adding the HTTPS listener does not lengthen the stop (the unchanged service-level stop budget applies on top of it), and each one is named in the log (`shutting down HTTP server...`, `shutting down HTTPS server...`).
+
+**Delivered scope:** an enabled `tls` block opens a real HTTPS listener on `listenAddress` + `tls.port` alongside the unchanged HTTP listener, and cookies GoAl emits over that TLS connection carry `Secure`. HTTPS browser acceptance with a maintained test fixture is a separate, later step of the same design ([ADR 019](adr/019-native-https-secure-origin.md), implementation slicing item 5) and has not been performed.
 
 `tls` is **not** a hot field: reload validates the file and reports `tls` under `restart_required` without applying anything. Certificate renewal is replace-files-then-restart; startup validation then confirms the new chain.
 
 Because `config.Save` rewrites `goal.json` from the parsed struct, keys it does not know are dropped. Key lookup is Go's `encoding/json` matching — exact name first, then case-insensitive — so a case variant such as `certfile` is read as `certFile` and is rewritten in the canonical spelling by the next save; only a key that matches no field at all (like `certificate`) is lost. A `tls` block written by a TLS-aware binary and then saved by an older one that has no `tls` field is lost with that save — keep the binary and the configuration contract in step.
-
-**Delivered scope:** the TLS block is validated and a broken one refuses to start GoAl. The HTTPS listener itself is the next step of the same design ([ADR 019](adr/019-native-https-secure-origin.md), implementation slicing item 2), so an enabled block today guarantees the configuration is correct, while GoAl still serves HTTP only.
 
 ## Storage migration
 
@@ -300,4 +319,5 @@ To change server configuration without the UI:
 |-------|--------------|
 | `adminPasswordHash` | Persisted in `goal.json` as a bcrypt hash (cost 12) so authentication survives restart; plaintext is never persisted (legacy `adminPassword` auto-migrates on first startup). Protect the file with POSIX permissions or a Windows ACL. |
 | `authEnabled` | Recommended `true` when `listenAddress` is non-loopback. If `false` on non-loopback, a prominent security warning is emitted but startup is not blocked. |
+| `tls` | Enabling TLS adds a second, publicly reachable listener and never disables or redirects the HTTP one; check both ports. The key file must be readable only by the account running GoAl. Cookies emitted over HTTPS carry `Secure`, which under coexistence makes the plain-HTTP origin of the same host name unauthenticated (see [SECURITY.md](SECURITY.md#https-and-secure-origin-adr-019)). HTTPS authenticates nothing by itself — `authEnabled` stays independent. |
 | `dataDir` | Contains `goal_repo.json` (secrets, paths). Default `./data` is gitignored. |
