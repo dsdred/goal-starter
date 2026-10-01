@@ -144,6 +144,7 @@ $env:GOOS='linux'; $env:GOARCH='amd64'; go build -o bin/goal-linux-amd64 ./cmd/g
 | `testdata/fake-runtime/` | Fake runtime for integration tests |
 | `deploy/` | Systemd unit file (the Windows service is registered in-binary via `goal --service`, ADR 011) |
 | `scripts/` | Build and bootstrap scripts |
+| `docs/acceptance/` | Manual Owner acceptance checklists and evidence records (real-SCM, runtime interoperability) |
 
 ## Code conventions
 
