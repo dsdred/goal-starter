@@ -6,15 +6,76 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/dsdred/goal/internal/application/portable"
+	"github.com/dsdred/goal/internal/config"
 	"github.com/dsdred/goal/internal/domain"
 	"github.com/dsdred/goal/internal/storage"
 	"github.com/dsdred/goal/internal/webui/security"
 )
+
+// tlsCertSentinel and tlsKeySentinel are the certificate and key paths a
+// TLS-enabled install has on disk. The portable surface must never echo them.
+const (
+	tlsCertSentinel = "/etc/ssl/private/aids.example.test.crt"
+	tlsKeySentinel  = "/etc/ssl/private/aids.example.test.key"
+)
+
+// writeTLSBearingConfig saves a goal.json with native HTTPS enabled into dir —
+// the same directory that holds the repository the router under test serves — and
+// returns its path plus the exact bytes written. Placing it beside repo.json is
+// what makes the "TLS-configured install" premise reachable for a handler: an
+// exporter that ever starts reading server configuration from the install it
+// serves would find this file and leak these sentinels.
+func writeTLSBearingConfig(t *testing.T, dir string) (string, []byte) {
+	t.Helper()
+	port := 8443
+	cfgPath := filepath.Join(dir, "goal.json")
+	cfg := config.Default()
+	cfg.DataDir = dir
+	cfg.AuthEnabled = false
+	cfg.TLS = &config.TLSConfig{
+		Enabled:  true,
+		Port:     &port,
+		CertFile: tlsCertSentinel,
+		KeyFile:  tlsKeySentinel,
+	}
+	if err := config.Save(cfgPath, cfg); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+	onDisk, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatalf("read config back: %v", err)
+	}
+	if !strings.Contains(string(onDisk), `"tls"`) || !strings.Contains(string(onDisk), tlsKeySentinel) {
+		t.Fatalf("test premise broken, goal.json on disk is: %s", onDisk)
+	}
+	return cfgPath, onDisk
+}
+
+// newPortableTestRouterIn builds the same portable surface as
+// newPortableTestRouter, but on a repository file the caller locates, so a test
+// can put a TLS-bearing goal.json in the install directory the router serves.
+func newPortableTestRouterIn(t *testing.T, dir string) (http.Handler, storage.Repository) {
+	t.Helper()
+	repo, err := storage.NewJSONRepository(filepath.Join(dir, "repo.json"))
+	if err != nil {
+		t.Fatalf("create repository: %v", err)
+	}
+	router := NewRouteRegistry(
+		nil, nil, nil, nil, nil,
+		repo,
+		security.NewCSRF(),
+		security.NewSessionStore(),
+		security.NewPasswordStore(),
+		WithAuthEnabled(false),
+	).Build()
+	return router, repo
+}
 
 func newPortableTestRouter(t *testing.T) (http.Handler, storage.Repository) {
 	t.Helper()
@@ -692,5 +753,63 @@ func TestImport_CSRFRequired(t *testing.T) {
 
 	if resp2.Code != http.StatusOK {
 		t.Fatalf("with CSRF: status = %d, want 200: %s", resp2.Code, resp2.Body.String())
+	}
+}
+
+// TestExport_TLSConfiguredInstallExportsNoTLSMaterial is ADR 019 §D25 / test
+// obligation 12 on the export side: GET /api/v1/export is repository-only, so an
+// install that terminates TLS natively still exports no listener, no certificate
+// path and no key path.
+func TestExport_TLSConfiguredInstallExportsNoTLSMaterial(t *testing.T) {
+	dir := t.TempDir()
+	router, repo := newPortableTestRouterIn(t, dir)
+	seedExportData(t, repo)
+	cfgPath, _ := writeTLSBearingConfig(t, dir)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/export", nil)
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", resp.Code, resp.Body.String())
+	}
+	body := resp.Body.String()
+	for _, forbidden := range []string{"tls", "certFile", "keyFile", tlsCertSentinel, tlsKeySentinel, "8443", "-----BEGIN", "-----END"} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("export leaked %q into the bundle (install config at %s):\n%s", forbidden, cfgPath, body)
+		}
+	}
+}
+
+// TestImport_BundleCannotInstallTLSMaterial is the import side of §D25: a bundle
+// smuggling a tls block is refused with no partial import, and the server config
+// file of a TLS-enabled install is left byte-for-byte untouched.
+func TestImport_BundleCannotInstallTLSMaterial(t *testing.T) {
+	dir := t.TempDir()
+	router, repo := newPortableTestRouterIn(t, dir)
+	cfgPath, before := writeTLSBearingConfig(t, dir)
+
+	body := []byte(`{"format":"goal-portable-config","version":1,` +
+		`"runtimes":[{"id":"rt-smuggled","name":"Smuggled","executable":"/bin/s"}],"models":[],"pipelines":[],` +
+		`"tls":{"enabled":true,"port":9443,"certFile":"` + tlsCertSentinel + `","keyFile":"` + tlsKeySentinel + `"}}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/import", bytes.NewReader(body))
+	resp := httptest.NewRecorder()
+	router.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400: %s", resp.Code, resp.Body.String())
+	}
+	if rejected := resp.Body.String(); strings.Contains(rejected, tlsKeySentinel) || strings.Contains(rejected, tlsCertSentinel) {
+		t.Fatalf("the rejection echoes the certificate or key path it was handed: %s", rejected)
+	}
+	if _, err := repo.GetRuntime("rt-smuggled"); err == nil {
+		t.Fatal("a refused bundle must not create anything")
+	}
+	after, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatalf("read config back: %v", err)
+	}
+	if string(after) != string(before) {
+		t.Fatalf("import mutated the server config file:\nbefore: %s\nafter: %s", before, after)
 	}
 }

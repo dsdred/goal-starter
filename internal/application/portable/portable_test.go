@@ -296,3 +296,31 @@ func TestArgsPreservedExactly(t *testing.T) {
 		t.Fatalf("args not round-tripped: %q", parsed.Models[0].Args[0])
 	}
 }
+
+// TestParseBundle_TopLevelTLSRejected is the import-side half of ADR 019 §D25:
+// a bundle that tries to install native HTTPS settings is refused outright, and
+// the refusal must not echo the certificate or key path it was handed.
+func TestParseBundle_TopLevelTLSRejected(t *testing.T) {
+	data := `{"format":"goal-portable-config","version":1,"runtimes":[],"models":[],"pipelines":[],` +
+		`"tls":{"enabled":true,"port":8443,"certFile":"/etc/ssl/private/aids.example.test.crt","keyFile":"/etc/ssl/private/aids.example.test.key"}}`
+
+	_, err := ParseBundle([]byte(data))
+	if err == nil {
+		t.Fatal("bundle carrying a tls block must be rejected")
+	}
+	if _, ok := err.(*ErrMalformedBundle); !ok {
+		t.Fatalf("wrong error type: %T", err)
+	}
+	if strings.Contains(err.Error(), "aids.example.test.key") {
+		t.Fatalf("rejection leaks the key path: %v", err)
+	}
+}
+
+func TestParseBundle_NestedTLSTemplateRejected(t *testing.T) {
+	data := `{"format":"goal-portable-config","version":1,"runtimes":[{"id":"rt1","name":"RT","executable":"/bin/s",` +
+		`"tls":{"certFile":"/etc/ssl/private/aids.example.test.crt"}}],"models":[],"pipelines":[]}`
+
+	if _, err := ParseBundle([]byte(data)); err == nil {
+		t.Fatal("runtime entry carrying a tls field must be rejected")
+	}
+}

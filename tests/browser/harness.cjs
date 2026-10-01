@@ -2,6 +2,7 @@
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
+const https = require('https');
 const { execFileSync, spawn } = require('child_process');
 
 const IS_WIN = process.platform === 'win32';
@@ -36,6 +37,10 @@ function buildFakeRuntime(ws) {
   return buildBin(ws, 'fake-runtime', ['./testdata/fake-runtime']);
 }
 
+function buildTLSFixture(ws) {
+  return buildBin(ws, 'tls-fixture', ['./testdata/tls-fixture']);
+}
+
 function writeConfig(ws, overrides) {
   const cfg = Object.assign({
     version: 2,
@@ -47,16 +52,36 @@ function writeConfig(ws, overrides) {
   return cfg;
 }
 
-async function waitForHealth(base, timeoutMs = 30000) {
+async function waitForHealth(base, timeoutMs = 30000, opts = {}) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
-    try {
-      const res = await fetch(base + '/api/v1/health');
-      if (res.ok) return true;
-    } catch {}
+    if (await healthProbeOnce(base, opts)) return true;
     await new Promise(r => setTimeout(r, 500));
   }
   return false;
+}
+
+// healthProbeOnce reaches /api/v1/health once. A self-signed listener cannot be
+// probed with the global fetch (it rejects on the untrusted chain), and
+// allowUntrustedTLS never disables verification process-wide — only this request.
+async function healthProbeOnce(base, opts) {
+  const url = base + '/api/v1/health';
+  if (!opts.allowUntrustedTLS) {
+    try {
+      const res = await fetch(url);
+      return res.ok;
+    } catch {
+      return false;
+    }
+  }
+  return new Promise(resolve => {
+    const req = https.get(url, { rejectUnauthorized: false, timeout: 3000 }, res => {
+      res.resume();
+      resolve(res.statusCode >= 200 && res.statusCode < 300);
+    });
+    req.on('timeout', () => { req.destroy(); resolve(false); });
+    req.on('error', () => resolve(false));
+  });
 }
 
 function startServer(bin, ws) {
@@ -108,9 +133,12 @@ function isProcessAlive(pid) {
   try { process.kill(pid, 0); return true; } catch { return false; }
 }
 
-async function launchBrowser() {
+async function launchBrowser(opts = {}) {
   const { chromium } = require('playwright');
-  return chromium.launch({ headless: true, args: ['--no-sandbox', '--disable-gpu'] });
+  return chromium.launch({
+    headless: true,
+    args: ['--no-sandbox', '--disable-gpu', ...(opts.args || [])],
+  });
 }
 
 async function login(page, base, user, pass) {
@@ -202,6 +230,7 @@ module.exports = {
   makeWorkspace,
   buildGoal,
   buildFakeRuntime,
+  buildTLSFixture,
   writeConfig,
   waitForHealth,
   startServer,
