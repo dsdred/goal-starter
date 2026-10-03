@@ -314,6 +314,7 @@
   "portable.import.blocked_reason.runtime_ref": "Model “{name}” refers to Runtime “{ref}”, which exists neither in the file nor in the repository.",
   "portable.import.blocked_reason.model_ref": "Pipeline “{name}” refers to Model “{ref}”, which exists neither in the file nor in the repository.",
   "portable.import.blocked_reason.dependency": "“{name}” depends on the blocked entity “{ref}” and cannot be imported.",
+  "portable.import.blocked_reason.pipeline_entries": "Pipeline “{name}” has no model entries; an empty Pipeline cannot be imported.",
   "portable.import.blocked_reason.other": "“{name}” is blocked: {reason}.",
   "portable.import.details": "Technical details",
   "portable.import.success": "Import complete: {created} created, {skipped} skipped.",

@@ -1,6 +1,6 @@
 # ADR 018: Portable Configuration Backup / Restore Semantics — NEW / UPDATE / UNCHANGED / BLOCKED
 
-**Status:** Owner decisions **agreed 2026-09-26**; implementation **NOT STARTED**. Lifecycle status per [DEVELOPMENT.md](../DEVELOPMENT.md) §ADR process is **Proposed** — the decision is made, no code of this ADR exists yet. This ADR is a design/documentation record only.
+**Status:** Owner decisions **agreed 2026-09-26**; implementation **NOT STARTED at HEAD** — as of 2026-10-04 **Slice 1 is implemented locally in the working tree only, NOT committed and NOT published** (see §Implementation slicing). Lifecycle status per [DEVELOPMENT.md](../DEVELOPMENT.md) §ADR process is **Proposed** — the decision is made, and no behavior specified here is shipped by the repository yet. This ADR is a design/documentation record only.
 **Date:** 2026-09-26
 **Supersedes:** the **2026-09-25 SKIP EXISTING amendment** of [ADR 014](014-portable-config-variables.md) as the *current* Portable Configuration conflict / restore policy (its D15 collision policy, D16 planning step, D17 API/preview contract and D18 UI contract). ADR 014's original 2026-09-13 text and its 2026-09-25 amendment section are **kept as history** and are not rewritten here.
 **Depends on:** ADR 014 (bundle format v1, secret-safe export policy D13, validation list D15, atomicity D16), ADR 013 D1 (pipeline entry identity), ADR 010 (Pipeline entity), ADR 002 / ADR 016 (instance launch snapshot — this ADR changes no lifecycle semantics)
@@ -217,17 +217,32 @@ Per entity type the plan reports `{total, new, update, unchanged, blocked}`; the
 
 The embedded UI is the only documented consumer of this body besides the maintained browser suite, so the vocabulary change lands as one clean replacement inside a single implementation slice rather than as a compatibility shim.
 
-## Implementation slicing (recommendation — NOT started)
+## Implementation slicing (recommendation — recorded 2026-09-26 as NOT started; as of 2026-10-04 Slice 1 is implemented **locally**, NOT committed and NOT published)
 
 | Slice | Content | Production surface |
 |-------|---------|--------------------|
-| 1 | Statuses + restorable projections + equality normalization + `pipeline_entries_empty` (pure planner; no wire change) | `internal/storage/import_plan.go` (+ equivalence helper in `internal/storage`) |
-| 2 | Apply creates **and** updates under the single lock, one write, extended rollback, `WillMutate` | `internal/storage/repository.go` |
-| 3 | Orchestrator result + plan body (`update`/`unchanged`, `can_import`) | `internal/application/portable/{portable.go,import.go}`, `internal/webui/handlers/portable.go` |
+| 1 | Statuses + restorable projections + equality normalization + `pipeline_entries_empty` (pure planner; no wire change) — **implemented locally 2026-10-04, NOT committed, NOT published** | `internal/storage/import_plan.go` (+ equivalence helper in `internal/storage`) |
+| 2 | Apply creates **and** updates under the single lock, one write, extended rollback, `WillMutate`, plus the deterministic UPDATE/NEW runtime-name precedence D-1 defers (test obligation 8) — **merged with Slice 3 into Slice 2′ (Owner decision D-2, 2026-10-04)** | `internal/storage/repository.go` |
+| 3 | Orchestrator result + plan body (`update`/`unchanged`, `can_import`) — **merged with Slice 2 into Slice 2′ (D-2)** | `internal/application/portable/{portable.go,import.go}`, `internal/webui/handlers/portable.go` |
 | 4 | UI plan presentation + EN/RU i18n + maintained browser contracts | `internal/webui/static/app.js`, `internal/webui/static/i18n/{en,ru}.json` |
 | 5 | Documentation reconciliation (this ADR status, ADR 014 pointer, `docs/API.md`, `docs/USER_GUIDE*.md`, `docs/ARCHITECTURE*.md`, `docs/DEVELOPMENT.md`) | docs only |
 
 Slice ordering is dependency-bound (1 → 2 → 3 → 4 → 5) and each slice passes the normal governance gates; the `existing`/`skipped` test corpus is **re-targeted**, not deleted.
+
+### Slice 1 contract decisions (Owner-ratified 2026-10-04)
+
+The Owner ratified the following contract decisions for Slice 1, agreed on top of D1–D15. They are labelled **D-1…D-6** to keep them distinct from this ADR's D1–D15.
+
+| ID | Decision |
+|----|----------|
+| D-1 | Restoring a rename onto a runtime name owned by a **different local Runtime ID** is BLOCKED (`runtime_name_taken_other_id`), independently of bundle order: the conflict keys on repository ownership, and a pending UPDATE never releases the name it vacates, so a name swap inside one bundle blocks **both** runtimes of the swap. The reverse direction is deliberately **not** part of this decision: the name a pending UPDATE only intends to write is not held against a NEW entry, because Slice 1 applies no update and so cannot put two colliding names into the repository. A bundle carrying both a rename to X and a NEW Runtime named X is invalid on its own and is a bundle-validation `400` before planning (`internal/application/portable/portable.go:273-281`), so no plan a client can submit has that shape; deterministic UPDATE/NEW name precedence is a **Slice 2'** obligation (test obligation 8). |
+| D-2 | Slices 2 and 3 merge into **Slice 2′** (apply + server plan contract in one slice). Publishing an intermediate state that classifies UPDATE while its wire still reports `skipped` is **forbidden** — it would be able to report a false success. |
+| D-3 | Slice 1 changes classification only: UPDATE **and** UNCHANGED are counted transitionally through the existing `skipped`/`existing` fields, `WillCreate()` stays the apply and enablement predicate, and apply, orchestration, the server wire contract and the existing UI plan vocabulary are untouched. Import semantics are therefore unchanged for every entity the shipped plan can already act on. The single new observable outcome is D-6: a zero-entry Pipeline is now BLOCKED instead of being created — that write is exactly the `BACKLOG.md` debt this slice closes, and it is not an UPDATE-related change. |
+| D-4 | The localization of the new blocking reason lands **inside** Slice 1; otherwise `pipeline_entries_empty` would surface through the raw-reason fallback. |
+| D-5 | Minimal blocking-reason documentation lands inside Slice 1; the full vocabulary reconciliation stays with the documentation slice. |
+| D-6 | A Pipeline with zero model entries: NEW and UPDATE are BLOCKED (a write would leave it empty), UNCHANGED is **not** blocked (nothing is written for it), so a repository that already holds such a pipeline stays importable. |
+
+Slice 1 delivered locally on 2026-10-04 (working tree at baseline `c400074d4365a36c42f2d7ea2f0997edbb72159b`): plan statuses `new` / `update` / `unchanged` / `blocked` replace `existing`, the D11 projections and their normalization live in `internal/storage/import_projection.go`, `pipeline_entries_empty` is the new reason code, EN/RU messages and the UI reason mapping are wired, and the `existing`/`skipped` corpus is re-targeted rather than deleted. A pre-Commit-Gate forensic pass on the same date corrected D-1 to the boundary the Owner ratified: the planner reserves no name for a pending UPDATE, the rename conflict keys on repository ownership only (`internal/storage/import_plan.go` `localRtByName`), which keeps the verdict order-independent in both directions, and the unreachability of a clashing bundle is pinned at the orchestration level (`TestImport_ClashingUpdateAndNewRuntimeNames_RejectedBeforePlanning`). **NOT committed, NOT published, NOT acceptance-tested** — `ROADMAP.md` and `BACKLOG.md` carry the same local/published distinction.
 
 ## Test obligations (for the implementation slices)
 
@@ -238,6 +253,7 @@ Slice ordering is dependency-bound (1 → 2 → 3 → 4 → 5) and each slice pa
 5. TOCTOU: dry run valid → concurrent CRUD → real import re-plans (extends the existing `importLockHook`-based tests in `internal/application/portable/import_test.go`).
 6. HTTP: `200` real result counts are actual results; `409` blocked-plan counts describe a plan with zero mutation; `can_import` matches D14; status classes stay distinct in the UI (invalid file / blocked plan / server failure).
 7. Maintained browser suite (`tests/browser/portable.cjs`): export → modify → re-import shows **Will restore**, then Import produces the restored configuration; restore-then-re-import shows **Up to date** with Import disabled and no error; blocked plan presentation with readable reasons and no raw codes; RU/EN parity (`tests/browser/i18n.cjs`).
+8. **Slice 2' only** (moved out of Slice 1 by the 2026-10-04 pre-Commit-Gate forensic correction of D-1): once updates are actually applied, a runtime name claimed by a pending UPDATE and by a NEW entry of the same bundle MUST resolve deterministically — identical classification in every bundle order — and the applied graph MUST be proven free of case-insensitive runtime-name collisions. `internal/storage` validates no names on save (`JSONRepository.saveLocked`; uniqueness is enforced by `internal/application/runtime_service.go:90-92` on the CRUD path and by `validateBundle` on the import path), so Slice 2' cannot inherit that guarantee and has to state where it lives.
 
 ## Consequences
 

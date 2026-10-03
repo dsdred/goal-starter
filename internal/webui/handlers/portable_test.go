@@ -410,7 +410,10 @@ func TestImport_MissingDependency(t *testing.T) {
 	}
 }
 
-func TestImport_ExistingIDSkipped_NoOverwrite(t *testing.T) {
+// A bundle entity carrying an ID that already exists is an UPDATE (ADR 018 D3),
+// never a conflict. Slice 1 changes classification only, so the shipped wire
+// contract still counts it as skipped and no restore is applied yet.
+func TestImport_ExistingIDCountedSkipped_NoOverwrite(t *testing.T) {
 	router, repo := newPortableTestRouter(t)
 	if err := repo.CreateRuntime(&storage.RuntimeEntry{ID: "rt-new", Name: "Existing", Executable: "/bin/existing"}); err != nil {
 		t.Fatal(err)

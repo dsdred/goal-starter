@@ -57,9 +57,11 @@ func TestImport_EnvironmentKeys_NotImported(t *testing.T) {
 	}
 }
 
-// §13.7 — same ID is repository identity: the imported entity is skipped and
-// the existing record is left untouched (SKIP EXISTING, never overwrite).
-func TestImport_IDCollision_SkipsExisting(t *testing.T) {
+// §13.7 — same ID is repository identity, so it is never a conflict. The planner
+// classifies this bundle entity as an UPDATE (ADR 018 D3); Slice 1 changes
+// classification only, so the shipped contract still counts it as skipped and
+// the apply step still leaves the existing record untouched.
+func TestImport_IDCollision_UpdateClassifiedButNotApplied(t *testing.T) {
 	repo := newTestRepo(t)
 	if err := repo.CreateRuntime(&storage.RuntimeEntry{ID: "rt1", Name: "Existing", Executable: "/bin/existing"}); err != nil {
 		t.Fatal(err)
@@ -73,7 +75,7 @@ func TestImport_IDCollision_SkipsExisting(t *testing.T) {
 	}
 	res, err := orch.Import(bundle, false)
 	if err != nil {
-		t.Fatalf("same-ID entity must be skipped, not rejected: %v", err)
+		t.Fatalf("same-ID entity must not be rejected as a conflict: %v", err)
 	}
 	if res.Created.Runtimes != 0 || res.Skipped.Runtimes != 1 {
 		t.Fatalf("expected 0 created / 1 skipped, got %+v", res)
@@ -121,6 +123,46 @@ func TestImport_NameCollision_Blocked(t *testing.T) {
 	all, _ := repo.ListRuntimes()
 	if len(all) != 1 {
 		t.Fatalf("blocked import wrote state: %d runtimes", len(all))
+	}
+}
+
+// ADR 018 D-1 scope boundary: a pending UPDATE and a NEW Runtime that want the
+// same name are never a planning question, because the bundle carrying both is
+// invalid on its own (`portable.go:273-281`). Validation therefore has to reject
+// it before the planner runs, in both element orders, for a dry run as well as
+// for a real import, and with no mutation of the repository.
+func TestImport_ClashingUpdateAndNewRuntimeNames_RejectedBeforePlanning(t *testing.T) {
+	restore := PortableRuntime{ID: "rt1", Name: "Gamma", Executable: "/bin/rt1"}
+	fresh := PortableRuntime{ID: "rt2", Name: "gamma", Executable: "/bin/rt2"}
+
+	for _, dryRun := range []bool{false, true} {
+		for _, order := range [][2]PortableRuntime{{restore, fresh}, {fresh, restore}} {
+			repo := newTestRepo(t)
+			if err := repo.CreateRuntime(&storage.RuntimeEntry{ID: "rt1", Name: "Alpha", Executable: "/bin/rt1"}); err != nil {
+				t.Fatal(err)
+			}
+			orch := NewImportOrchestrator(repo)
+
+			bundle := &Bundle{
+				Format:   FormatIdentity,
+				Version:  1,
+				Runtimes: []PortableRuntime{order[0], order[1]},
+			}
+			_, err := orch.Import(bundle, dryRun)
+			ver, ok := err.(*ErrValidation)
+			if !ok {
+				t.Fatalf("dryRun=%v order=%v: want *ErrValidation, got %T (%v)", dryRun, order, err, err)
+			}
+			if !strings.Contains(ver.Reason, "duplicate runtime name") {
+				t.Fatalf("dryRun=%v order=%v: unexpected reason %q", dryRun, order, ver.Reason)
+			}
+			// Planning was never reached, so the repository holds exactly what it
+			// did before: the pre-existing runtime, still under its own name.
+			all, lerr := repo.ListRuntimes()
+			if lerr != nil || len(all) != 1 || all[0].ID != "rt1" || all[0].Name != "Alpha" {
+				t.Fatalf("dryRun=%v order=%v: validation mutated state: %+v (%v)", dryRun, order, all, lerr)
+			}
+		}
 	}
 }
 
@@ -543,7 +585,9 @@ func TestImport_NewModelOnExistingRuntime(t *testing.T) {
 	}
 }
 
-// §13.4 — a new pipeline may depend on a model that was skipped as existing.
+// §13.4 — a new pipeline may depend on a model the plan classifies as UNCHANGED
+// (reported through the existing skipped count while Slice 1 keeps the shipped
+// plan contract).
 func TestImport_NewPipelineOnExistingModel(t *testing.T) {
 	repo := newTestRepo(t)
 	if err := repo.CreateRuntime(&storage.RuntimeEntry{ID: "rt1", Name: "RT", Executable: "/bin/a"}); err != nil {
@@ -573,7 +617,7 @@ func TestImport_NewPipelineOnExistingModel(t *testing.T) {
 	}
 	p, err := repo.GetPipeline("p1")
 	if err != nil {
-		t.Fatal("pipeline referencing a skipped model was not imported")
+		t.Fatal("pipeline referencing an unchanged model was not imported")
 	}
 	if len(p.Models) != 1 || p.Models[0].ModelID != "m1" || !p.Models[0].AutoStart {
 		t.Fatalf("entry not preserved: %+v", p.Models)

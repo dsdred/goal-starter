@@ -314,6 +314,7 @@
   "portable.import.blocked_reason.runtime_ref": "Модель «{name}» ссылается на Runtime «{ref}», которого нет ни в файле, ни в репозитории.",
   "portable.import.blocked_reason.model_ref": "Пайплайн «{name}» ссылается на Модель «{ref}», которой нет ни в файле, ни в репозитории.",
   "portable.import.blocked_reason.dependency": "Сущность «{name}» зависит от заблокированной сущности «{ref}» и не может быть импортирована.",
+  "portable.import.blocked_reason.pipeline_entries": "Пайплайн «{name}» не содержит ни одной Модели; пустой Пайплайн импортировать нельзя.",
   "portable.import.blocked_reason.other": "Сущность «{name}» заблокирована: {reason}.",
   "portable.import.details": "Технические детали",
   "portable.import.success": "Импорт завершён: добавлено {created}, пропущено {skipped}.",

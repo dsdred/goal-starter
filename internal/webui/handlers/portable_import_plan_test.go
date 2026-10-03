@@ -10,7 +10,8 @@ import (
 	"github.com/dsdred/goal/internal/storage"
 )
 
-// --- SKIP EXISTING plan through HTTP ---
+// --- Import plan through HTTP (ADR 018 Slice 1 keeps the shipped
+// new/existing/blocked counts; a same-ID entity is classified UPDATE) ---
 
 type planTypeCounts struct {
 	Total    int `json:"total"`
@@ -103,6 +104,49 @@ func TestImport_BlockedPlan_409CarriesPlan(t *testing.T) {
 	runtimes, _ := repo.ListRuntimes()
 	if len(runtimes) != 1 {
 		t.Fatalf("blocked import changed the repository: %d runtimes", len(runtimes))
+	}
+}
+
+// ADR 018 D5: a Pipeline with no model entries cannot exist in the repository, so
+// the plan blocks it with pipeline_entries_empty rather than offering a write
+// that must fail. The file itself is valid, which is why validation answers 200.
+func TestImport_EmptyPipeline_BlockedWithReason(t *testing.T) {
+	router, repo := newPortableTestRouter(t)
+	bundle := []byte(`{"format":"goal-portable-config","version":1,"runtimes":[],"models":[],"pipelines":[{"id":"p-empty","name":"Empty","models":[]}]}`)
+
+	validate := httptest.NewRecorder()
+	router.ServeHTTP(validate, httptest.NewRequest(http.MethodPost, "/api/v1/import?dry_run=true", bytes.NewReader(bundle)))
+	if validate.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", validate.Code, validate.Body.String())
+	}
+	body := decodeImportBody(t, validate)
+	if body.CanImport {
+		t.Fatal("a plan that cannot be applied must not report can_import")
+	}
+	if len(body.Blocked) != 1 || body.Blocked[0].ID != "p-empty" {
+		t.Fatalf("blocked = %+v", body.Blocked)
+	}
+	if body.Blocked[0].Reason != storage.ImportBlockedPipelineEntriesEmpty {
+		t.Fatalf("reason = %q, want %q", body.Blocked[0].Reason, storage.ImportBlockedPipelineEntriesEmpty)
+	}
+	if body.Summary.Pipelines.Blocked != 1 || body.Summary.Pipelines.New != 0 {
+		t.Fatalf("summary = %+v", body.Summary.Pipelines)
+	}
+
+	conflict := httptest.NewRecorder()
+	router.ServeHTTP(conflict, httptest.NewRequest(http.MethodPost, "/api/v1/import", bytes.NewReader(bundle)))
+	if conflict.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409: %s", conflict.Code, conflict.Body.String())
+	}
+	if got := decodeImportBody(t, conflict); len(got.Blocked) != 1 ||
+		got.Blocked[0].Reason != storage.ImportBlockedPipelineEntriesEmpty {
+		t.Fatalf("conflict body = %+v", got.Blocked)
+	}
+
+	// Nothing was written, in either call.
+	pipelines, _ := repo.ListPipelines()
+	if len(pipelines) != 0 {
+		t.Fatalf("blocked import created a pipeline: %+v", pipelines)
 	}
 }
 

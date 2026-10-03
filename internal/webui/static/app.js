@@ -2689,6 +2689,7 @@ const PORTABLE_BLOCKED_KEYS = {
     runtime_ref_unresolved: 'portable.import.blocked_reason.runtime_ref',
     model_ref_unresolved: 'portable.import.blocked_reason.model_ref',
     dependency_blocked: 'portable.import.blocked_reason.dependency',
+    pipeline_entries_empty: 'portable.import.blocked_reason.pipeline_entries',
 };
 
 function blockedReasonText(c) {
