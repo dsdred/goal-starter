@@ -325,8 +325,12 @@ func TestImport_ValidReal(t *testing.T) {
 	if result["dry_run"] != false {
 		t.Fatalf("dry_run = %v", result["dry_run"])
 	}
-	if result["runtimes"].(float64) != 1 {
-		t.Fatalf("runtimes = %v", result["runtimes"])
+	body := decodeImportBody(t, resp)
+	if body.Created.Runtimes != 1 || body.Updated.Total() != 0 || body.Unchanged.Total() != 0 {
+		t.Fatalf("created/updated/unchanged = %+v / %+v / %+v", body.Created, body.Updated, body.Unchanged)
+	}
+	if !body.CanImport {
+		t.Fatal("a created entity must report can_import")
 	}
 
 	if _, err := repo.GetRuntime("rt-new"); err != nil {
@@ -349,8 +353,12 @@ func TestImport_DryRun(t *testing.T) {
 	if result["dry_run"] != true {
 		t.Fatalf("dry_run = %v", result["dry_run"])
 	}
-	if result["runtimes"].(float64) != 1 {
-		t.Fatalf("runtimes = %v", result["runtimes"])
+	body := decodeImportBody(t, resp)
+	if body.Created.Runtimes != 1 || !body.CanImport {
+		t.Fatalf("plan = %+v", body)
+	}
+	if body.Summary.Runtimes.New != 1 || body.Summary.Runtimes.Total != 1 {
+		t.Fatalf("summary = %+v", body.Summary.Runtimes)
 	}
 
 	// Zero mutation.
@@ -410,12 +418,15 @@ func TestImport_MissingDependency(t *testing.T) {
 	}
 }
 
-// A bundle entity carrying an ID that already exists is an UPDATE (ADR 018 D3),
-// never a conflict. Slice 1 changes classification only, so the shipped wire
-// contract still counts it as skipped and no restore is applied yet.
-func TestImport_ExistingIDCountedSkipped_NoOverwrite(t *testing.T) {
+// A bundle entity carrying an ID that already exists is a restore onto that
+// identity (ADR 018 D3/D4), never a conflict: the HTTP 200 result counts describe
+// what the write actually did.
+func TestImport_ExistingIDIsRestored(t *testing.T) {
 	router, repo := newPortableTestRouter(t)
-	if err := repo.CreateRuntime(&storage.RuntimeEntry{ID: "rt-new", Name: "Existing", Executable: "/bin/existing"}); err != nil {
+	if err := repo.CreateRuntime(&storage.RuntimeEntry{
+		ID: "rt-new", Name: "Existing", Executable: "/bin/existing",
+		Environment: map[string]string{"TOKEN": "keep-me"},
+	}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -427,19 +438,22 @@ func TestImport_ExistingIDCountedSkipped_NoOverwrite(t *testing.T) {
 		t.Fatalf("status = %d, want 200: %s", resp.Code, resp.Body.String())
 	}
 	body := decodeImportBody(t, resp)
-	if body.Created.Runtimes != 0 || body.Skipped.Runtimes != 1 {
-		t.Fatalf("created/skipped = %+v / %+v", body.Created, body.Skipped)
+	if body.Created.Runtimes != 0 || body.Updated.Runtimes != 1 || body.Unchanged.Total() != 0 {
+		t.Fatalf("created/updated = %+v / %+v", body.Created, body.Updated)
 	}
-	if body.CanImport {
-		t.Fatal("nothing-to-import must not report can_import")
+	if body.Summary.Runtimes.Update != 1 || body.Summary.Runtimes.New != 0 {
+		t.Fatalf("summary = %+v", body.Summary.Runtimes)
 	}
-	if body.Runtimes != 0 {
-		t.Fatalf("flat runtimes must be the created count, got %v", body.Runtimes)
+	if !body.CanImport {
+		t.Fatal("a plan that writes must report can_import")
 	}
 
 	rt, _ := repo.GetRuntime("rt-new")
-	if rt.Name != "Existing" || rt.Executable != "/bin/existing" {
-		t.Fatalf("existing runtime overwritten: %+v", rt)
+	if rt.Name != "NewRT" || rt.Executable != "/bin/new" {
+		t.Fatalf("restore not applied: %+v", rt)
+	}
+	if rt.Environment["TOKEN"] != "keep-me" {
+		t.Fatalf("restore destroyed a local secret: %+v", rt.Environment)
 	}
 }
 

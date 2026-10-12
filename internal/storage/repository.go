@@ -7,7 +7,9 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -83,16 +85,20 @@ type Repository interface {
 	CountActiveInstances() int
 
 	// ImportGraph classifies the given entities against current repository
-	// state under the exclusive write lock and creates only the ones that are
-	// safe to create (SKIP EXISTING). It returns the authoritative plan, which
-	// reports created and skipped counts, plus a *ErrImportConflict listing the
-	// blocking conflicts when the plan cannot be applied safely.
+	// state under the exclusive write lock and applies the plan it produces:
+	// NEW entities are created and UPDATE entities are restored onto their own
+	// identity, in one graph operation with one durable write. It returns the
+	// authoritative plan, which reports created, updated and unchanged counts,
+	// plus a *ErrImportConflict listing the blocking conflicts when the plan
+	// cannot be applied safely — in that case nothing is written.
 	ImportGraph(runtimes []*RuntimeEntry, models []*ModelEntry, pipelines []*PipelineEntry) (*ImportGraphPlan, error)
 }
 
 // ErrImportConflict is returned by ImportGraph when one or more imported
-// entities can be neither created nor safely skipped. Existing entities are
-// never overwritten, so an ID collision alone is not a conflict: it is a skip.
+// entities can be applied neither safely nor unambiguously. An entity that
+// already exists is never a conflict on its own: same ID with different
+// restorable content is a restore, and same ID with equivalent content is
+// unchanged (ADR 018 D3/D4).
 type ErrImportConflict struct {
 	Conflicts []ImportConflict
 }
@@ -1085,16 +1091,25 @@ func (r *JSONRepository) ListPipelines() ([]*PipelineEntry, error) {
 	return out, nil
 }
 
-// ImportGraph atomically imports runtimes, models, and pipelines into the
-// repository. Collision detection, mutation, and durable write happen under
-// a single exclusive lock. On save failure, in-memory state is rolled back.
 // ImportGraph atomically plans and applies a graph import. Classification,
 // mutation, and the durable write happen under a single exclusive lock, so the
-// plan cannot go stale against concurrent CRUD. Policy is SKIP EXISTING: an
-// entity whose ID already exists is skipped and the existing record is left
-// untouched. When any entity is blocked, nothing is written and the returned
-// error is a *ErrImportConflict. On save failure, in-memory state is rolled
-// back.
+// plan cannot go stale against concurrent CRUD. Policy is restore (ADR 018): a
+// NEW entity is appended, an UPDATE entity replaces its own record in place with
+// the restored projection, and an UNCHANGED entity is not written at all. When
+// any entity is blocked, nothing is written and the returned error is a
+// *ErrImportConflict carrying the plan.
+//
+// NEW and UPDATE are applied as one graph operation with exactly one durable
+// write (D13): the resulting lists are composed first, so the repository is only
+// mutated once every check has passed, and a save failure restores the previous
+// record pointers and slices. The per-entity Update* methods are not used here —
+// they take the same non-reentrant mutex and each performs its own write.
+//
+// Before that single write, the resulting graph is verified to hold no two
+// different runtimes under one case-insensitive name. The planner owns
+// classification; this is defense-in-depth only (D13), and a violation it catches
+// surfaces as an import conflict listing the collided runtimes as BLOCKED with
+// zero durable mutation and no in-memory residue (D-15).
 func (r *JSONRepository) ImportGraph(runtimes []*RuntimeEntry, models []*ModelEntry, pipelines []*PipelineEntry) (*ImportGraphPlan, error) {
 	r.mu.Lock()
 	if r.importLockHook != nil {
@@ -1109,23 +1124,94 @@ func (r *JSONRepository) ImportGraph(runtimes []*RuntimeEntry, models []*ModelEn
 	}, runtimes, models, pipelines)
 
 	if plan.HasBlocked() {
-		conflicts := make([]ImportConflict, 0, len(plan.Blocked))
-		for _, c := range plan.Blocked {
-			conflicts = append(conflicts, ImportConflict{
-				Type:      c.Type,
-				ID:        c.ID,
-				Reason:    c.Reason,
-				Name:      c.Name,
-				RelatedID: c.RelatedID,
-			})
-		}
-		return plan, &ErrImportConflict{Conflicts: conflicts}
+		return plan, &ErrImportConflict{Conflicts: planConflicts(plan)}
 	}
 
-	if !plan.WillCreate() {
-		// Everything already exists: the repository and its durable file stay
-		// untouched.
+	if !plan.WillMutate() {
+		// Nothing to create or update: the repository and its durable file stay
+		// byte-identical (ADR 018 D4/D13).
 		return plan, nil
+	}
+
+	now := time.Now()
+
+	// Compose the resulting graph without touching repository state, so a rejected
+	// apply cannot leave residue behind. Creates append; updates replace the record
+	// at its own index, keeping the list order the repository already has.
+	nextRuntimes := make([]*RuntimeEntry, len(r.runtimes), len(r.runtimes)+len(plan.CreateRuntimes))
+	copy(nextRuntimes, r.runtimes)
+	runtimeIndex := make(map[string]int, len(r.runtimes))
+	for i, e := range r.runtimes {
+		runtimeIndex[e.ID] = i
+	}
+	for _, e := range plan.UpdateRuntimes {
+		i, ok := runtimeIndex[e.ID]
+		if !ok {
+			return nil, fmt.Errorf("import plan updates unknown runtime: %s", e.ID)
+		}
+		cp := *e
+		cp.UpdatedAt = now
+		nextRuntimes[i] = &cp
+	}
+	for _, e := range plan.CreateRuntimes {
+		cp := *e
+		cp.CreatedAt = now
+		cp.UpdatedAt = now
+		nextRuntimes = append(nextRuntimes, &cp)
+	}
+
+	nextModels := make([]*ModelEntry, len(r.models), len(r.models)+len(plan.CreateModels))
+	copy(nextModels, r.models)
+	modelIndex := make(map[string]int, len(r.models))
+	for i, e := range r.models {
+		modelIndex[e.ID] = i
+	}
+	for _, e := range plan.UpdateModels {
+		i, ok := modelIndex[e.ID]
+		if !ok {
+			return nil, fmt.Errorf("import plan updates unknown model: %s", e.ID)
+		}
+		cp := *e
+		cp.UpdatedAt = now
+		nextModels[i] = &cp
+	}
+	for _, e := range plan.CreateModels {
+		cp := *e
+		cp.CreatedAt = now
+		cp.UpdatedAt = now
+		nextModels = append(nextModels, &cp)
+	}
+
+	nextPipelines := make([]*PipelineEntry, len(r.pipelines), len(r.pipelines)+len(plan.CreatePipelines))
+	copy(nextPipelines, r.pipelines)
+	pipelineIndex := make(map[string]int, len(r.pipelines))
+	for i, e := range r.pipelines {
+		pipelineIndex[e.ID] = i
+	}
+	for _, e := range plan.UpdatePipelines {
+		i, ok := pipelineIndex[e.ID]
+		if !ok {
+			return nil, fmt.Errorf("import plan updates unknown pipeline: %s", e.ID)
+		}
+		cp := withAllocatedEntryIDs(e, r.idGenerator)
+		cp.UpdatedAt = now
+		nextPipelines[i] = cp
+	}
+	for _, e := range plan.CreatePipelines {
+		cp := withAllocatedEntryIDs(e, r.idGenerator)
+		cp.CreatedAt = now
+		cp.UpdatedAt = now
+		nextPipelines = append(nextPipelines, cp)
+	}
+
+	// Defense-in-depth: the planner is authoritative for classification, so
+	// reaching this check with a collided graph means an escaped invariant. Fail
+	// before the write, name the collided runtimes, and change nothing.
+	if conflicts := runtimeNameConflicts(nextRuntimes); len(conflicts) > 0 {
+		for _, c := range conflicts {
+			plan.addEscapedBlock(c.Type, c.ID, c.Name, c.Reason, c.RelatedID)
+		}
+		return plan, &ErrImportConflict{Conflicts: conflicts}
 	}
 
 	// Capture rollback state (copy slice headers, not backing arrays).
@@ -1136,10 +1222,9 @@ func (r *JSONRepository) ImportGraph(runtimes []*RuntimeEntry, models []*ModelEn
 	prevPipelines := make([]*PipelineEntry, len(r.pipelines))
 	copy(prevPipelines, r.pipelines)
 
-	// Mutate in-memory state with the planned creates only.
-	r.runtimes = append(r.runtimes, plan.CreateRuntimes...)
-	r.models = append(r.models, plan.CreateModels...)
-	r.pipelines = append(r.pipelines, plan.CreatePipelines...)
+	r.runtimes = nextRuntimes
+	r.models = nextModels
+	r.pipelines = nextPipelines
 
 	// Single durable write.
 	if err := r.saveLocked(); err != nil {
@@ -1149,6 +1234,95 @@ func (r *JSONRepository) ImportGraph(runtimes []*RuntimeEntry, models []*ModelEn
 		return nil, err
 	}
 	return plan, nil
+}
+
+// planConflicts converts the plan's blocked classifications into the conflict
+// list ImportGraph reports.
+func planConflicts(plan *ImportGraphPlan) []ImportConflict {
+	conflicts := make([]ImportConflict, 0, len(plan.Blocked))
+	for _, c := range plan.Blocked {
+		conflicts = append(conflicts, ImportConflict{
+			Type:      c.Type,
+			ID:        c.ID,
+			Reason:    c.Reason,
+			Name:      c.Name,
+			RelatedID: c.RelatedID,
+		})
+	}
+	return conflicts
+}
+
+// withAllocatedEntryIDs copies a pipeline record and fills every empty entry ID
+// with a fresh repository ID, the same allocation CreatePipeline and
+// UpdatePipeline perform (ADR 018 D10). The copy is not incidental: writing entry
+// IDs into the caller's backing array would leave an aborted import holding a
+// mutated record.
+func withAllocatedEntryIDs(e *PipelineEntry, gen func() string) *PipelineEntry {
+	cp := *e
+	entries := make([]PipelineModel, len(e.Models))
+	copy(entries, e.Models)
+	cp.Models = entries
+	for i := range cp.Models {
+		if cp.Models[i].ID == "" {
+			cp.Models[i].ID = gen()
+		}
+	}
+	return &cp
+}
+
+// runtimeNameConflicts reports every runtime in the graph that shares one
+// case-insensitive name with a different runtime ID. Each collided runtime of a
+// name is reported, so the conflict body names both sides of the collision, and
+// the counterpart is the lexicographically smallest other holder ID (ADR 018
+// D-14). Output order is fixed by name then ID, never by graph order.
+func runtimeNameConflicts(runtimes []*RuntimeEntry) []ImportConflict {
+	groups := make(map[string][]*RuntimeEntry)
+	for _, e := range runtimes {
+		k := strings.ToLower(e.Name)
+		groups[k] = append(groups[k], e)
+	}
+	keys := make([]string, 0, len(groups))
+	for k, group := range groups {
+		if len(group) < 2 {
+			continue
+		}
+		distinct := make(map[string]bool, len(group))
+		for _, e := range group {
+			distinct[e.ID] = true
+		}
+		if len(distinct) < 2 {
+			continue
+		}
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	var out []ImportConflict
+	for _, k := range keys {
+		distinct := map[string]bool{}
+		nameByID := map[string]string{}
+		for _, e := range groups[k] {
+			distinct[e.ID] = true
+			if _, ok := nameByID[e.ID]; !ok {
+				nameByID[e.ID] = e.Name
+			}
+		}
+		ids := make([]string, 0, len(distinct))
+		for id := range distinct {
+			ids = append(ids, id)
+		}
+		sort.Strings(ids)
+		for _, id := range ids {
+			out = append(out, ImportConflict{
+				Type:      "runtime",
+				ID:        id,
+				Reason:    ImportBlockedRuntimeNameTaken,
+				Name:      nameByID[id],
+				RelatedID: smallestOther(distinct, id),
+			})
+		}
+	}
+	return out
 }
 
 // ─── Instance CRUD ───

@@ -2653,8 +2653,8 @@ function countsTotal(obj) {
     return (obj.runtimes || 0) + (obj.models || 0) + (obj.pipelines || 0);
 }
 
-// planListHtml renders the per-type NEW/EXISTING breakdown. It is shown for
-// every outcome that parsed a valid file — the plan is about the repository,
+// planListHtml renders the per-type NEW/UPDATE/UNCHANGED breakdown. It is shown
+// for every outcome that parsed a valid file — the plan is about the repository,
 // not about the file being correct or not.
 function planListHtml(summary) {
     if (!summary) return '';
@@ -2667,18 +2667,18 @@ function planListHtml(summary) {
     rows.forEach(function (row) {
         const s = row[1];
         if (!s || !s.total) return;
-        // new + existing + blocked always adds up to the type total, so a
+        // new + update + unchanged + blocked always adds up to the type total, so a
         // blocked entity is visible in the plan as well as in the reason list.
         const blocked = s.blocked ? t('portable.import.plan.blocked_suffix', { blocked: s.blocked }) : '';
-        lines.push('<li>' + esc(t(row[2], { new: s.new, existing: s.existing }) + blocked) + '</li>');
+        lines.push('<li>' + esc(t(row[2], { new: s.new, update: s.update, unchanged: s.unchanged }) + blocked) + '</li>');
     });
     return lines.length ? '<ul class="portable-plan-list">' + lines.join('') + '</ul>' : '';
 }
 
-function planTotalsHtml(created, skipped) {
+function planTotalsHtml(created, updated) {
     const parts = [];
     if (created) parts.push(esc(t('portable.import.plan.will_import', { count: created })));
-    if (skipped) parts.push(esc(t('portable.import.plan.will_skip', { count: skipped })));
+    if (updated) parts.push(esc(t('portable.import.plan.will_restore', { count: updated })));
     return parts.length ? '<p class="portable-plan-totals">' + parts.join(' · ') + '</p>' : '';
 }
 
@@ -2705,7 +2705,7 @@ function technicalDetailsHtml(items) {
     items.forEach(function (c) {
         let line = c.type + ' ' + c.id + ': ' + c.reason;
         if (c.name) line += ' (name: ' + c.name + ')';
-        if (c.related_id) line += ' (existing: ' + c.related_id + ')';
+        if (c.related_id) line += ' (related: ' + c.related_id + ')';
         html += '<li>' + esc(line) + '</li>';
     });
     return html + '</ul></details>';
@@ -2719,7 +2719,7 @@ function portableShowPlan(d) {
     const iBtn = document.getElementById('portable-import-btn');
     const blocked = Array.isArray(d.blocked) ? d.blocked : [];
     const created = countsTotal(d.created);
-    const skipped = countsTotal(d.skipped);
+    const updated = countsTotal(d.updated);
     if (iBtn) iBtn.disabled = true;
     if (blocked.length) {
         let html = '<p class="portable-plan-title">' + esc(t('portable.import.blocked_title')) + '</p>' +
@@ -2728,13 +2728,13 @@ function portableShowPlan(d) {
         portableShowResult('error', html + '</ul>' + technicalDetailsHtml(blocked));
         return;
     }
-    if (!created) {
+    if (!created && !updated) {
         portableShowResult('info', '<p class="portable-plan-title">' + esc(t('portable.import.nothing_to_import')) + '</p>' +
-            planListHtml(d.summary) + planTotalsHtml(0, skipped));
+            planListHtml(d.summary));
         return;
     }
     portableShowResult('success', '<p class="portable-plan-title">' + esc(t('portable.import.plan_valid')) + '</p>' +
-        planListHtml(d.summary) + planTotalsHtml(created, skipped));
+        planListHtml(d.summary) + planTotalsHtml(created, updated));
     if (iBtn) iBtn.disabled = !d.can_import;
 }
 
@@ -2813,9 +2813,10 @@ async function portableImport() {
             const d = await r.json();
             closeConfirm();
             const created = countsTotal(d.created);
-            const skipped = countsTotal(d.skipped);
+            const updated = countsTotal(d.updated);
+            const unchanged = countsTotal(d.unchanged);
             portableResetImport();
-            const done = t('portable.import.success', { created: created, skipped: skipped });
+            const done = t('portable.import.success', { created: created, updated: updated, unchanged: unchanged });
             portableShowResult('success', '<p class="portable-plan-title">' + esc(done) + '</p>');
             showToast(done, 'success');
             await reloadAllData();

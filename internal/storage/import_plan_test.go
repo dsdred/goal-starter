@@ -1,8 +1,10 @@
 package storage
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -21,6 +23,23 @@ func reasonIndex(plan *ImportGraphPlan) map[string]string {
 		out[c.Type+":"+c.ID] = c.Reason
 	}
 	return out
+}
+
+// relatedIndex reports the counterpart each blocked classification names, so the
+// D-14 determinism proof can compare plans built from permuted inputs.
+func relatedIndex(plan *ImportGraphPlan) map[string]string {
+	out := map[string]string{}
+	for _, c := range plan.Classifications {
+		if c.Status == ImportStatusBlocked {
+			out[c.Type+":"+c.ID] = c.RelatedID
+		}
+	}
+	return out
+}
+
+func countPlan(plan *ImportGraphPlan) string {
+	return fmt.Sprintf("total=%+v created=%+v updated=%+v unchanged=%+v blocked=%d",
+		plan.Total, plan.Created, plan.Updated, plan.Unchanged, len(plan.Blocked))
 }
 
 // Identity is proven per entity type: ID identifies every type, a runtime name
@@ -54,8 +73,9 @@ func TestPlanGraphImport_IdentityByEntityType(t *testing.T) {
 	statuses := classificationIndex(plan)
 	reasons := reasonIndex(plan)
 
-	// rt-existing carries a different name and no local owner holds "Renamed",
-	// so it is a restore onto the same identity (ADR 018 D3), not a conflict.
+	// rt-existing renames to a name nobody holds, so it is a restore onto the same
+	// identity (ADR 018 D3). rt-new wants "taken", which the repository still owns
+	// under its own ID: an UPDATE never releases the name it vacates (D-1).
 	want := map[string]string{
 		"runtime:rt-existing": ImportStatusUpdate,
 		"runtime:rt-new":      ImportStatusBlocked,
@@ -97,8 +117,26 @@ func TestPlanGraphImport_IdentityByEntityType(t *testing.T) {
 	if len(plan.CreatePipelines) != 1 || plan.CreatePipelines[0].ID != "p-samename" {
 		t.Fatalf("create pipelines = %+v", plan.CreatePipelines)
 	}
-	if plan.Created.Runtimes != 1 || plan.Skipped.Models != 1 || len(plan.Blocked) != 4 {
-		t.Fatalf("counts = %+v blocked=%d", plan, len(plan.Blocked))
+	if len(plan.UpdateRuntimes) != 1 || plan.UpdateRuntimes[0].ID != "rt-existing" {
+		t.Fatalf("update runtimes = %+v", plan.UpdateRuntimes)
+	}
+	if len(plan.UpdateModels) != 1 || plan.UpdateModels[0].ID != "m-existing" {
+		t.Fatalf("update models = %+v", plan.UpdateModels)
+	}
+	if len(plan.UpdatePipelines) != 0 {
+		t.Fatalf("no pipeline here is a restore: %+v", plan.UpdatePipelines)
+	}
+	if plan.Created.Runtimes != 1 || plan.Created.Models != 1 || plan.Created.Pipelines != 1 {
+		t.Fatalf("created = %+v (%s)", plan.Created, countPlan(plan))
+	}
+	if plan.Updated.Runtimes != 1 || plan.Updated.Models != 1 || plan.Updated.Pipelines != 0 {
+		t.Fatalf("updated = %+v (%s)", plan.Updated, countPlan(plan))
+	}
+	if plan.Unchanged.Pipelines != 1 {
+		t.Fatalf("unchanged = %+v (%s)", plan.Unchanged, countPlan(plan))
+	}
+	if len(plan.Blocked) != 4 {
+		t.Fatalf("blocked = %d: %+v", len(plan.Blocked), plan.Blocked)
 	}
 	if plan.Total.Runtimes != 3 || plan.Total.Models != 3 || plan.Total.Pipelines != 4 {
 		t.Fatalf("totals = %+v", plan.Total)
@@ -149,152 +187,22 @@ func TestPlanGraphImport_DependencyResolution(t *testing.T) {
 	if plan.Created.Runtimes != 1 || plan.Created.Models != 2 || plan.Created.Pipelines != 1 {
 		t.Fatalf("created = %+v", plan.Created)
 	}
-	if plan.Skipped.Runtimes != 1 {
-		t.Fatalf("skipped = %+v", plan.Skipped)
+	if plan.Unchanged.Total() != 0 {
+		t.Fatalf("nothing is equivalent here: %+v", plan.Unchanged)
 	}
-	if !plan.WillCreate() {
-		t.Fatal("plan must have entities to create")
+	// rt-live is restated with its executable, which the bare state record does not
+	// carry, so it is a pending restore rather than an unchanged record.
+	if plan.Updated.Runtimes != 1 || len(plan.UpdateRuntimes) != 1 {
+		t.Fatalf("updated = %+v / %+v", plan.Updated, plan.UpdateRuntimes)
 	}
-}
-
-// ImportGraph must not overwrite a local record yet: ADR 018 Slice 1 changes
-// classification only, so a same-ID entity with different restorable content
-// classifies UPDATE while the apply step still writes only what is created.
-// Slice 2' turns this into the restore itself.
-func TestImportGraph_UpdateClassifiedButNotApplied(t *testing.T) {
-	repo, err := NewJSONRepository(filepath.Join(t.TempDir(), "repo.json"))
-	if err != nil {
-		t.Fatal(err)
+	if !plan.WillMutate() {
+		t.Fatal("plan must have entities to write")
 	}
-	r := repo.(*JSONRepository)
-
-	if err := repo.CreateRuntime(&RuntimeEntry{ID: "rt1", Name: "Original", Executable: "/bin/original", WorkingDirectory: "/orig"}); err != nil {
-		t.Fatal(err)
-	}
-	if err := repo.CreateModel(&ModelEntry{ID: "m1", Name: "Original Model", RuntimeID: "rt1", Args: []string{"--keep"}, Active: true}); err != nil {
-		t.Fatal(err)
-	}
-
-	plan, err := r.ImportGraph(
-		[]*RuntimeEntry{{ID: "rt1", Name: "Replaced", Executable: "/bin/replaced", WorkingDirectory: "/replaced"}},
-		[]*ModelEntry{{ID: "m1", Name: "Replaced Model", RuntimeID: "rt1", Args: []string{"--replaced"}, Active: false}},
-		nil,
-	)
-	if err != nil {
-		t.Fatalf("same-ID entities must be skipped, not rejected: %v", err)
-	}
-	if plan.Created.Total() != 0 || plan.Skipped.Runtimes != 1 || plan.Skipped.Models != 1 {
-		t.Fatalf("plan = %+v", plan)
-	}
-	statuses := classificationIndex(plan)
-	if statuses["runtime:rt1"] != ImportStatusUpdate || statuses["model:m1"] != ImportStatusUpdate {
-		t.Fatalf("same-ID entities with different restorable content must classify as update: %+v", statuses)
-	}
-
-	rt, _ := repo.GetRuntime("rt1")
-	if rt.Name != "Original" || rt.Executable != "/bin/original" || rt.WorkingDirectory != "/orig" {
-		t.Fatalf("runtime overwritten: %+v", rt)
-	}
-	m, _ := repo.GetModel("m1")
-	if m.Name != "Original Model" || len(m.Args) != 1 || m.Args[0] != "--keep" || !m.Active {
-		t.Fatalf("model overwritten: %+v", m)
-	}
-}
-
-// A blocked plan writes nothing at all: not the blocked entity, and not the
-// otherwise-new entities beside it.
-func TestImportGraph_BlockedPlanWritesNothing(t *testing.T) {
-	repo, err := NewJSONRepository(filepath.Join(t.TempDir(), "repo.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	r := repo.(*JSONRepository)
-
-	if err := repo.CreateRuntime(&RuntimeEntry{ID: "rt-owner", Name: "Taken", Executable: "/bin/o"}); err != nil {
-		t.Fatal(err)
-	}
-
-	_, err = r.ImportGraph(
-		[]*RuntimeEntry{
-			{ID: "rt-clash", Name: "taken", Executable: "/bin/clash"},
-			{ID: "rt-fine", Name: "Fine", Executable: "/bin/fine"},
-		},
-		nil, nil,
-	)
-	var conflictErr *ErrImportConflict
-	if !errorsAsImportConflict(err, &conflictErr) {
-		t.Fatalf("expected ErrImportConflict, got %v", err)
-	}
-	if len(conflictErr.Conflicts) != 1 || conflictErr.Conflicts[0].ID != "rt-clash" {
-		t.Fatalf("conflicts = %+v", conflictErr.Conflicts)
-	}
-	if conflictErr.Conflicts[0].RelatedID != "rt-owner" {
-		t.Fatalf("conflict must name the colliding entity: %+v", conflictErr.Conflicts[0])
-	}
-	if _, err := repo.GetRuntime("rt-fine"); err == nil {
-		t.Fatal("blocked plan created an unrelated new entity")
-	}
-	if _, err := repo.GetRuntime("rt-clash"); err == nil {
-		t.Fatal("blocked plan created the blocked entity")
-	}
-	runtimes, _ := repo.ListRuntimes()
-	if len(runtimes) != 1 {
-		t.Fatalf("runtime count changed: %d", len(runtimes))
-	}
-}
-
-// A plan with nothing to create must not touch the durable file either. Here
-// every entity is UNCHANGED, so the file stays byte-identical.
-func TestImportGraph_NothingToCreate_LeavesFileUntouched(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "repo.json")
-	repo, err := NewJSONRepository(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	r := repo.(*JSONRepository)
-
-	if err := repo.CreateRuntime(&RuntimeEntry{ID: "rt1", Name: "One", Executable: "/bin/one"}); err != nil {
-		t.Fatal(err)
-	}
-	before, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	plan, err := r.ImportGraph([]*RuntimeEntry{{ID: "rt1", Name: "One", Executable: "/bin/one"}}, nil, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if plan.Created.Total() != 0 || plan.Skipped.Runtimes != 1 {
-		t.Fatalf("plan = %+v", plan)
-	}
-
-	after, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(before) != string(after) {
-		t.Fatal("nothing-to-create import rewrote the durable file")
-	}
-}
-
-func errorsAsImportConflict(err error, target **ErrImportConflict) bool {
-	for err != nil {
-		if c, ok := err.(*ErrImportConflict); ok {
-			*target = c
-			return true
-		}
-		u, ok := err.(interface{ Unwrap() error })
-		if !ok {
-			return false
-		}
-		err = u.Unwrap()
-	}
-	return false
 }
 
 // ADR 018 D3/D4/D11: for a same-ID entity the restorable projection decides
-// UPDATE versus UNCHANGED, and neither outcome is a conflict.
+// UPDATE versus UNCHANGED, neither outcome is a conflict, and an UPDATE is an
+// actionable write (ADR 018 D-9).
 func TestPlanGraphImport_RestoreClassificationPerEntityType(t *testing.T) {
 	when := time.Date(2026, 9, 26, 12, 0, 0, 0, time.UTC)
 	state := ImportGraphState{
@@ -360,13 +268,41 @@ func TestPlanGraphImport_RestoreClassificationPerEntityType(t *testing.T) {
 	if len(plan.CreateRuntimes) != 0 || len(plan.CreateModels) != 0 || len(plan.CreatePipelines) != 0 {
 		t.Fatalf("nothing may be created for existing ids: %+v", plan)
 	}
-	// Inertness of Slice 1: an update classification does not make the plan
-	// actionable, because the apply step still writes only what is created.
-	if plan.WillCreate() || plan.Created.Total() != 0 {
-		t.Fatalf("update/unchanged must not enable the shipped apply path: %+v", plan.Created)
+	if len(plan.UpdateRuntimes) != 1 || plan.UpdateRuntimes[0].ID != "rt-fix" {
+		t.Fatalf("update runtimes = %+v", plan.UpdateRuntimes)
 	}
-	if plan.Skipped.Runtimes != 2 || plan.Skipped.Models != 2 || plan.Skipped.Pipelines != 2 {
-		t.Fatalf("transitional skipped counts = %+v", plan.Skipped)
+	if len(plan.UpdateModels) != 1 || plan.UpdateModels[0].ID != "m-fix" {
+		t.Fatalf("update models = %+v", plan.UpdateModels)
+	}
+	if len(plan.UpdatePipelines) != 1 || plan.UpdatePipelines[0].ID != "p-fix" {
+		t.Fatalf("update pipelines = %+v", plan.UpdatePipelines)
+	}
+	// An update makes the plan actionable: D-9 counts NEW and UPDATE together.
+	if !plan.WillMutate() {
+		t.Fatal("a pending restore must make the plan actionable")
+	}
+	if plan.Created.Total() != 0 || plan.Updated.Total() != 3 || plan.Unchanged.Total() != 3 {
+		t.Fatalf("counts = %s", countPlan(plan))
+	}
+	if plan.Total.Total() != 6 {
+		t.Fatalf("totals = %+v", plan.Total)
+	}
+
+	// The restore records carry the bundle projection over the local identity.
+	localFix := state.Runtimes[1]
+	rt := plan.UpdateRuntimes[0]
+	if rt.Executable != "/bin/new" || rt.Name != "Other" || rt.CreatedAt != when {
+		t.Fatalf("restored runtime = %+v", rt)
+	}
+	// The planner stamps no time; the write path owns UpdatedAt.
+	if rt.UpdatedAt != localFix.UpdatedAt {
+		t.Fatalf("the planner must not stamp time: %+v vs %+v", rt.UpdatedAt, localFix.UpdatedAt)
+	}
+	if plan.UpdateModels[0].Active {
+		t.Fatal("model restore must carry the exported Active=false")
+	}
+	if len(plan.UpdatePipelines[0].Models) != 1 || plan.UpdatePipelines[0].Models[0].ModelID != "m-fix" {
+		t.Fatalf("pipeline restore = %+v", plan.UpdatePipelines[0].Models)
 	}
 }
 
@@ -392,8 +328,8 @@ func TestPlanGraphImport_EnvironmentIsNeverADifference(t *testing.T) {
 	if statuses["runtime:rt1"] != ImportStatusUnchanged || statuses["model:m1"] != ImportStatusUnchanged {
 		t.Fatalf("missing environment values must not classify as a restore: %+v", statuses)
 	}
-	if len(plan.Blocked) != 0 || plan.WillCreate() {
-		t.Fatalf("plan = %+v", plan)
+	if len(plan.Blocked) != 0 || plan.WillMutate() {
+		t.Fatalf("plan = %s", countPlan(plan))
 	}
 	rt, m := state.Runtimes[0], state.Models[0]
 	if rt.Environment["SECRET_TOKEN"] != "keep-me" || m.Environment["MODEL_SECRET"] != "keep-me-too" {
@@ -401,9 +337,55 @@ func TestPlanGraphImport_EnvironmentIsNeverADifference(t *testing.T) {
 	}
 }
 
-// ADR 018 D5 with the ratified Slice 1 contract: restoring a rename onto a name
-// owned by a different Runtime ID is a conflict, whatever the bundle order, and
-// a name nobody holds stays a plain restore.
+// A restore record is a copy: it never aliases the bundle entry (whose
+// Environment is nil and would clear a local secret) and never aliases the local
+// record (whose pointer the apply step must be able to roll back).
+func TestPlanGraphImport_RestoreRecordsAreCopies(t *testing.T) {
+	state := ImportGraphState{
+		Runtimes: []*RuntimeEntry{{ID: "rt1", Name: "RT", Executable: "/bin/rt", Environment: map[string]string{"SECRET": "local"}}},
+		Models:   []*ModelEntry{{ID: "m1", Name: "M", RuntimeID: "rt1", Args: []string{"--local"}, Environment: map[string]string{"SECRET": "local"}}},
+		Pipelines: []*PipelineEntry{{ID: "p1", Name: "P", Active: true, Models: []PipelineModel{
+			{ID: "local-e1", ModelID: "m1", Args: []string{"--local"}},
+		}}},
+	}
+	bundleRuntime := &RuntimeEntry{ID: "rt1", Name: "RT", Executable: "/bin/new"}
+	bundleModel := &ModelEntry{ID: "m1", Name: "M", RuntimeID: "rt1", Args: []string{"--bundle"}}
+	bundlePipeline := &PipelineEntry{ID: "p1", Name: "P", Active: true, Models: []PipelineModel{
+		{ID: "bundle-e1", ModelID: "m1", Args: []string{"--bundle"}},
+	}}
+
+	plan := PlanGraphImport(state, []*RuntimeEntry{bundleRuntime}, []*ModelEntry{bundleModel}, []*PipelineEntry{bundlePipeline})
+
+	if plan.UpdateRuntimes[0] == state.Runtimes[0] || plan.UpdateRuntimes[0] == bundleRuntime {
+		t.Fatal("runtime restore record aliases a plan input")
+	}
+	if plan.UpdateModels[0] == state.Models[0] || plan.UpdateModels[0] == bundleModel {
+		t.Fatal("model restore record aliases a plan input")
+	}
+	if plan.UpdatePipelines[0] == state.Pipelines[0] || plan.UpdatePipelines[0] == bundlePipeline {
+		t.Fatal("pipeline restore record aliases a plan input")
+	}
+	if plan.UpdateRuntimes[0].Environment["SECRET"] != "local" {
+		t.Fatalf("restore lost the local environment: %+v", plan.UpdateRuntimes[0].Environment)
+	}
+	if plan.UpdateModels[0].Environment["SECRET"] != "local" {
+		t.Fatalf("restore lost the local model environment: %+v", plan.UpdateModels[0].Environment)
+	}
+	// The args slice is copied, not shared with the bundle entry.
+	plan.UpdateModels[0].Args[0] = "mutated by test"
+	if bundleModel.Args[0] != "--bundle" || state.Models[0].Args[0] != "--local" {
+		t.Fatalf("args aliased: bundle=%v local=%v", bundleModel.Args, state.Models[0].Args)
+	}
+	// D10: the restored entry list is the bundle list, entry IDs included.
+	entries := plan.UpdatePipelines[0].Models
+	if len(entries) != 1 || entries[0].ID != "bundle-e1" || entries[0].Args[0] != "--bundle" {
+		t.Fatalf("restored entries = %+v", entries)
+	}
+}
+
+// ADR 018 D5/D-1: restoring a rename onto a name owned by a different Runtime ID
+// is a conflict, whatever the bundle order, and a name nobody holds stays a
+// plain restore.
 func TestPlanGraphImport_UpdateRenameCollision(t *testing.T) {
 	state := ImportGraphState{
 		Runtimes: []*RuntimeEntry{
@@ -426,8 +408,8 @@ func TestPlanGraphImport_UpdateRenameCollision(t *testing.T) {
 		if reasons["runtime:rt-a"] != ImportBlockedRuntimeNameTaken || reasons["runtime:rt-b"] != ImportBlockedRuntimeNameTaken {
 			t.Fatalf("reason = %q / %q", reasons["runtime:rt-a"], reasons["runtime:rt-b"])
 		}
-		if len(plan.Blocked) != 2 || plan.Skipped.Total() != 0 || plan.Created.Total() != 0 {
-			t.Fatalf("plan = %+v", plan)
+		if len(plan.Blocked) != 2 || plan.Unchanged.Total() != 0 || plan.Created.Total() != 0 || plan.Updated.Total() != 0 {
+			t.Fatalf("plan = %s", countPlan(plan))
 		}
 	}
 
@@ -448,39 +430,237 @@ func TestPlanGraphImport_UpdateRenameCollision(t *testing.T) {
 	}
 }
 
-// ADR 018 D5 keys `runtime_name_taken_other_id` on the name being owned by a
-// different LOCAL Runtime ID, so a name a pending UPDATE merely intends to write
-// is not held against the rest of the bundle. Slice 1 applies no update, so
-// nothing here can put two colliding names in the repository: the create is
-// checked against the repository and against earlier creates only. Deterministic
-// precedence between a pending UPDATE target and a NEW name is a Slice 2'
-// obligation (ADR 018 test obligation 8); over HTTP the shape is a bundle
-// validation 400 first (`portable.go:273-281`, pinned by
-// TestImport_ClashingUpdateAndNewRuntimeNames_RejectedBeforePlanning).
-func TestPlanGraphImport_PendingUpdateDoesNotReserveItsTargetName(t *testing.T) {
-	state := ImportGraphState{
-		Runtimes: []*RuntimeEntry{{ID: "rt-a", Name: "Alpha", Executable: "/bin/a"}},
-	}
-	restore := &RuntimeEntry{ID: "rt-a", Name: "Gamma", Executable: "/bin/a"}
-	fresh := &RuntimeEntry{ID: "rt-new", Name: "gamma", Executable: "/bin/new"}
+// ─── ADR 018 obligation 8: the complete runtime-name contest ───
 
-	for _, bundle := range [][]*RuntimeEntry{{restore, fresh}, {fresh, restore}} {
+// assertContest proves one collision case of the ratified matrix: the named
+// entities are BLOCKED with the name-taken reason, nothing is queued for a
+// write, and every permutation of the same bundle inputs classifies identically.
+func assertContest(t *testing.T, state ImportGraphState, permutations [][]*RuntimeEntry, wantBlocked []string) {
+	t.Helper()
+
+	var first map[string]string
+	var firstRelated map[string]string
+
+	for i, bundle := range permutations {
 		plan := PlanGraphImport(state, bundle, nil, nil)
-		statuses := classificationIndex(plan)
-		if statuses["runtime:rt-a"] != ImportStatusUpdate || statuses["runtime:rt-new"] != ImportStatusNew {
-			t.Fatalf("classification must not depend on bundle order, got %+v", statuses)
+		statuses, related := classificationIndex(plan), relatedIndex(plan)
+		if first != nil {
+			if len(statuses) != len(first) {
+				t.Fatalf("permutation %d classifies a different entity set: %v vs %v", i, statuses, first)
+			}
+			for k, v := range first {
+				if statuses[k] != v {
+					t.Fatalf("permutation %d: %s = %q, want %q (order-dependent classification)", i, k, statuses[k], v)
+				}
+				if related[k] != firstRelated[k] {
+					t.Fatalf("permutation %d: %s related_id = %q, want %q", i, k, related[k], firstRelated[k])
+				}
+			}
+		} else {
+			first, firstRelated = statuses, related
 		}
-		if len(plan.Blocked) != 0 || plan.Created.Runtimes != 1 || plan.Skipped.Runtimes != 1 || plan.Total.Runtimes != 2 {
-			t.Fatalf("plan = %+v", plan)
+		for _, id := range wantBlocked {
+			key := "runtime:" + id
+			if statuses[key] != ImportStatusBlocked {
+				t.Fatalf("permutation %d: %s = %q, want blocked: %+v", i, key, statuses[key], statuses)
+			}
+			if reasonIndex(plan)[key] != ImportBlockedRuntimeNameTaken {
+				t.Fatalf("permutation %d: %s reason = %q", i, key, reasonIndex(plan)[key])
+			}
 		}
-		if len(plan.CreateRuntimes) != 1 || plan.CreateRuntimes[0].ID != "rt-new" {
-			t.Fatalf("only the new runtime may be queued for writing: %+v", plan.CreateRuntimes)
+		if plan.WillMutate() {
+			t.Fatalf("permutation %d: a blocked contest must queue no write: %s", i, countPlan(plan))
+		}
+		if len(plan.CreateRuntimes) != 0 || len(plan.UpdateRuntimes) != 0 {
+			t.Fatalf("permutation %d: write lists must be empty: %+v / %+v", i, plan.CreateRuntimes, plan.UpdateRuntimes)
 		}
 	}
 }
 
-// ADR 018 D5 with the ratified Slice 1 contract: an empty entry list blocks a
-// Pipeline only when a write would leave it empty.
+// Cases 1 and 2: a NEW runtime and a pending UPDATE of a different runtime that
+// claim one case-insensitive final name are BOTH blocked, with no precedence for
+// either class, in both bundle orders (ADR 018 D-8).
+func TestPlanGraphImport_NewVsPendingUpdateBothBlocked(t *testing.T) {
+	state := ImportGraphState{
+		Runtimes: []*RuntimeEntry{{ID: "rt-a", Name: "x", Executable: "/bin/a"}},
+	}
+	updateA := &RuntimeEntry{ID: "rt-a", Name: "y", Executable: "/bin/a"}
+	newB := &RuntimeEntry{ID: "rt-b", Name: "Y", Executable: "/bin/b"}
+
+	assertContest(t, state, [][]*RuntimeEntry{{updateA, newB}, {newB, updateA}}, []string{"rt-a", "rt-b"})
+}
+
+// Case 3: a pending UPDATE that keeps its own name still collides with a NEW
+// runtime of that name — the two different final runtimes contend, and the
+// locally-held name is reserved exactly as D-1 states.
+func TestPlanGraphImport_UpdateKeepingItsOwnNameCollidesWithNew(t *testing.T) {
+	state := ImportGraphState{
+		Runtimes: []*RuntimeEntry{{ID: "rt-a", Name: "x", Executable: "/bin/a"}},
+	}
+	// Same name, different executable: still a pending write of "x".
+	updateA := &RuntimeEntry{ID: "rt-a", Name: "x", Executable: "/bin/new"}
+	newB := &RuntimeEntry{ID: "rt-b", Name: "X", Executable: "/bin/b"}
+
+	assertContest(t, state, [][]*RuntimeEntry{{updateA, newB}, {newB, updateA}}, []string{"rt-a", "rt-b"})
+}
+
+// Case 4: self-ownership is never a conflict — an UPDATE that keeps its own name
+// and claims no other name restores normally.
+func TestPlanGraphImport_SelfOwnershipIsNotAConflict(t *testing.T) {
+	state := ImportGraphState{
+		Runtimes: []*RuntimeEntry{{ID: "rt-a", Name: "x", Executable: "/bin/a"}},
+	}
+	plan := PlanGraphImport(state,
+		[]*RuntimeEntry{{ID: "rt-a", Name: "X", Executable: "/bin/new"}}, nil, nil)
+	if classificationIndex(plan)["runtime:rt-a"] != ImportStatusUpdate {
+		t.Fatalf("keeping one's own name must not block: %+v", plan.Classifications)
+	}
+	if len(plan.Blocked) != 0 {
+		t.Fatalf("blocked = %+v", plan.Blocked)
+	}
+	if len(plan.UpdateRuntimes) != 1 || !plan.WillMutate() {
+		t.Fatalf("plan = %s", countPlan(plan))
+	}
+}
+
+// Case 5: an UPDATE/UPDATE rename swap stays blocked under D-1 — each target name
+// is held by the other runtime, and neither write can be proven safe.
+func TestPlanGraphImport_UpdateSwapStaysBlocked(t *testing.T) {
+	state := ImportGraphState{
+		Runtimes: []*RuntimeEntry{
+			{ID: "rt-a", Name: "x", Executable: "/bin/a"},
+			{ID: "rt-b", Name: "y", Executable: "/bin/b"},
+		},
+	}
+	swap := []*RuntimeEntry{
+		{ID: "rt-a", Name: "y", Executable: "/bin/a"},
+		{ID: "rt-b", Name: "x", Executable: "/bin/b"},
+	}
+	assertContest(t, state, [][]*RuntimeEntry{swap, {swap[1], swap[0]}}, []string{"rt-a", "rt-b"})
+}
+
+// Case 7 (D-12): two different NEW runtimes claiming one case-insensitive name
+// are BOTH blocked, with no first-wins, in both orders. This shape is unreachable
+// over HTTP (bundle validation answers 400), so it is proven at the planner and
+// at the repository.
+func TestPlanGraphImport_TwoNewRuntimesBothBlocked(t *testing.T) {
+	newA := &RuntimeEntry{ID: "rt-a", Name: "y", Executable: "/bin/a"}
+	newB := &RuntimeEntry{ID: "rt-b", Name: "Y", Executable: "/bin/b"}
+	assertContest(t, ImportGraphState{}, [][]*RuntimeEntry{{newA, newB}, {newB, newA}}, []string{"rt-a", "rt-b"})
+}
+
+// Case 8 (D-13): an entity that cannot execute contributes no intended-final-name
+// claim, so blocking one claimant never manufactures a second collision for
+// entities whose verdict does not depend on it.
+func TestPlanGraphImport_BlockedClaimantManufacturesNoSecondCollision(t *testing.T) {
+	state := ImportGraphState{
+		Runtimes: []*RuntimeEntry{
+			{ID: "rt-a", Name: "x", Executable: "/bin/a"},
+			{ID: "rt-c", Name: "z", Executable: "/bin/c"},
+		},
+	}
+	// rt-a renames onto the locally-owned "z" and blocks; rt-b is an unrelated new
+	// runtime, and rt-c keeps its own name as an UNCHANGED record.
+	plan := PlanGraphImport(state,
+		[]*RuntimeEntry{
+			{ID: "rt-a", Name: "Z", Executable: "/bin/a"},
+			{ID: "rt-b", Name: "Fresh", Executable: "/bin/b"},
+			{ID: "rt-c", Name: "z", Executable: "/bin/c"},
+		},
+		nil, nil)
+
+	statuses := classificationIndex(plan)
+	if statuses["runtime:rt-a"] != ImportStatusBlocked || statuses["runtime:rt-b"] != ImportStatusNew || statuses["runtime:rt-c"] != ImportStatusUnchanged {
+		t.Fatalf("only the claimant of a locally-owned name may block: %+v", statuses)
+	}
+	if relatedIndex(plan)["runtime:rt-a"] != "rt-c" {
+		t.Fatalf("related_id = %q, want rt-c", relatedIndex(plan)["runtime:rt-a"])
+	}
+	if plan.Created.Runtimes != 1 || plan.Unchanged.Runtimes != 1 || plan.Updated.Runtimes != 0 {
+		t.Fatalf("plan = %s", countPlan(plan))
+	}
+	// A bundle whose runtime is blocked still writes nothing at all, because the
+	// whole plan is rejected — no dependent cascade is manufactured here.
+	if len(plan.Blocked) != 1 {
+		t.Fatalf("blocked = %+v", plan.Blocked)
+	}
+}
+
+// D-14: for a contested set larger than two, every claimant reports the
+// lexicographically smallest OTHER claimant, and neither the classification nor
+// the reported ID depends on bundle order.
+func TestPlanGraphImport_ContestedSetReportsSmallestOtherClaimant(t *testing.T) {
+	state := ImportGraphState{
+		Runtimes: []*RuntimeEntry{
+			{ID: "rt-keep", Name: "Unrelated", Executable: "/bin/keep"},
+			{ID: "rt-m", Name: "Shared", Executable: "/bin/m"},
+		},
+	}
+	a := &RuntimeEntry{ID: "rt-a", Name: "shared", Executable: "/bin/a"}
+	b := &RuntimeEntry{ID: "rt-b", Name: "SHARED", Executable: "/bin/b"}
+	m := &RuntimeEntry{ID: "rt-m", Name: "Shared", Executable: "/bin/new"}
+
+	orders := [][]*RuntimeEntry{
+		{a, b, m, {ID: "rt-keep", Name: "Unrelated", Executable: "/bin/keep"}},
+		{m, a, b, {ID: "rt-keep", Name: "Unrelated", Executable: "/bin/keep"}},
+		{b, m, {ID: "rt-keep", Name: "Unrelated", Executable: "/bin/keep"}, a},
+	}
+	assertContest(t, state, orders, []string{"rt-a", "rt-b", "rt-m"})
+
+	// The three-way set reports, for each claimant, the lexicographically smallest
+	// OTHER claimant: rt-a and rt-b name each other, rt-m names rt-a. Never the
+	// entity's own ID, and never the one that happened to come first in the bundle.
+	plan := PlanGraphImport(state, orders[0], nil, nil)
+	related := relatedIndex(plan)
+	if related["runtime:rt-a"] != "rt-b" || related["runtime:rt-b"] != "rt-a" || related["runtime:rt-m"] != "rt-a" {
+		t.Fatalf("related_id map = %+v", related)
+	}
+	// The uncontested runtime of the same bundle is unaffected.
+	if classificationIndex(plan)["runtime:rt-keep"] != ImportStatusUnchanged {
+		t.Fatalf("unrelated runtime = %+v", plan.Classifications)
+	}
+}
+
+// The per-type counts must stay coherent for the wire contract: every classified
+// entity is counted exactly once per type.
+func TestPlanGraphImport_CountsStayCoherent(t *testing.T) {
+	state := ImportGraphState{
+		Runtimes: []*RuntimeEntry{
+			{ID: "rt-keep", Name: "RT", Executable: "/bin/rt"},
+			{ID: "rt-fix", Name: "Fix", Executable: "/bin/fix"},
+			{ID: "rt-taken", Name: "Taken", Executable: "/bin/taken"},
+		},
+	}
+	plan := PlanGraphImport(state,
+		[]*RuntimeEntry{
+			{ID: "rt-keep", Name: "RT", Executable: "/bin/rt"},
+			{ID: "rt-fix", Name: "Fix", Executable: "/bin/new"},
+			{ID: "rt-other", Name: "TAKEN", Executable: "/bin/other"},
+			{ID: "rt-fresh", Name: "Fresh", Executable: "/bin/fresh"},
+		},
+		nil, nil)
+
+	blockedByType := map[string]int{}
+	for _, c := range plan.Blocked {
+		blockedByType[c.Type]++
+	}
+	if plan.Total.Runtimes != plan.Created.Runtimes+plan.Updated.Runtimes+plan.Unchanged.Runtimes+blockedByType["runtime"] {
+		t.Fatalf("counts incoherent: %s blocked=%d", countPlan(plan), blockedByType["runtime"])
+	}
+	if plan.Total.Runtimes != 4 || plan.Created.Runtimes != 1 || plan.Updated.Runtimes != 1 ||
+		plan.Unchanged.Runtimes != 1 || blockedByType["runtime"] != 1 {
+		t.Fatalf("plan = %s blocked=%d", countPlan(plan), blockedByType["runtime"])
+	}
+	if plan.ClassificationsByStatus(ImportStatusUpdate)[0].ID != "rt-fix" {
+		t.Fatal("update classification must be readable by status")
+	}
+	if len(plan.ClassificationsByStatus(ImportStatusUnchanged)) != 1 {
+		t.Fatalf("unchanged classification = %+v", plan.Classifications)
+	}
+}
+
+// ADR 018 D5: an empty entry list blocks a Pipeline only when a write would
+// leave it empty.
 func TestPlanGraphImport_EmptyPipelineEntries(t *testing.T) {
 	state := ImportGraphState{
 		Runtimes: []*RuntimeEntry{{ID: "rt1", Name: "RT", Executable: "/bin/rt"}},
@@ -497,8 +677,8 @@ func TestPlanGraphImport_EmptyPipelineEntries(t *testing.T) {
 		reasonIndex(plan)["pipeline:p-new"] != ImportBlockedPipelineEntriesEmpty {
 		t.Fatalf("a new empty pipeline must be blocked: %+v", plan.Classifications)
 	}
-	if len(plan.CreatePipelines) != 0 || plan.WillCreate() {
-		t.Fatalf("blocked pipeline must not be created: %+v", plan)
+	if len(plan.CreatePipelines) != 0 || plan.WillMutate() {
+		t.Fatalf("blocked pipeline must not be created: %s", countPlan(plan))
 	}
 
 	// UPDATE that would leave the stored pipeline empty: cannot be restored.
@@ -506,6 +686,9 @@ func TestPlanGraphImport_EmptyPipelineEntries(t *testing.T) {
 	if classificationIndex(plan)["pipeline:p-emptied"] != ImportStatusBlocked ||
 		reasonIndex(plan)["pipeline:p-emptied"] != ImportBlockedPipelineEntriesEmpty {
 		t.Fatalf("an update to an empty entry list must be blocked: %+v", plan.Classifications)
+	}
+	if len(plan.UpdatePipelines) != 0 || plan.WillMutate() {
+		t.Fatalf("a blocked restore must not be queued: %+v", plan.UpdatePipelines)
 	}
 
 	// UNCHANGED with no entries: nothing is written, so nothing is blocked. This
@@ -566,41 +749,33 @@ func TestPlanGraphImport_PendingUpdatePipelineResolvesDependencies(t *testing.T)
 	}
 }
 
-// The transitional counts must stay coherent for the shipped wire contract:
-// every classified entity is counted exactly once per type.
-func TestPlanGraphImport_TransitionalCountsStayCoherent(t *testing.T) {
+// ADR 018 D12 closes the pending-UPDATE reference hole for Models too: a model
+// that exists locally but would be restored onto an unresolvable runtime is
+// blocked instead of being written dangling.
+func TestPlanGraphImport_PendingUpdateModelResolvesRuntime(t *testing.T) {
 	state := ImportGraphState{
-		Runtimes: []*RuntimeEntry{
-			{ID: "rt-keep", Name: "RT", Executable: "/bin/rt"},
-			{ID: "rt-fix", Name: "Fix", Executable: "/bin/fix"},
-			{ID: "rt-taken", Name: "Taken", Executable: "/bin/taken"},
-		},
+		Runtimes: []*RuntimeEntry{{ID: "rt1", Name: "RT", Executable: "/bin/rt"}},
+		Models:   []*ModelEntry{{ID: "m1", Name: "M", RuntimeID: "rt1", Active: true}},
 	}
-	plan := PlanGraphImport(state,
-		[]*RuntimeEntry{
-			{ID: "rt-keep", Name: "RT", Executable: "/bin/rt"},
-			{ID: "rt-fix", Name: "Fix", Executable: "/bin/new"},
-			{ID: "rt-other", Name: "TAKEN", Executable: "/bin/other"},
-			{ID: "rt-fresh", Name: "Fresh", Executable: "/bin/fresh"},
-		},
-		nil, nil)
+	plan := PlanGraphImport(state, nil,
+		[]*ModelEntry{{ID: "m1", Name: "M", RuntimeID: "rt-gone", Active: true}}, nil)
+	if classificationIndex(plan)["model:m1"] != ImportStatusBlocked ||
+		reasonIndex(plan)["model:m1"] != ImportBlockedRuntimeRef {
+		t.Fatalf("a restore onto an unresolvable runtime must block: %+v", plan.Classifications)
+	}
+	if len(plan.UpdateModels) != 0 || plan.WillMutate() {
+		t.Fatalf("blocked restore must queue nothing: %s", countPlan(plan))
+	}
 
-	blockedByType := map[string]int{}
-	for _, c := range plan.Blocked {
-		blockedByType[c.Type]++
+	// The same model restored onto a runtime the plan itself creates resolves.
+	plan = PlanGraphImport(state,
+		[]*RuntimeEntry{{ID: "rt2", Name: "RT2", Executable: "/bin/rt2"}},
+		[]*ModelEntry{{ID: "m1", Name: "M", RuntimeID: "rt2", Active: true}}, nil)
+	if classificationIndex(plan)["model:m1"] != ImportStatusUpdate {
+		t.Fatalf("a reference to a runtime created by this plan resolves: %+v", plan.Classifications)
 	}
-	if plan.Total.Runtimes != plan.Created.Runtimes+plan.Skipped.Runtimes+blockedByType["runtime"] {
-		t.Fatalf("counts incoherent: total=%d created=%d skipped=%d blocked=%d",
-			plan.Total.Runtimes, plan.Created.Runtimes, plan.Skipped.Runtimes, blockedByType["runtime"])
-	}
-	if plan.Total.Runtimes != 4 || plan.Created.Runtimes != 1 || plan.Skipped.Runtimes != 2 || blockedByType["runtime"] != 1 {
-		t.Fatalf("plan = %+v blocked=%d", plan, blockedByType["runtime"])
-	}
-	if plan.ClassificationsByStatus(ImportStatusUpdate)[0].ID != "rt-fix" {
-		t.Fatal("update classification must be readable by status")
-	}
-	if len(plan.ClassificationsByStatus(ImportStatusUnchanged)) != 1 {
-		t.Fatalf("unchanged classification = %+v", plan.Classifications)
+	if len(plan.UpdateModels) != 1 || plan.UpdateModels[0].RuntimeID != "rt2" {
+		t.Fatalf("update models = %+v", plan.UpdateModels)
 	}
 }
 
@@ -635,4 +810,310 @@ func TestPlanGraphImport_DoesNotMutateComparedRecords(t *testing.T) {
 	if p := bundlePipelines[0]; len(p.Models) != 1 || p.Models[0].ID != "e1" || len(p.Models[0].Args) != 0 {
 		t.Fatalf("bundle pipeline changed: %+v", p)
 	}
+}
+
+// ─── ImportGraph apply (ADR 018 D3/D4/D13) ───
+
+// An UPDATE is applied, not merely classified: the restored projection replaces
+// the local record, the identity and the fields restore must not touch are
+// preserved, and NEW + UPDATE land in one write.
+func TestImportGraph_UpdateIsAppliedWithCreateInOneWrite(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "repo.json")
+	repo, err := NewJSONRepository(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := repo.(*JSONRepository)
+
+	if err := repo.CreateRuntime(&RuntimeEntry{ID: "rt1", Name: "Original", Executable: "/bin/original", WorkingDirectory: "/orig", Environment: map[string]string{"SECRET": "keep-me"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.CreateModel(&ModelEntry{ID: "m1", Name: "Original Model", RuntimeID: "rt1", Args: []string{"--keep"}, Active: true, Environment: map[string]string{"SECRET": "keep-me-too"}}); err != nil {
+		t.Fatal(err)
+	}
+	before := r.snapshotForTest()
+
+	plan, err := r.ImportGraph(
+		[]*RuntimeEntry{
+			{ID: "rt1", Name: "Restored", Executable: "/bin/restored", WorkingDirectory: "/restored"},
+			{ID: "rt2", Name: "Fresh", Executable: "/bin/fresh"},
+		},
+		[]*ModelEntry{{ID: "m1", Name: "Restored Model", RuntimeID: "rt1", Args: []string{"--restored"}, Active: false}},
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("update must be applied, not rejected: %v", err)
+	}
+	if plan.Created.Runtimes != 1 || plan.Updated.Runtimes != 1 || plan.Updated.Models != 1 {
+		t.Fatalf("plan = %s", countPlan(plan))
+	}
+	if !plan.WillMutate() {
+		t.Fatal("a plan that writes must report WillMutate")
+	}
+
+	rt, err := repo.GetRuntime("rt1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rt.Name != "Restored" || rt.Executable != "/bin/restored" || rt.WorkingDirectory != "/restored" {
+		t.Fatalf("runtime not restored: %+v", rt)
+	}
+	if rt.Environment["SECRET"] != "keep-me" {
+		t.Fatalf("restore destroyed the local environment: %+v", rt.Environment)
+	}
+	if rt.CreatedAt != before.runtimes[0].CreatedAt {
+		t.Fatalf("restore changed CreatedAt: %v -> %v", before.runtimes[0].CreatedAt, rt.CreatedAt)
+	}
+	if !rt.UpdatedAt.After(before.runtimes[0].UpdatedAt) && rt.UpdatedAt != before.runtimes[0].UpdatedAt {
+		t.Fatalf("UpdatedAt must be restamped by the write path: %v", rt.UpdatedAt)
+	}
+	fresh, err := repo.GetRuntime("rt2")
+	if err != nil || fresh.Name != "Fresh" {
+		t.Fatalf("new runtime not created: %+v %v", fresh, err)
+	}
+	m, err := repo.GetModel("m1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Name != "Restored Model" || len(m.Args) != 1 || m.Args[0] != "--restored" || m.Active {
+		t.Fatalf("model not restored: %+v", m)
+	}
+	if m.Environment["SECRET"] != "keep-me-too" {
+		t.Fatalf("model restore destroyed the local environment: %+v", m.Environment)
+	}
+
+	// One durable write for the whole graph: the file carries both changes.
+	disk, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Restored", "Fresh", "--restored"} {
+		if !strings.Contains(string(disk), want) {
+			t.Fatalf("durable file missing %q: %s", want, disk)
+		}
+	}
+}
+
+// D10: a restored Pipeline takes the bundle entry list — bundle entry IDs and
+// order are preserved, local entries the bundle does not carry are dropped, and a
+// new entry ID the repository has never seen is kept.
+func TestImportGraph_PipelineEntryIdentityRestored(t *testing.T) {
+	repo, err := NewJSONRepository(filepath.Join(t.TempDir(), "repo.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := repo.(*JSONRepository)
+
+	if err := repo.CreateRuntime(&RuntimeEntry{ID: "rt1", Name: "RT", Executable: "/bin/rt"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"m-keep", "m-drop"} {
+		if err := repo.CreateModel(&ModelEntry{ID: id, Name: id, RuntimeID: "rt1"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := repo.CreatePipeline(&PipelineEntry{ID: "p1", Name: "P", Active: true, Models: []PipelineModel{
+		{ID: "local-e1", ModelID: "m-keep", Args: []string{"--local"}},
+		{ID: "local-e2", ModelID: "m-drop"},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	plan, err := r.ImportGraph(nil, nil, []*PipelineEntry{{
+		ID: "p1", Name: "P", Active: true, Models: []PipelineModel{
+			{ID: "bundle-e9", ModelID: "m-keep", Args: []string{"--bundle"}, AutoStart: true},
+			{ID: "", ModelID: "m-keep"},
+		},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Updated.Pipelines != 1 {
+		t.Fatalf("plan = %s", countPlan(plan))
+	}
+
+	p, err := repo.GetPipeline("p1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p.Models) != 2 {
+		t.Fatalf("entries = %+v", p.Models)
+	}
+	if p.Models[0].ID != "bundle-e9" || p.Models[0].ModelID != "m-keep" ||
+		len(p.Models[0].Args) != 1 || p.Models[0].Args[0] != "--bundle" || !p.Models[0].AutoStart {
+		t.Fatalf("bundle entry not preserved: %+v", p.Models[0])
+	}
+	// An empty entry ID is allocated by the repository, never left empty (D10).
+	if p.Models[1].ID == "" {
+		t.Fatalf("empty entry ID must be allocated: %+v", p.Models[1])
+	}
+	if p.Models[1].ID == "bundle-e9" {
+		t.Fatalf("allocated ID collided with a bundle ID: %+v", p.Models[1])
+	}
+	// local-e2 is gone: the restored membership is the bundle's.
+	for _, e := range p.Models {
+		if e.ID == "local-e2" || e.ModelID == "m-drop" {
+			t.Fatalf("unconsumed local entry survived: %+v", p.Models)
+		}
+	}
+}
+
+// A NEW pipeline keeps the entry IDs the bundle carries.
+func TestImportGraph_NewPipelinePreservesBundleEntryIDs(t *testing.T) {
+	repo, err := NewJSONRepository(filepath.Join(t.TempDir(), "repo.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := repo.(*JSONRepository)
+
+	if err := repo.CreateRuntime(&RuntimeEntry{ID: "rt1", Name: "RT", Executable: "/bin/rt"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.CreateModel(&ModelEntry{ID: "m1", Name: "M", RuntimeID: "rt1"}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := r.ImportGraph(nil, nil, []*PipelineEntry{{
+		ID: "p-new", Name: "Fresh", Active: true,
+		Models: []PipelineModel{{ID: "bundle-e1", ModelID: "m1"}},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	p, err := repo.GetPipeline("p-new")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p.Models) != 1 || p.Models[0].ID != "bundle-e1" {
+		t.Fatalf("created pipeline entries = %+v", p.Models)
+	}
+}
+
+// A blocked plan writes nothing at all: not the blocked entity, not the
+// otherwise-new entities beside it, and not a pending restore.
+func TestImportGraph_BlockedPlanWritesNothing(t *testing.T) {
+	repo, err := NewJSONRepository(filepath.Join(t.TempDir(), "repo.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := repo.(*JSONRepository)
+
+	if err := repo.CreateRuntime(&RuntimeEntry{ID: "rt-owner", Name: "Taken", Executable: "/bin/o"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.CreateRuntime(&RuntimeEntry{ID: "rt-stable", Name: "Stable", Executable: "/bin/stable", WorkingDirectory: "/keep"}); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = r.ImportGraph(
+		[]*RuntimeEntry{
+			{ID: "rt-clash", Name: "taken", Executable: "/bin/clash"},
+			{ID: "rt-fine", Name: "Fine", Executable: "/bin/fine"},
+			{ID: "rt-stable", Name: "Renamed", Executable: "/bin/stable"},
+		},
+		nil, nil,
+	)
+	var conflictErr *ErrImportConflict
+	if !errorsAsImportConflict(err, &conflictErr) {
+		t.Fatalf("expected ErrImportConflict, got %v", err)
+	}
+	if len(conflictErr.Conflicts) != 1 || conflictErr.Conflicts[0].ID != "rt-clash" {
+		t.Fatalf("conflicts = %+v", conflictErr.Conflicts)
+	}
+	if conflictErr.Conflicts[0].RelatedID != "rt-owner" {
+		t.Fatalf("conflict must name the colliding entity: %+v", conflictErr.Conflicts[0])
+	}
+	if _, err := repo.GetRuntime("rt-fine"); err == nil {
+		t.Fatal("blocked plan created an unrelated new entity")
+	}
+	if _, err := repo.GetRuntime("rt-clash"); err == nil {
+		t.Fatal("blocked plan created the blocked entity")
+	}
+	stable, _ := repo.GetRuntime("rt-stable")
+	if stable.Name != "Stable" || stable.WorkingDirectory != "/keep" {
+		t.Fatalf("blocked plan applied a pending restore: %+v", stable)
+	}
+	runtimes, _ := repo.ListRuntimes()
+	if len(runtimes) != 2 {
+		t.Fatalf("runtime count changed: %d", len(runtimes))
+	}
+}
+
+// A plan with nothing to write must not touch the durable file either. Here every
+// entity is UNCHANGED, so the file stays byte-identical.
+func TestImportGraph_NothingToMutate_LeavesFileUntouched(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "repo.json")
+	repo, err := NewJSONRepository(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := repo.(*JSONRepository)
+
+	if err := repo.CreateRuntime(&RuntimeEntry{ID: "rt1", Name: "One", Executable: "/bin/one"}); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	plan, err := r.ImportGraph([]*RuntimeEntry{{ID: "rt1", Name: "One", Executable: "/bin/one"}}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Created.Total() != 0 || plan.Updated.Total() != 0 || plan.Unchanged.Runtimes != 1 {
+		t.Fatalf("plan = %s", countPlan(plan))
+	}
+	if plan.WillMutate() {
+		t.Fatal("an all-unchanged plan must not report a mutation")
+	}
+
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(before) != string(after) {
+		t.Fatal("nothing-to-write import rewrote the durable file")
+	}
+}
+
+func errorsAsImportConflict(err error, target **ErrImportConflict) bool {
+	for err != nil {
+		if c, ok := err.(*ErrImportConflict); ok {
+			*target = c
+			return true
+		}
+		u, ok := err.(interface{ Unwrap() error })
+		if !ok {
+			return false
+		}
+		err = u.Unwrap()
+	}
+	return false
+}
+
+// snapshotForTest copies the in-memory graph so a test can compare identity and
+// timestamps against what the write changed.
+func (r *JSONRepository) snapshotForTest() testSnapshot {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	s := testSnapshot{}
+	for _, e := range r.runtimes {
+		cp := *e
+		s.runtimes = append(s.runtimes, &cp)
+	}
+	for _, e := range r.models {
+		cp := *e
+		s.models = append(s.models, &cp)
+	}
+	for _, e := range r.pipelines {
+		cp := *e
+		s.pipelines = append(s.pipelines, &cp)
+	}
+	return s
+}
+
+type testSnapshot struct {
+	runtimes  []*RuntimeEntry
+	models    []*ModelEntry
+	pipelines []*PipelineEntry
 }

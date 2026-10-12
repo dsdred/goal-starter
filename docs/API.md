@@ -442,15 +442,19 @@ Maximum body size: **10 MiB** (10,485,760 bytes). Exceeding the limit returns `4
 
 Import behavior:
 
-- Conflict policy: **SKIP EXISTING** (ADR 014, amended 2026-09-25). An entity whose ID already exists in the repository is **skipped**: the stored record is never overwritten, merged, updated, copied, or ID-remapped.
-- Every bundle entity is classified exactly once: **new** (will be created), **existing** (skipped), or **blocked** (can be neither created nor safely skipped).
+- Conflict policy: **RESTORE** (ADR 018; supersedes the 2026-09-25 SKIP EXISTING amendment of ADR 014). An entity whose ID already exists in the repository is matched by identity: if the stored record already carries the bundled values it is **unchanged**, otherwise it is **updated** — the restorable projection the bundle describes is written onto the stored record. No entity is ever overwritten wholesale, merged, copied, or ID-remapped.
+- Every bundle entity is classified exactly once: **new** (will be created), **update** (will be restored), **unchanged** (already matches, nothing to write), or **blocked** (can be neither created nor safely restored).
 - Any blocked entity stops the whole import — no partial write and no dangling reference. Blocking reasons: `runtime_name_taken_other_id` (the runtime name is already owned by a different ID), `runtime_ref_unresolved`, `model_ref_unresolved`, `dependency_blocked` (a dependency of this entity is itself blocked), `pipeline_entries_empty` (the Pipeline carries no model entries, and an empty Pipeline cannot exist in the repository).
+- Runtime names are contested once, over the **intended final** state: the repository's current names plus the final name of every bundled runtime that would write. Two different runtimes claiming one case-insensitive name block **every** claimant that would write it — a pending restore beside a NEW entry (in either bundle order), two NEW entries, and a rename swap between two pending restores all block. There is no first-wins, no precedence for either class, and no dependence on bundle order. A runtime that keeps its own name does not conflict with itself, and a non-writing (**unchanged**) runtime reserves its name without ever being blocked by the contest.
 - Identity is per entity type. Runtime: ID is identity, and the name is additionally unique case-insensitively, so same-name/different-ID is ambiguous and blocks. Model and Pipeline: ID only — a same-name/different-ID model or pipeline is a distinct, new entity.
 - Dependency closure requirement (unchanged from v1): every `models[].runtime_id` and every `pipelines[].models[].model_id` must reference an entity present **in the bundle** — a reference to something absent from the bundle is a `400` file-validity failure, not a plan verdict.
-- Within that closure, dependencies resolve in Runtime → Model → Pipeline order against both repository state and the entities this same import creates: a new entity may reference one the same plan creates (new) or one already in the repository (its bundled entry is then classified existing and skipped). A reference that resolves to neither — only possible when the plan is built directly, not through the bundle validator — is `runtime_ref_unresolved` / `model_ref_unresolved`.
-- Atomic: everything the plan creates is written in a single durable save and rolled back in memory if that save fails. A plan with nothing to create leaves the repository file untouched.
+- Within that closure, dependencies resolve in Runtime → Model → Pipeline order against both repository state and the entities this same import creates: a new entity may reference one the same plan creates (new) or one already in the repository (its bundled entry is then classified unchanged or update). A reference that resolves to neither — only possible when the plan is built directly, not through the bundle validator — is `runtime_ref_unresolved` / `model_ref_unresolved`.
+- Pipeline entries are matched by **entry ID**, never by position: a bundled entry updates the stored entry with the same ID, a bundled entry with an unknown ID is added, and a stored entry the bundle does not carry is dropped. A bundled entry with an empty ID is allocated at write time.
+- Atomic: everything the plan creates or updates is written in a single durable save and rolled back in memory if that save fails. A plan with nothing to create or update leaves the repository file byte-identical.
+- `can_import` is one predicate: at least one entity is new or updatable (`WillMutate()`) **and** none is blocked. It is the same predicate the apply path and the UI enablement use.
+- Before the durable write, the repository re-checks the final runtime-name graph as defense-in-depth. A collision that escaped planning surfaces as an ordinary blocked `409`: the collided runtimes are reported blocked, `can_import` is `false`, and nothing is written. It never re-classifies any other entity and is not a second classification path.
 - Does **not** launch models or pipelines. `Active`/`AutoStart` flags are preserved and apply on next normal server startup.
-- Does **not** restore `environment_keys` as Environment entries. They are advisory metadata only.
+- Does **not** restore `environment_keys` as Environment entries. They are advisory metadata only; a stored Environment map is never taken from or cleared by the bundle.
 - Variable references (`${VAR}`) are validated for grammar only. Undefined variables are accepted; malformed references are rejected.
 
 Response `200` — the import plan. `dry_run=true` and a real import return the same shape:
@@ -460,22 +464,23 @@ Response `200` — the import plan. `dry_run=true` and a real import return the 
   "dry_run": true,
   "can_import": true,
   "summary": {
-    "runtimes":  { "total": 2, "new": 1, "existing": 1, "blocked": 0 },
-    "models":    { "total": 1, "new": 1, "existing": 0, "blocked": 0 },
-    "pipelines": { "total": 0, "new": 0, "existing": 0, "blocked": 0 }
+    "runtimes":  { "total": 3, "new": 1, "update": 1, "unchanged": 1, "blocked": 0 },
+    "models":    { "total": 2, "new": 1, "update": 0, "unchanged": 1, "blocked": 0 },
+    "pipelines": { "total": 0, "new": 0, "update": 0, "unchanged": 0, "blocked": 0 }
   },
-  "created": { "runtimes": 1, "models": 1, "pipelines": 0 },
-  "skipped": { "runtimes": 1, "models": 0, "pipelines": 0 },
-  "blocked": [],
-  "runtimes": 1, "models": 1, "pipelines": 0
+  "created":   { "runtimes": 1, "models": 1, "pipelines": 0 },
+  "updated":   { "runtimes": 1, "models": 0, "pipelines": 0 },
+  "unchanged": { "runtimes": 1, "models": 1, "pipelines": 0 },
+  "blocked": []
 }
 ```
 
-- On a `200` real import, `created` and `skipped` are what actually happened. On a dry-run they are the plan's expected counts. On a `409` nothing was written, so any counts in that body are plan-only.
-- `can_import` is true only when at least one entity is new **and** none is blocked. `created = 0` with `blocked = 0` means every entity already exists — there is nothing to import.
-- The flat `runtimes` / `models` / `pipelines` fields mirror `created` (original response shape, kept).
+- On a `200` real import, `created`, `updated` and `unchanged` are what actually happened. On a dry-run they are the plan's expected counts. On a `409` nothing was written, so any counts in that body are plan-only.
+- `summary` is the authoritative per-type breakdown: `{total, new, update, unchanged, blocked}` for each entity type, and the four statuses always add up to `total`. The body carries no other counts — the legacy flat top-level `runtimes` / `models` / `pipelines` mirrors and the Slice 1 `existing` / `skipped` vocabulary are retired, with no compatibility shim.
+- `created` and `updated` both zero with `blocked` empty means the repository already matches the file: there is nothing to import and `can_import` is `false`.
+- `blocked[]` lists each blocked entity as `{type, id, name, reason, related_id}`. `related_id` names the counterpart claimant and never depends on bundle order: for a contested name larger than two it is the lexicographically smallest **other** claimant ID.
 
-Response `409` — the plan is blocked and **nothing was written**. The body is the same plan object plus the error envelope (`error`, `code: "conflict"`, `details[]`). `blocked[]` lists each blocked entity as `{type, id, name, reason, related_id}`.
+Response `409` — the plan is blocked and **nothing was written**. The body is the same plan object plus the error envelope (`error`, `code: "conflict"`, `details[]`). Each `details` entry is the neutral technical line for one blocked entity; the counterpart is presented as `(related: <id>)`, never as `(existing: <id>)`.
 
 Errors:
 

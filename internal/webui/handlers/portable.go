@@ -145,10 +145,11 @@ func (h *PortableHandler) Import(w http.ResponseWriter, r *http.Request) {
 
 // importTypeSummary is the per-entity-type import plan count set.
 type importTypeSummary struct {
-	Total    int `json:"total"`
-	New      int `json:"new"`
-	Existing int `json:"existing"`
-	Blocked  int `json:"blocked"`
+	Total     int `json:"total"`
+	New       int `json:"new"`
+	Update    int `json:"update"`
+	Unchanged int `json:"unchanged"`
+	Blocked   int `json:"blocked"`
 }
 
 // importCountsBody carries one count set across the three entity types.
@@ -167,18 +168,17 @@ type importSummaryBody struct {
 
 // importResponse is the import/import-plan body.
 //
-// The flat runtimes/models/pipelines fields are created counts, kept so the
-// body stays readable without walking the nested objects.
+// summary is the authoritative plan breakdown; created/updated/unchanged are the
+// same counts flattened per action so a caller can read the outcome without
+// walking the nested objects (ADR 018 D16).
 type importResponse struct {
 	DryRun    bool                `json:"dry_run"`
 	CanImport bool                `json:"can_import"`
 	Summary   importSummaryBody   `json:"summary"`
 	Created   importCountsBody    `json:"created"`
-	Skipped   importCountsBody    `json:"skipped"`
+	Updated   importCountsBody    `json:"updated"`
+	Unchanged importCountsBody    `json:"unchanged"`
 	Blocked   []portable.Conflict `json:"blocked"`
-	Runtimes  int                 `json:"runtimes"`
-	Models    int                 `json:"models"`
-	Pipelines int                 `json:"pipelines"`
 }
 
 type importConflictResponse struct {
@@ -201,29 +201,31 @@ func buildImportResponse(res *portable.ImportResult) importResponse {
 		DryRun:    res.DryRun,
 		CanImport: res.CanImport,
 		Summary: importSummaryBody{
-			Runtimes:  summarize(res.Total.Runtimes, res.Created.Runtimes, res.Skipped.Runtimes, blockedByType["runtime"]),
-			Models:    summarize(res.Total.Models, res.Created.Models, res.Skipped.Models, blockedByType["model"]),
-			Pipelines: summarize(res.Total.Pipelines, res.Created.Pipelines, res.Skipped.Pipelines, blockedByType["pipeline"]),
+			Runtimes:  summarize(res.Total.Runtimes, res.Created.Runtimes, res.Updated.Runtimes, res.Unchanged.Runtimes, blockedByType["runtime"]),
+			Models:    summarize(res.Total.Models, res.Created.Models, res.Updated.Models, res.Unchanged.Models, blockedByType["model"]),
+			Pipelines: summarize(res.Total.Pipelines, res.Created.Pipelines, res.Updated.Pipelines, res.Unchanged.Pipelines, blockedByType["pipeline"]),
 		},
 		Created: importCountsBody{
 			Runtimes:  res.Created.Runtimes,
 			Models:    res.Created.Models,
 			Pipelines: res.Created.Pipelines,
 		},
-		Skipped: importCountsBody{
-			Runtimes:  res.Skipped.Runtimes,
-			Models:    res.Skipped.Models,
-			Pipelines: res.Skipped.Pipelines,
+		Updated: importCountsBody{
+			Runtimes:  res.Updated.Runtimes,
+			Models:    res.Updated.Models,
+			Pipelines: res.Updated.Pipelines,
 		},
-		Blocked:   blocked,
-		Runtimes:  res.Created.Runtimes,
-		Models:    res.Created.Models,
-		Pipelines: res.Created.Pipelines,
+		Unchanged: importCountsBody{
+			Runtimes:  res.Unchanged.Runtimes,
+			Models:    res.Unchanged.Models,
+			Pipelines: res.Unchanged.Pipelines,
+		},
+		Blocked: blocked,
 	}
 }
 
-func summarize(total, new, existing, blocked int) importTypeSummary {
-	return importTypeSummary{Total: total, New: new, Existing: existing, Blocked: blocked}
+func summarize(total, new, update, unchanged, blocked int) importTypeSummary {
+	return importTypeSummary{Total: total, New: new, Update: update, Unchanged: unchanged, Blocked: blocked}
 }
 
 // writeImportConflict answers a blocked import plan. Nothing was written. The
@@ -243,7 +245,7 @@ func writeImportConflict(w http.ResponseWriter, conflict *portable.ErrConflict) 
 			detail += " (name: " + c.Name + ")"
 		}
 		if c.RelatedID != "" {
-			detail += " (existing: " + c.RelatedID + ")"
+			detail += " (related: " + c.RelatedID + ")"
 		}
 		details = append(details, detail)
 	}

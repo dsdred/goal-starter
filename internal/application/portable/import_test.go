@@ -24,8 +24,8 @@ func TestImport_EmptyRepo_Success(t *testing.T) {
 	if res.Created.Runtimes != 1 || res.Created.Models != 1 || res.Created.Pipelines != 0 {
 		t.Fatalf("unexpected created counts: %+v", res)
 	}
-	if res.Skipped.Total() != 0 || len(res.Blocked) != 0 {
-		t.Fatalf("unexpected skip/block counts: %+v", res)
+	if res.Updated.Total() != 0 || res.Unchanged.Total() != 0 || len(res.Blocked) != 0 {
+		t.Fatalf("unexpected update/block counts: %+v", res)
 	}
 
 	rt, err := repo.GetRuntime("rt1")
@@ -57,13 +57,20 @@ func TestImport_EnvironmentKeys_NotImported(t *testing.T) {
 	}
 }
 
-// §13.7 — same ID is repository identity, so it is never a conflict. The planner
-// classifies this bundle entity as an UPDATE (ADR 018 D3); Slice 1 changes
-// classification only, so the shipped contract still counts it as skipped and
-// the apply step still leaves the existing record untouched.
-func TestImport_IDCollision_UpdateClassifiedButNotApplied(t *testing.T) {
+// §13.7 — same ID is repository identity, so it is never a conflict: the exported
+// configuration is restored onto that identity (ADR 018 D3/D4). The restore is
+// non-destructive: restorable fields are written, and what bundle v1 cannot carry
+// (environment values) stays exactly as stored.
+func TestImport_IDCollision_UpdateIsApplied(t *testing.T) {
 	repo := newTestRepo(t)
-	if err := repo.CreateRuntime(&storage.RuntimeEntry{ID: "rt1", Name: "Existing", Executable: "/bin/existing"}); err != nil {
+	if err := repo.CreateRuntime(&storage.RuntimeEntry{
+		ID: "rt1", Name: "Existing", Executable: "/bin/existing", WorkingDirectory: "/existing",
+		Environment: map[string]string{"TOKEN": "keep-me"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	before, err := repo.GetRuntime("rt1")
+	if err != nil {
 		t.Fatal(err)
 	}
 	orch := NewImportOrchestrator(repo)
@@ -77,16 +84,70 @@ func TestImport_IDCollision_UpdateClassifiedButNotApplied(t *testing.T) {
 	if err != nil {
 		t.Fatalf("same-ID entity must not be rejected as a conflict: %v", err)
 	}
-	if res.Created.Runtimes != 0 || res.Skipped.Runtimes != 1 {
-		t.Fatalf("expected 0 created / 1 skipped, got %+v", res)
+	if res.Created.Runtimes != 0 || res.Updated.Runtimes != 1 || res.Unchanged.Total() != 0 {
+		t.Fatalf("expected 0 created / 1 restored, got %+v", res)
 	}
-	if res.CanImport {
-		t.Fatal("nothing to import must not report can_import")
+	if !res.CanImport {
+		t.Fatal("a pending restore must enable import")
 	}
-	// Zero writes: the existing runtime is unchanged.
 	rt, _ := repo.GetRuntime("rt1")
-	if rt.Name != "Existing" || rt.Executable != "/bin/existing" {
-		t.Fatalf("existing runtime was modified: %+v", rt)
+	if rt.Name != "New" || rt.Executable != "/bin/new" {
+		t.Fatalf("restore not applied: %+v", rt)
+	}
+	// WorkingDirectory is restorable, and the bundle carries none, so the exported
+	// value (absent) wins over the local one (D11 normalization).
+	if rt.WorkingDirectory != "" {
+		t.Fatalf("restore kept a field the bundle cleared: %+v", rt)
+	}
+	if rt.Environment["TOKEN"] != "keep-me" {
+		t.Fatalf("restore destroyed a local secret: %+v", rt.Environment)
+	}
+	if !rt.CreatedAt.Equal(before.CreatedAt) {
+		t.Fatalf("restore rewrote CreatedAt: %+v vs %+v", rt, before)
+	}
+	if rt.UpdatedAt.Equal(before.UpdatedAt) {
+		t.Fatalf("restore did not stamp UpdatedAt: %+v vs %+v", rt, before)
+	}
+}
+
+// A dry run reports the pending restore without writing it, and re-importing the
+// exact same bundle after the restore completes classifies as UNCHANGED with
+// nothing to import (ADR 018 D4/D16).
+func TestImport_RestoreThenReimport_IsUnchanged(t *testing.T) {
+	repo := newTestRepo(t)
+	if err := repo.CreateRuntime(&storage.RuntimeEntry{ID: "rt1", Name: "Existing", Executable: "/bin/existing"}); err != nil {
+		t.Fatal(err)
+	}
+	orch := NewImportOrchestrator(repo)
+
+	bundle := &Bundle{
+		Format:   FormatIdentity,
+		Version:  1,
+		Runtimes: []PortableRuntime{{ID: "rt1", Name: "New", Executable: "/bin/new"}},
+	}
+	dry, err := orch.Import(bundle, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dry.Updated.Runtimes != 1 || dry.Created.Total() != 0 || !dry.CanImport {
+		t.Fatalf("dry run must report the pending restore: %+v", dry)
+	}
+	if rt, _ := repo.GetRuntime("rt1"); rt.Name != "Existing" {
+		t.Fatalf("dry run wrote: %+v", rt)
+	}
+
+	if _, err := orch.Import(bundle, false); err != nil {
+		t.Fatal(err)
+	}
+	again, err := orch.Import(bundle, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.Unchanged.Runtimes != 1 || again.Updated.Total() != 0 || again.Created.Total() != 0 {
+		t.Fatalf("re-import of the applied bundle must be unchanged: %+v", again)
+	}
+	if again.CanImport {
+		t.Fatal("nothing to write must not enable import")
 	}
 }
 
@@ -188,7 +249,7 @@ func TestImport_ModelNameNotIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Created.Models != 1 || res.Skipped.Models != 0 {
+	if res.Created.Models != 1 || res.Unchanged.Models != 0 || res.Unchanged.Runtimes != 1 {
 		t.Fatalf("model with a duplicate name must import as new: %+v", res)
 	}
 	if _, err := repo.GetModel("m2"); err != nil {
@@ -226,9 +287,9 @@ func TestImport_DryRun_Success(t *testing.T) {
 	}
 }
 
-// §13.1 — a bundle that only re-describes existing state is a valid file with
-// nothing to import: not a conflict, and not importable.
-func TestImport_DryRun_AllExisting_NothingToImport(t *testing.T) {
+// §13.1 — a bundle that only re-describes stored state is a valid file with
+// nothing to write: not a conflict, and not importable (ADR 018 D4/D-9).
+func TestImport_DryRun_AllUnchanged_NothingToImport(t *testing.T) {
 	repo := newTestRepo(t)
 	if err := repo.CreateRuntime(&storage.RuntimeEntry{ID: "rt1", Name: "RT", Executable: "/bin/s"}); err != nil {
 		t.Fatal(err)
@@ -242,10 +303,10 @@ func TestImport_DryRun_AllExisting_NothingToImport(t *testing.T) {
 	}
 	res, err := orch.Import(bundle, true)
 	if err != nil {
-		t.Fatalf("existing entities must not be reported as conflicts: %v", err)
+		t.Fatalf("unchanged entities must not be reported as conflicts: %v", err)
 	}
-	if res.Created.Total() != 0 {
-		t.Fatalf("expected zero new, got %+v", res)
+	if res.Created.Total() != 0 || res.Updated.Total() != 0 {
+		t.Fatalf("expected zero new and zero restore, got %+v", res)
 	}
 	if len(res.Blocked) != 0 {
 		t.Fatalf("expected zero blocked, got %+v", res.Blocked)
@@ -253,12 +314,12 @@ func TestImport_DryRun_AllExisting_NothingToImport(t *testing.T) {
 	if res.CanImport {
 		t.Fatal("nothing-to-import must not enable import")
 	}
-	if res.Skipped.Runtimes != 1 {
-		t.Fatalf("expected 1 skipped runtime, got %+v", res)
+	if res.Unchanged.Runtimes != 1 {
+		t.Fatalf("expected 1 unchanged runtime, got %+v", res)
 	}
 }
 
-// A valid file that mixes existing and new entities is importable.
+// A valid file that mixes unchanged and new entities is importable.
 func TestImport_DryRun_MixedEnablesImport(t *testing.T) {
 	repo := newTestRepo(t)
 	if err := repo.CreateRuntime(&storage.RuntimeEntry{ID: "rt1", Name: "RT", Executable: "/bin/s"}); err != nil {
@@ -276,7 +337,7 @@ func TestImport_DryRun_MixedEnablesImport(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !res.CanImport || res.Created.Models != 1 || res.Skipped.Runtimes != 1 {
+	if !res.CanImport || res.Created.Models != 1 || res.Unchanged.Runtimes != 1 {
 		t.Fatalf("unexpected plan: %+v", res)
 	}
 	if _, err := repo.GetModel("m1"); err == nil {
@@ -440,6 +501,64 @@ func TestImport_DryRunTOCTOU_RealImportRejects(t *testing.T) {
 	}
 }
 
+// §13.1 / test obligation 5 — the same re-planning must also catch a competing
+// mutation that only makes a pending RESTORE unsafe. The dry run reports the
+// restore; another ID claims the name the restore intends to write; the real
+// import re-plans under the lock and writes nothing at all, updates included.
+func TestImport_DryRunTOCTOU_PendingRestoreReplans(t *testing.T) {
+	repo := newTestRepo(t)
+	if err := repo.CreateRuntime(&storage.RuntimeEntry{ID: "rt1", Name: "Own", Executable: "/bin/1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.CreateModel(&storage.ModelEntry{ID: "m1", Name: "M", RuntimeID: "rt1", Args: []string{"--keep"}}); err != nil {
+		t.Fatal(err)
+	}
+	orch := NewImportOrchestrator(repo)
+
+	bundle := &Bundle{
+		Format:   FormatIdentity,
+		Version:  1,
+		Runtimes: []PortableRuntime{{ID: "rt1", Name: "Claimed", Executable: "/bin/1"}},
+		Models:   []PortableModel{{ID: "m1", Name: "M", RuntimeID: "rt1", Args: []string{"--restored"}}},
+	}
+	dry, err := orch.Import(bundle, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dry.Updated.Runtimes != 1 || dry.Updated.Models != 1 || dry.Created.Total() != 0 || !dry.CanImport {
+		t.Fatalf("dry run must report the pending restore: %+v", dry)
+	}
+
+	if err := repo.CreateRuntime(&storage.RuntimeEntry{ID: "rt-rival", Name: "claimed", Executable: "/bin/r"}); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = orch.Import(bundle, false)
+	ce, ok := err.(*ErrConflict)
+	if !ok {
+		t.Fatalf("expected blocking conflict, got %T (%v)", err, err)
+	}
+	if len(ce.Conflicts) != 1 || ce.Conflicts[0].ID != "rt1" {
+		t.Fatalf("conflicts = %+v", ce.Conflicts)
+	}
+	if ce.Conflicts[0].Reason != storage.ImportBlockedRuntimeNameTaken || ce.Conflicts[0].RelatedID != "rt-rival" {
+		t.Fatalf("conflict = %+v", ce.Conflicts[0])
+	}
+	if ce.Result == nil || ce.Result.CanImport {
+		t.Fatalf("rejected plan must not report can_import: %+v", ce.Result)
+	}
+	// The blocked restore leaves no write, and its still-valid dependent restore
+	// is abandoned with it: the whole graph operation is atomic.
+	rt1, _ := repo.GetRuntime("rt1")
+	if rt1.Name != "Own" || rt1.Executable != "/bin/1" {
+		t.Fatalf("blocked restore was applied: %+v", rt1)
+	}
+	m1, _ := repo.GetModel("m1")
+	if len(m1.Args) != 1 || m1.Args[0] != "--keep" {
+		t.Fatalf("abandoned plan applied its dependent update: %+v", m1)
+	}
+}
+
 // §13.9 — the same competing mutation must also be caught when it only makes a
 // dependency unresolvable, so no dependent entity is written as a dangling object.
 func TestImport_RevalidationPreventsDanglingWrite(t *testing.T) {
@@ -513,8 +632,8 @@ func TestImport_ExportThenValidate_SameRepo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("self-reimport must validate cleanly: %v", err)
 	}
-	if res.Created.Total() != 0 {
-		t.Fatalf("expected zero new, got %+v", res.Created)
+	if res.Created.Total() != 0 || res.Updated.Total() != 0 {
+		t.Fatalf("expected zero new and zero restore, got %+v %+v", res.Created, res.Updated)
 	}
 	if len(res.Blocked) != 0 {
 		t.Fatalf("expected zero blocked, got %+v", res.Blocked)
@@ -522,8 +641,25 @@ func TestImport_ExportThenValidate_SameRepo(t *testing.T) {
 	if res.CanImport {
 		t.Fatal("nothing to import must not enable import")
 	}
-	if res.Skipped.Total() != res.Total.Total() {
-		t.Fatalf("all entities should classify as existing: %+v %+v", res.Skipped, res.Total)
+	if res.Unchanged.Total() != res.Total.Total() {
+		t.Fatalf("every entity must classify as up to date: %+v %+v", res.Unchanged, res.Total)
+	}
+
+	// The same file against the same repository is also a no-op when applied: the
+	// exported projection is exactly what is stored, so nothing is written.
+	applied, err := orch.Import(bundle, false)
+	if err != nil {
+		t.Fatalf("self-reimport must apply cleanly: %v", err)
+	}
+	if applied.Created.Total() != 0 || applied.Updated.Total() != 0 {
+		t.Fatalf("self-reimport wrote state: %+v", applied)
+	}
+	reexported, err := ExportBundle(repo, ExportRoot{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(reexported) != string(data) {
+		t.Fatal("a no-op self-reimport changed the exported configuration")
 	}
 }
 
@@ -544,7 +680,7 @@ func TestImport_AllNew_CreatesAll(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Created.Runtimes != 2 || res.Skipped.Total() != 0 {
+	if res.Created.Runtimes != 2 || res.Unchanged.Total() != 0 || res.Updated.Total() != 0 {
 		t.Fatalf("unexpected plan: %+v", res)
 	}
 	if _, err := repo.GetRuntime("rtA"); err != nil {
@@ -573,7 +709,7 @@ func TestImport_NewModelOnExistingRuntime(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Skipped.Runtimes != 1 || res.Created.Models != 1 {
+	if res.Unchanged.Runtimes != 1 || res.Created.Models != 1 {
 		t.Fatalf("unexpected plan: %+v", res)
 	}
 	m, err := repo.GetModel("m1")
@@ -585,9 +721,8 @@ func TestImport_NewModelOnExistingRuntime(t *testing.T) {
 	}
 }
 
-// §13.4 — a new pipeline may depend on a model the plan classifies as UNCHANGED
-// (reported through the existing skipped count while Slice 1 keeps the shipped
-// plan contract).
+// §13.4 — a new pipeline may depend on a model the plan classifies as UNCHANGED,
+// because the stored record already satisfies the reference (ADR 018 D5).
 func TestImport_NewPipelineOnExistingModel(t *testing.T) {
 	repo := newTestRepo(t)
 	if err := repo.CreateRuntime(&storage.RuntimeEntry{ID: "rt1", Name: "RT", Executable: "/bin/a"}); err != nil {
@@ -612,7 +747,7 @@ func TestImport_NewPipelineOnExistingModel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Skipped.Runtimes != 1 || res.Skipped.Models != 1 || res.Created.Pipelines != 1 {
+	if res.Unchanged.Runtimes != 1 || res.Unchanged.Models != 1 || res.Created.Pipelines != 1 {
 		t.Fatalf("unexpected plan: %+v", res)
 	}
 	p, err := repo.GetPipeline("p1")
@@ -703,10 +838,14 @@ func TestImport_BlockedDependency_NoDangling(t *testing.T) {
 	}
 }
 
-// §13.10 — created and skipped counts stay distinct in a mixed plan.
-func TestImport_ResultCounts_DistinguishCreatedSkipped(t *testing.T) {
+// §13.10 — NEW, UPDATE and UNCHANGED stay distinct classes in one mixed plan, and
+// the applied result describes exactly what each of them did (ADR 018 D4/D16).
+func TestImport_ResultCounts_DistinguishCreatedUpdatedUnchanged(t *testing.T) {
 	repo := newTestRepo(t)
 	if err := repo.CreateRuntime(&storage.RuntimeEntry{ID: "rt1", Name: "RT", Executable: "/bin/a"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.CreateRuntime(&storage.RuntimeEntry{ID: "rt2", Name: "RT Old", Executable: "/bin/old"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := repo.CreateModel(&storage.ModelEntry{ID: "m1", Name: "M1", RuntimeID: "rt1"}); err != nil {
@@ -715,22 +854,51 @@ func TestImport_ResultCounts_DistinguishCreatedSkipped(t *testing.T) {
 	orch := NewImportOrchestrator(repo)
 
 	bundle := &Bundle{
-		Format:   FormatIdentity,
-		Version:  1,
-		Runtimes: []PortableRuntime{{ID: "rt1", Name: "RT", Executable: "/bin/a"}},
+		Format:  FormatIdentity,
+		Version: 1,
+		Runtimes: []PortableRuntime{
+			{ID: "rt1", Name: "RT", Executable: "/bin/a"},
+			{ID: "rt2", Name: "RT Restored", Executable: "/bin/old"},
+			{ID: "rt3", Name: "RT Three", Executable: "/bin/three"},
+		},
 		Models: []PortableModel{
 			{ID: "m1", Name: "M1", RuntimeID: "rt1"},
-			{ID: "m2", Name: "M2", RuntimeID: "rt1"},
+			{ID: "m2", Name: "M2", RuntimeID: "rt2"},
 		},
 	}
 	res, err := orch.Import(bundle, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Created.Models != 1 || res.Skipped.Models != 1 || res.Created.Runtimes != 0 || res.Skipped.Runtimes != 1 {
-		t.Fatalf("created/skipped not distinguished: %+v", res)
+	if res.Created.Runtimes != 1 || res.Updated.Runtimes != 1 || res.Unchanged.Runtimes != 1 {
+		t.Fatalf("runtime statuses not distinguished: %+v", res)
 	}
-	if res.Total.Models != 2 || res.Total.Runtimes != 1 {
+	if res.Created.Models != 1 || res.Updated.Models != 0 || res.Unchanged.Models != 1 {
+		t.Fatalf("model statuses not distinguished: %+v", res)
+	}
+	if res.Total.Runtimes != 3 || res.Total.Models != 2 {
 		t.Fatalf("totals wrong: %+v", res.Total)
+	}
+	if !res.CanImport {
+		t.Fatal("a plan with writes and no conflicts must enable import")
+	}
+
+	rt2, _ := repo.GetRuntime("rt2")
+	if rt2.Name != "RT Restored" || rt2.Executable != "/bin/old" {
+		t.Fatalf("restore not applied: %+v", rt2)
+	}
+	if _, err := repo.GetRuntime("rt3"); err != nil {
+		t.Fatal("new runtime not created")
+	}
+	rt1, _ := repo.GetRuntime("rt1")
+	if rt1.Name != "RT" || rt1.Executable != "/bin/a" {
+		t.Fatalf("unchanged runtime rewritten: %+v", rt1)
+	}
+	m1, _ := repo.GetModel("m1")
+	if m1.Name != "M1" || m1.RuntimeID != "rt1" {
+		t.Fatalf("unchanged model rewritten: %+v", m1)
+	}
+	if _, err := repo.GetModel("m2"); err != nil {
+		t.Fatal("new model not created")
 	}
 }

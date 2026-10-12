@@ -27,6 +27,60 @@ async function list(page, urlPath) {
   return Array.isArray(r.data) ? r.data : [];
 }
 
+// ADR 018 Slice 2′ wire contract, asserted against the JSON the UI actually
+// receives and not only against rendered text: summary.{runtimes,models,
+// pipelines} is the single authoritative per-type breakdown, the outcome
+// vocabulary is created/updated/unchanged, and the transitional Slice 1 keys
+// (existing, skipped, flat top-level mirrors) are retired.
+const PLAN_KEYS = ['blocked', 'can_import', 'created', 'dry_run', 'summary', 'unchanged', 'updated'];
+const CONFLICT_KEYS = PLAN_KEYS.concat(['code', 'details', 'error']).sort();
+const TYPE_KEYS = ['models', 'pipelines', 'runtimes'];
+const PER_TYPE_KEYS = ['blocked', 'new', 'total', 'unchanged', 'update'];
+
+function sortedKeys(obj) { return Object.keys(obj || {}).sort(); }
+
+// wireAudit returns one description per violated wire rule over every captured
+// import response. An empty result means every shipped plan used the ratified
+// shape.
+function wireAudit(bodies) {
+  const problems = [];
+  bodies.forEach(function (rec) {
+    const label = '#' + rec.seq + '(' + rec.status + ')';
+    if (/"existing"\s*:|"skipped"\s*:/.test(JSON.stringify(rec.body))) {
+      problems.push(label + ' retired existing/skipped key');
+    }
+    // Only plans carry dry_run; file-level 400/413 and injected faults are
+    // checked for retired vocabulary above and are not plan-shaped bodies.
+    if (typeof rec.body.dry_run !== 'boolean') return;
+    const top = sortedKeys(rec.body);
+    if (top.some(k => TYPE_KEYS.includes(k))) problems.push(label + ' flat top-level mirror');
+    const wantTop = rec.status === 409 ? CONFLICT_KEYS : PLAN_KEYS;
+    if (top.join(',') !== wantTop.join(',')) problems.push(label + ' top keys=' + top.join(','));
+    ['created', 'updated', 'unchanged'].forEach(function (k) {
+      const c = sortedKeys(rec.body[k]);
+      if (c.join(',') !== TYPE_KEYS.join(',')) problems.push(label + ' ' + k + ' keys=' + c.join(','));
+    });
+    if (sortedKeys(rec.body.summary).join(',') !== TYPE_KEYS.join(',')) {
+      problems.push(label + ' summary keys=' + sortedKeys(rec.body.summary).join(','));
+      return;
+    }
+    TYPE_KEYS.forEach(function (ty) {
+      const s = rec.body.summary[ty];
+      if (sortedKeys(s).join(',') !== PER_TYPE_KEYS.join(',')) {
+        problems.push(label + ' summary.' + ty + ' keys=' + sortedKeys(s).join(','));
+        return;
+      }
+      // The summary is authoritative, so its statuses must add up to the type
+      // total and must agree with the result objects for the same plan.
+      if (s.new + s.update + s.unchanged + s.blocked !== s.total) problems.push(label + ' summary.' + ty + ' does not add up');
+      if (s.new !== rec.body.created[ty] || s.update !== rec.body.updated[ty] || s.unchanged !== rec.body.unchanged[ty]) {
+        problems.push(label + ' summary.' + ty + ' disagrees with created/updated/unchanged');
+      }
+    });
+  });
+  return problems;
+}
+
 // OWNER-EXPORT-01 testability: the native save dialog is outside the page, so
 // headless acceptance controls the capability instead of driving the dialog.
 // mode: absent | ok | abort | fail | create_fail | write_fail | close_fail
@@ -135,6 +189,15 @@ async function main() {
     if (req.url().indexOf('/api/v1/export') !== -1) {
       exportRequests.push({ url: req.url(), method: req.method(), headers: req.headers(), body: req.postData() });
     }
+  });
+  // Every import response the UI actually receives is captured so the wire
+  // audit below can check the shipped JSON, not just the rendered wording.
+  const importBodies = [];
+  page.on('response', async (res) => {
+    if (res.url().indexOf('/api/v1/import') === -1) return;
+    let body = null;
+    try { body = await res.json(); } catch { return; }
+    importBodies.push({ seq: importBodies.length + 1, status: res.status(), body });
   });
 
   try {
@@ -421,8 +484,9 @@ async function main() {
       return el && el.style.display !== 'none' && el.innerHTML.includes('portable-result-success');
     }, { timeout: 10000 });
     const resultText = await page.locator('#portable-import-result').textContent();
-    suite.log('6.2 Plan states file validity and the per-type breakdown', resultText.includes('Конфигурация корректна') && resultText.includes('новые 1') && resultText.includes('уже существуют 0'), `got="${resultText.trim()}"`);
-    suite.log('6.2b Plan states what will be imported', resultText.includes('Будет импортировано: 2'), `got="${resultText.trim()}"`);
+    suite.log('6.2 Plan states file validity and the per-type breakdown', resultText.includes('Конфигурация корректна') && (resultText.match(/новые 1/g) || []).length === 2 && resultText.includes('будут восстановлены 0') && resultText.includes('без изменений 0'), `got="${resultText.trim()}"`);
+    suite.log('6.2b An all-new plan shows the import total and no restore total', resultText.includes('Будет импортировано: 2') && !resultText.includes('Будут восстановлены:'), `got="${resultText.trim()}"`);
+    suite.log('6.2c Nothing in an all-new plan is called existing or skipped', !resultText.includes('уже существуют') && !resultText.includes('пропущено'), `got="${resultText.trim()}"`);
     suite.log('6.3 Import button enabled after dry-run', !(await page.locator('#portable-import-btn').isDisabled()));
 
     // Click Import → confirmation dialog appears
@@ -437,7 +501,7 @@ async function main() {
       return el && el.innerHTML.includes('Импорт завершён');
     }, { timeout: 10000 });
     const importText = await page.locator('#portable-import-result').textContent();
-    suite.log('6.5 Import result separates created from skipped', importText.includes('добавлено 2') && importText.includes('пропущено 0'), `got="${importText.trim()}"`);
+    suite.log('6.5 Result separates added from restored and up-to-date', importText.includes('добавлено 2') && importText.includes('восстановлено 0') && importText.includes('без изменений 0'), `got="${importText.trim()}"`);
 
     // Verify entities exist via API
     const modelsRes = await H.pageApi(page, 'GET', '/api/v1/models');
@@ -452,17 +516,56 @@ async function main() {
     const newInsts = (Array.isArray(instRes.data) ? instRes.data : []).filter(i => i.model_id === 'model-portable');
     suite.log('6.8 No instances started by import', newInsts.length === 0, `count=${newInsts.length}`);
 
-    // ═══ SECTION 7: Re-importing the same entities — SKIP EXISTING ═══
-    // Same IDs, different field values: an ID match is the identity evidence, so
-    // every entry is EXISTING and the repository must keep its own bytes.
+    // ═══ SECTION 7: Same IDs, different values → a pending restore (UPDATE) ═══
+    // ADR 018 Slice 2′: an ID match is the identity evidence, so every entry is
+    // UPDATE. The plan must say it in the future tense, offer Import, prove the
+    // dry run wrote nothing, and the applied import must really move the
+    // repository to the state the file describes.
     const bundle2 = makeBundle({
       runtimes: [{ id: 'rt-portable', name: 'Hijacked Name', executable: 'hijacked.exe', working_directory: '/tmp/hijack', environment_keys: [] }],
       models: [{ id: 'model-portable', name: 'Hijacked Model', runtime_id: 'rt-portable', args: ['--stolen'], active: true, environment_keys: [] }],
       pipelines: [],
     });
-    const bundle2Path = path.join(ws.dir, 'import-existing.json');
+    const bundle2Path = path.join(ws.dir, 'import-restore.json');
     fs.writeFileSync(bundle2Path, JSON.stringify(bundle2));
 
+    const rtBefore7 = (await list(page, '/api/v1/runtimes')).find(r => r.id === 'rt-portable');
+    const mBefore7 = (await list(page, '/api/v1/models')).find(m => m.id === 'model-portable');
+    await page.setInputFiles('#portable-import-file', bundle2Path);
+    await page.waitForFunction(() => !document.querySelector('#portable-validate-btn').disabled, { timeout: 5000 });
+    await page.click('#portable-validate-btn');
+    await page.waitForFunction(() => {
+      const el = document.querySelector('#portable-import-result');
+      return el && el.style.display !== 'none' && el.innerHTML.includes('portable-result-success');
+    }, { timeout: 10000 });
+    const restoreText = (await page.locator('#portable-import-result').textContent()).trim();
+    suite.log('7.1 A pending restore is a valid plan, not an error or "nothing to import"', restoreText.includes('Конфигурация корректна') && !restoreText.includes('импорт невозможен') && !restoreText.includes('Импортировать нечего'), `got="${restoreText}"`);
+    suite.log('7.2 Per-type plan lines use the future tense for a restore', (restoreText.match(/будут восстановлены 1/g) || []).length === 2 && (restoreText.match(/новые 0/g) || []).length === 2, `got="${restoreText}"`);
+    suite.log('7.3 A pending restore is never worded in the past tense', !restoreText.includes('восстановлено') && !restoreText.includes('пропущено') && !restoreText.includes('уже существуют'), `got="${restoreText}"`);
+    suite.log('7.4 Import and restore totals stay separate', restoreText.includes('Будут восстановлены: 2') && !restoreText.includes('Будет импортировано'), `got="${restoreText}"`);
+    suite.log('7.5 Import is enabled for a restore-only plan', !(await page.locator('#portable-import-btn').isDisabled()));
+    suite.log('7.6 Validation wrote nothing: runtime keeps its own bytes', rtBefore7 && rtBefore7.name === 'Portable RT' && rtBefore7.executable === 'test.exe', `got=${JSON.stringify(rtBefore7 && { n: rtBefore7.name, e: rtBefore7.executable })}`);
+    suite.log('7.7 Validation wrote nothing: model keeps its own bytes', mBefore7 && mBefore7.name === 'Portable Model' && mBefore7.active === false, `got=${JSON.stringify(mBefore7 && { n: mBefore7.name, a: mBefore7.active })}`);
+
+    await page.click('#portable-import-btn');
+    await page.waitForSelector('#confirm-modal', { state: 'visible', timeout: 5000 });
+    await page.click('#confirm-yes');
+    await page.waitForFunction(() => {
+      const el = document.querySelector('#portable-import-result');
+      return el && el.innerHTML.includes('Импорт завершён');
+    }, { timeout: 10000 });
+    const appliedText = (await page.locator('#portable-import-result').textContent()).trim();
+    suite.log('7.8 Applied result reports restores in the past tense', appliedText.includes('добавлено 0, восстановлено 2, без изменений 0'), `got="${appliedText}"`);
+    const rtAfter7 = (await list(page, '/api/v1/runtimes')).find(r => r.id === 'rt-portable');
+    suite.log('7.9 UPDATE applied the runtime projection', !!rtAfter7 && rtAfter7.name === 'Hijacked Name' && rtAfter7.executable === 'hijacked.exe' && rtAfter7.working_directory === '/tmp/hijack', `got=${JSON.stringify(rtAfter7 && { n: rtAfter7.name, e: rtAfter7.executable, w: rtAfter7.working_directory })}`);
+    const mAfter7 = (await list(page, '/api/v1/models')).find(m => m.id === 'model-portable');
+    suite.log('7.10 UPDATE applied the model projection', !!mAfter7 && mAfter7.name === 'Hijacked Model' && JSON.stringify(mAfter7.args) === JSON.stringify(['--stolen']) && mAfter7.active === true, `got=${JSON.stringify(mAfter7 && { n: mAfter7.name, a: mAfter7.args, act: mAfter7.active })}`);
+    const instAfter7 = (await list(page, '/api/v1/instances')).filter(i => i.model_id === 'model-portable');
+    suite.log('7.11 A restore that marks a model active starts no instance', instAfter7.length === 0, `count=${instAfter7.length}`);
+
+    // ═══ SECTION 7A: Re-importing the just-applied file → everything in sync ═══
+    // The same bytes now describe the repository, so every entity is UNCHANGED:
+    // the plan offers nothing, enables nothing, and must not read as a failure.
     await page.setInputFiles('#portable-import-file', bundle2Path);
     await page.waitForFunction(() => !document.querySelector('#portable-validate-btn').disabled, { timeout: 5000 });
     await page.click('#portable-validate-btn');
@@ -470,23 +573,23 @@ async function main() {
       const el = document.querySelector('#portable-import-result');
       return el && el.style.display !== 'none' && el.innerHTML.includes('portable-result-info');
     }, { timeout: 10000 });
-    const existingText = await page.locator('#portable-import-result').textContent();
-    suite.log('7.1 Same entities read as "nothing to import", not as an error', existingText.includes('Все сущности уже существуют. Импортировать нечего.'), `got="${existingText.trim()}"`);
-    suite.log('7.2 Existing entities are reported per type', (existingText.match(/уже существуют 1/g) || []).length === 2 && existingText.includes('Будет пропущено: 2'), `got="${existingText.trim()}"`);
-    suite.log('7.3 Import button stays disabled with nothing to create', await page.locator('#portable-import-btn').isDisabled());
-    suite.log('7.4 No raw reason token is the primary message', !existingText.includes('id_exists') && !existingText.includes('name_exists'), `got="${existingText.trim()}"`);
-    const rtNow = (await list(page, '/api/v1/runtimes')).find(r => r.id === 'rt-portable');
-    const mNow = (await list(page, '/api/v1/models')).find(m => m.id === 'model-portable');
-    suite.log('7.5 Repository keeps its own runtime bytes', rtNow && rtNow.name === 'Portable RT' && rtNow.executable === 'test.exe', `got=${JSON.stringify(rtNow && { n: rtNow.name, e: rtNow.executable })}`);
-    suite.log('7.6 Repository keeps its own model bytes', mNow && mNow.name === 'Portable Model' && mNow.active === false, `got=${JSON.stringify(mNow && { n: mNow.name, a: mNow.active })}`);
+    const inSyncText = (await page.locator('#portable-import-result').textContent()).trim();
+    suite.log('7A.1 Re-importing the applied file says there is nothing to import', inSyncText.includes('Импортировать нечего — репозиторий уже соответствует файлу.') && !inSyncText.includes('импорт невозможен') && !inSyncText.includes('Не удалось'), `got="${inSyncText}"`);
+    suite.log('7A.2 Up-to-date entities are counted per type', (inSyncText.match(/без изменений 1/g) || []).length === 2 && inSyncText.includes('будут восстановлены 0'), `got="${inSyncText}"`);
+    suite.log('7A.3 No total line is shown when nothing will change', !inSyncText.includes('Будет импортировано') && !inSyncText.includes('Будут восстановлены'), `got="${inSyncText}"`);
+    suite.log('7A.4 Import stays disabled with nothing to change', await page.locator('#portable-import-btn').isDisabled());
+    suite.log('7A.5 No raw status token is presented to the user', !inSyncText.includes('unchanged') && !inSyncText.includes('id_exists'), `got="${inSyncText}"`);
+    const rtStill7 = (await list(page, '/api/v1/runtimes')).find(r => r.id === 'rt-portable');
+    suite.log('7A.6 The repository keeps the restored bytes', !!rtStill7 && rtStill7.name === 'Hijacked Name' && rtStill7.executable === 'hijacked.exe', `got=${JSON.stringify(rtStill7 && { n: rtStill7.name, e: rtStill7.executable })}`);
 
     // ═══ SECTION 7B: Ambiguous runtime identity → BLOCKED plan ═══
     // Same runtime NAME owned by a different ID: the repository contract makes
     // runtime names unique, but nothing proves the two IDs are the same entity,
-    // so the entry can be neither created nor safely skipped. Its model depends
-    // on it and is blocked too — no dangling object may be created.
+    // so the entry can be neither created nor restored. Its model depends on it
+    // and is blocked too — no dangling object may be created. The name is taken
+    // by the entity the previous section just restored.
     const bundleBlocked = makeBundle({
-      runtimes: [{ id: 'rt-clone', name: 'Portable RT', executable: 'clone.exe', working_directory: '/opt/clone', environment_keys: [] }],
+      runtimes: [{ id: 'rt-clone', name: 'Hijacked Name', executable: 'clone.exe', working_directory: '/opt/clone', environment_keys: [] }],
       models: [{ id: 'model-clone', name: 'Clone Model', runtime_id: 'rt-clone', args: [], active: false, environment_keys: [] }],
       pipelines: [],
     });
@@ -501,7 +604,9 @@ async function main() {
     }, { timeout: 10000 });
     const blockedText = await page.locator('#portable-import-result').textContent();
     suite.log('7B.1 File validity and repository conflict stay separate statements', blockedText.includes('Конфигурация корректна, но импорт невозможен'), `got="${blockedText.trim()}"`);
-    suite.log('7B.1b Per-type plan line accounts for the blocked entity', blockedText.includes('Runtime: новые 0, уже существуют 0, заблокировано 1'), `got="${blockedText.trim().substring(0, 160)}"`);
+    suite.log('7B.1b Per-type plan line accounts for the blocked entity', blockedText.includes('Runtime: новые 0, будут восстановлены 0, без изменений 0, заблокировано 1'), `got="${blockedText.trim().substring(0, 200)}"`);
+    suite.log('7B.1c Every blocked type is listed with its own count', blockedText.includes('Модели: новые 0, будут восстановлены 0, без изменений 0, заблокировано 1'), `got="${blockedText.trim().substring(0, 260)}"`);
+    suite.log('7B.1d A blocked plan uses no transitional vocabulary', !blockedText.includes('уже существуют') && !blockedText.includes('пропущено'), `got="${blockedText.trim().substring(0, 260)}"`);
     suite.log('7B.2 Blocked reason is human-readable, token is secondary', blockedText.includes('имя уже занято') && blockedText.includes('runtime_name_taken_other_id'), `got="${blockedText.trim().substring(0, 160)}"`);
     suite.log('7B.3 Dependent model is blocked, not silently dropped', blockedText.includes('Clone Model') && blockedText.includes('зависит от заблокированной'), `got="${blockedText.trim().substring(0, 260)}"`);
     const tokenPlacement = await page.evaluate(() => {
@@ -519,16 +624,28 @@ async function main() {
     suite.log('7B.5 Import disabled while the plan is blocked', await page.locator('#portable-import-btn').isDisabled());
     const afterBlocked = await H.pageApi(page, 'GET', '/api/v1/runtimes');
     suite.log('7B.6 Blocked plan wrote nothing', !(Array.isArray(afterBlocked.data) ? afterBlocked.data : []).some(r => r.id === 'rt-clone'), `count=${(Array.isArray(afterBlocked.data) ? afterBlocked.data : []).length}`);
+    suite.log('7B.7 The readable reason names the current owner by ID', blockedText.includes('(ID rt-portable)'), `got="${blockedText.trim().substring(0, 300)}"`);
+    const detailsText = await page.evaluate(() => {
+      const d = document.querySelector('#portable-import-result .portable-plan-details');
+      return d ? d.textContent.replace(/\s+/g, ' ').trim() : '';
+    });
+    suite.log('7B.8 Technical details use the related vocabulary, never "existing"', detailsText.includes('(related: rt-portable)') && detailsText.includes('(related: rt-clone)') && !detailsText.includes('(existing:'), `got="${detailsText.substring(0, 300)}"`);
 
-    // ═══ SECTION 7C: Mixed plan — one NEW, one EXISTING → import enabled ═══
+    // ═══ SECTION 7C: Mixed plan — NEW + UPDATE + UNCHANGED in one file ═══
+    // All three writable statuses at once: rt-second and model-second are
+    // created, model-portable is restored, rt-portable restates the repository
+    // byte for byte and must be left alone.
     const bundleMixed = {
       format: 'goal-portable-config',
       version: 1,
       runtimes: [
-        { id: 'rt-portable', name: 'Portable RT', executable: 'test.exe', working_directory: '/opt/test', environment_keys: [] },
+        { id: 'rt-portable', name: 'Hijacked Name', executable: 'hijacked.exe', working_directory: '/tmp/hijack', environment_keys: [] },
         { id: 'rt-second', name: 'Second RT', executable: 'second.exe', working_directory: '/opt/second', environment_keys: [] },
       ],
-      models: [{ id: 'model-second', name: 'Second Model', runtime_id: 'rt-second', args: [], active: false, environment_keys: [] }],
+      models: [
+        { id: 'model-portable', name: 'Restored Model', runtime_id: 'rt-portable', args: ['--stolen'], active: true, environment_keys: [] },
+        { id: 'model-second', name: 'Second Model', runtime_id: 'rt-second', args: [], active: false, environment_keys: [] },
+      ],
       pipelines: [],
     };
     const mixedPath = path.join(ws.dir, 'import-mixed.json');
@@ -540,37 +657,71 @@ async function main() {
       const el = document.querySelector('#portable-import-result');
       return el && el.style.display !== 'none' && el.innerHTML.includes('portable-result-success');
     }, { timeout: 10000 });
-    const mixedText = await page.locator('#portable-import-result').textContent();
-    suite.log('7C.1 Mixed plan counts new and existing separately', mixedText.includes('Runtime: новые 1, уже существуют 1') && mixedText.includes('Модели: новые 1, уже существуют 0'), `got="${mixedText.trim()}"`);
-    suite.log('7C.2 Mixed plan enables Import (create new + skip existing)', !(await page.locator('#portable-import-btn').isDisabled()));
+    const mixedText = (await page.locator('#portable-import-result').textContent()).trim();
+    suite.log('7C.1 Mixed plan counts the three statuses per type separately', mixedText.includes('Runtime: новые 1, будут восстановлены 0, без изменений 1') && mixedText.includes('Модели: новые 1, будут восстановлены 1, без изменений 0'), `got="${mixedText}"`);
+    suite.log('7C.2 Mixed plan shows both totals and keeps them apart', mixedText.includes('Будет импортировано: 2 · Будут восстановлены: 1'), `got="${mixedText}"`);
+    suite.log('7C.3 Mixed plan enables Import', !(await page.locator('#portable-import-btn').isDisabled()));
     await page.click('#portable-import-btn');
     await page.waitForSelector('#confirm-modal', { state: 'visible', timeout: 5000 });
     await page.click('#confirm-yes');
     await page.waitForFunction(() => {
       const el = document.querySelector('#portable-import-result');
-      return el && el.innerHTML.includes('добавлено 2, пропущено 1');
+      return el && el.innerHTML.includes('добавлено 2, восстановлено 1, без изменений 1');
     }, { timeout: 10000 });
-    suite.log('7C.3 Result reports created and skipped counts', true);
+    suite.log('7C.4 Result reports all three outcome classes', true);
     const rtList = await H.pageApi(page, 'GET', '/api/v1/runtimes');
     const rtPort = (Array.isArray(rtList.data) ? rtList.data : []).find(r => r.id === 'rt-portable');
-    suite.log('7C.4 Skipped entity kept its original state', rtPort && rtPort.executable === 'test.exe', `exe=${rtPort ? rtPort.executable : 'N/A'}`);
+    suite.log('7C.5 The up-to-date entity kept the bytes it had', rtPort && rtPort.executable === 'hijacked.exe' && rtPort.name === 'Hijacked Name', `got=${JSON.stringify(rtPort && { n: rtPort.name, e: rtPort.executable })}`);
+    const mList = await H.pageApi(page, 'GET', '/api/v1/models');
+    const mPort = (Array.isArray(mList.data) ? mList.data : []).find(m => m.id === 'model-portable');
+    suite.log('7C.6 The restore-only field change was applied inside a mixed plan', mPort && mPort.name === 'Restored Model' && JSON.stringify(mPort.args) === JSON.stringify(['--stolen']) && mPort.active === true, `got=${JSON.stringify(mPort && { n: mPort.name, a: mPort.args })}`);
+    const rtSecond = (Array.isArray(rtList.data) ? rtList.data : []).find(r => r.id === 'rt-second');
+    suite.log('7C.7 The new entity was created beside them', !!rtSecond && rtSecond.executable === 'second.exe');
 
     // ═══ SECTION 7D: The same plan contract in EN ═══
     // The plan wording is user-facing in BOTH locales: an EN string that lost a
     // parameter or drifted back to a raw token must fail here, not silently.
     await page.evaluate(() => window.setLanguage('en'));
     await page.waitForTimeout(500);
-    await page.setInputFiles('#portable-import-file', bundle2Path);
+    await page.setInputFiles('#portable-import-file', mixedPath);
     await page.waitForFunction(() => !document.querySelector('#portable-validate-btn').disabled, { timeout: 5000 });
     await page.click('#portable-validate-btn');
     await page.waitForFunction(() => {
       const el = document.querySelector('#portable-import-result');
       return el && el.style.display !== 'none' && el.innerHTML.includes('portable-result-info');
     }, { timeout: 10000 });
-    const enExisting = (await page.locator('#portable-import-result').textContent()).trim();
-    suite.log('7D.1 EN nothing-to-import wording', enExisting.includes('All entities already exist. Nothing to import.'), `got="${enExisting.substring(0, 160)}"`);
-    suite.log('7D.2 EN plan is per type with totals', (enExisting.match(/1 already exist/g) || []).length === 2 && enExisting.includes('Will be skipped: 2') && !enExisting.includes('Will be imported'), `got="${enExisting.substring(0, 200)}"`);
-    suite.log('7D.3 EN keeps Import disabled with nothing to create', await page.locator('#portable-import-btn').isDisabled());
+    const enSyncText = (await page.locator('#portable-import-result').textContent()).trim();
+    suite.log('7D.1 EN nothing-to-import wording', enSyncText.includes('Nothing to import — the repository already matches the file.'), `got="${enSyncText.substring(0, 200)}"`);
+    suite.log('7D.2 EN plan is per type with the up-to-date counts', enSyncText.includes('Runtimes: 0 new, 0 to restore, 2 up to date') && enSyncText.includes('Models: 0 new, 0 to restore, 2 up to date'), `got="${enSyncText.substring(0, 260)}"`);
+    suite.log('7D.3 EN shows no totals when nothing will change', !enSyncText.includes('Will be imported') && !enSyncText.includes('Will restore'), `got="${enSyncText.substring(0, 260)}"`);
+    suite.log('7D.4 EN keeps Import disabled with nothing to change', await page.locator('#portable-import-btn').isDisabled());
+    suite.log('7D.5 EN never drifts back to the transitional vocabulary', !enSyncText.includes('already exist') && !enSyncText.includes('skipped'), `got="${enSyncText.substring(0, 260)}"`);
+
+    // The same restore contract in EN: a pending UPDATE reads in the infinitive,
+    // never in the past tense, and Import is offered for it.
+    const bundleEnRestore = {
+      format: 'goal-portable-config',
+      version: 1,
+      runtimes: [
+        { id: 'rt-second', name: 'Second RT Renamed', executable: 'second.exe', working_directory: '/opt/second', environment_keys: [] },
+        { id: 'rt-portable', name: 'Hijacked Name', executable: 'hijacked.exe', working_directory: '/tmp/hijack', environment_keys: [] },
+      ],
+      models: [{ id: 'model-second', name: 'Second Model', runtime_id: 'rt-second', args: [], active: false, environment_keys: [] }],
+      pipelines: [],
+    };
+    const enRestorePath = path.join(ws.dir, 'import-en-restore.json');
+    fs.writeFileSync(enRestorePath, JSON.stringify(bundleEnRestore));
+    await page.setInputFiles('#portable-import-file', enRestorePath);
+    await page.waitForFunction(() => !document.querySelector('#portable-validate-btn').disabled, { timeout: 5000 });
+    await page.click('#portable-validate-btn');
+    await page.waitForFunction(() => {
+      const el = document.querySelector('#portable-import-result');
+      return el && el.style.display !== 'none' && el.innerHTML.includes('portable-result-success');
+    }, { timeout: 10000 });
+    const enPlan = (await page.locator('#portable-import-result').textContent()).trim();
+    suite.log('7D.6 EN pending restore uses the ratified vocabulary', enPlan.includes('Configuration is valid') && enPlan.includes('Runtimes: 0 new, 1 to restore, 1 up to date') && enPlan.includes('Models: 0 new, 0 to restore, 1 up to date'), `got="${enPlan.substring(0, 300)}"`);
+    suite.log('7D.7 EN restore total, never the past tense, never retired words', enPlan.includes('Will restore: 1') && !enPlan.includes('Will be imported') && !enPlan.includes('restored') && !enPlan.includes('skipped'), `got="${enPlan.substring(0, 300)}"`);
+    suite.log('7D.8 EN enables Import for a restore-only plan', !(await page.locator('#portable-import-btn').isDisabled()));
 
     await page.setInputFiles('#portable-import-file', blockedPath);
     await page.waitForFunction(() => !document.querySelector('#portable-validate-btn').disabled, { timeout: 5000 });
@@ -586,8 +737,16 @@ async function main() {
       clone.querySelectorAll('details').forEach(d => d.remove());
       return clone.textContent.replace(/\s+/g, ' ').trim();
     });
-    suite.log('7D.4 EN blocked headline is validity + impossibility', enBlocked.includes('Configuration is valid, but the import cannot proceed'), `got="${enBlocked.substring(0, 160)}"`);
-    suite.log('7D.5 EN blocked reason is readable, not a raw token', enBlockedPlain.includes('the name is already taken by another Runtime') && enBlockedPlain.includes('depends on the blocked entity') && !enBlockedPlain.includes('runtime_name_taken_other_id') && !enBlockedPlain.includes('dependency_blocked'), `got="${enBlockedPlain.substring(0, 260)}"`);
+    suite.log('7D.9 EN blocked headline is validity + impossibility', enBlocked.includes('Configuration is valid, but the import cannot proceed'), `got="${enBlocked.substring(0, 160)}"`);
+    suite.log('7D.10 EN blocked reason is readable, not a raw token', enBlockedPlain.includes('the name is already taken by another Runtime') && enBlockedPlain.includes('depends on the blocked entity') && !enBlockedPlain.includes('runtime_name_taken_other_id') && !enBlockedPlain.includes('dependency_blocked'), `got="${enBlockedPlain.substring(0, 260)}"`);
+    suite.log('7D.10b EN blocked plan uses no transitional vocabulary and the related wording', !enBlockedPlain.includes('already exist') && !enBlockedPlain.includes('skipped') && !enBlockedPlain.includes('(existing:') && enBlocked.includes('(related: rt-portable)'), `got="${enBlockedPlain.substring(0, 300)}"`);
+
+    // The wire itself, not only its rendering: every plan this suite received
+    // must carry the ratified keys and nothing else.
+    await page.waitForTimeout(300);
+    const wireProblems = wireAudit(importBodies);
+    suite.log('7D.11 Every captured import body uses the Slice 2′ wire', importBodies.length >= 8 && wireProblems.length === 0, `plans=${importBodies.length}; problems=${JSON.stringify(wireProblems.slice(0, 4))}`);
+
     await page.evaluate(() => window.setLanguage('ru'));
     await page.waitForTimeout(500);
 
@@ -775,6 +934,8 @@ async function main() {
     const unexpectedErrors = suite.consoleErrors.filter(e => !e.includes('409') && !e.includes('400') && !e.includes('403'));
     suite.log('17.1 No unexpected console errors', unexpectedErrors.length === 0, unexpectedErrors.slice(0, 3).join('; ') || 'clean');
     suite.log('17.2 No 5xx responses', suite.serverErrors.length === 0, suite.serverErrors.length ? JSON.stringify(suite.serverErrors[0]) : 'clean');
+    const lateWire = wireAudit(importBodies);
+    suite.log('17.3 No import response anywhere in the run carries retired vocabulary', lateWire.length === 0, JSON.stringify(lateWire.slice(0, 4)));
 
   } catch (e) {
     suite.log('FATAL', false, e.message);

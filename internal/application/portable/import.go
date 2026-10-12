@@ -9,8 +9,9 @@ import (
 )
 
 // ErrConflict is returned when one or more blocking conflicts are detected.
-// Result carries the plan that produced them so callers can report created and
-// skipped counts alongside the blocking outcome.
+// Result carries the plan that produced them, so callers can report the same
+// created/updated/unchanged counts a validation would show alongside the
+// blocking outcome. Nothing was written.
 type ErrConflict struct {
 	Conflicts []Conflict
 	Result    *ImportResult
@@ -31,14 +32,16 @@ func (e *ErrPersistence) Error() string {
 
 // ImportResult is the outcome of an import plan, for a dry run or a real import.
 //
-// For a dry run Created/Skipped describe what the import would do; for a real
-// import they describe what it actually did. Skipped counts are existing
-// entities left untouched, never imported ones.
+// For a dry run Created/Updated/Unchanged describe what the import would do; for
+// a real import they describe what it actually did. Unchanged counts entities
+// whose stored configuration already equals the exported one, so nothing was
+// written for them (ADR 018 D4/D16).
 type ImportResult struct {
 	DryRun    bool
 	CanImport bool
 	Created   storage.ImportCounts
-	Skipped   storage.ImportCounts
+	Updated   storage.ImportCounts
+	Unchanged storage.ImportCounts
 	Total     storage.ImportCounts
 	Blocked   []Conflict
 }
@@ -53,7 +56,9 @@ func NewImportOrchestrator(repo storage.Repository) *ImportOrchestrator {
 }
 
 // Import plans a bundle against current repository state and, unless dryRun is
-// set, applies it with the SKIP EXISTING policy.
+// set, applies it: new entities are created and same-ID entities whose restorable
+// content differs are restored onto that identity (ADR 018 D3/D4). Any blocking
+// conflict aborts the whole write.
 //
 // A dry run is advisory: it plans against a snapshot taken without the write
 // lock. A real import always rebuilds the plan under that lock inside
@@ -122,9 +127,10 @@ func planToResult(plan *storage.ImportGraphPlan, dryRun bool) *ImportResult {
 	res := &ImportResult{
 		DryRun:    dryRun,
 		Created:   plan.Created,
-		Skipped:   plan.Skipped,
+		Updated:   plan.Updated,
+		Unchanged: plan.Unchanged,
 		Total:     plan.Total,
-		CanImport: !plan.HasBlocked() && plan.WillCreate(),
+		CanImport: plan.WillMutate() && !plan.HasBlocked(),
 	}
 	for _, c := range plan.Blocked {
 		res.Blocked = append(res.Blocked, Conflict{

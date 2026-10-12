@@ -97,8 +97,10 @@ func (e *ErrValidation) Error() string {
 }
 
 // Conflict describes one blocking collision between an imported entity and
-// existing repository state. An entity that merely shares an ID with an
-// existing entity is not a conflict: it is skipped.
+// existing repository state. An entity that merely shares an ID with an existing
+// entity is not a conflict: same ID with different restorable content is restored
+// onto that identity, and same ID with equivalent content is left alone
+// (ADR 018 D3/D4).
 type Conflict struct {
 	Type   string `json:"type"`
 	ID     string `json:"id"`
