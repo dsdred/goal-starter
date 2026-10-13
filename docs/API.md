@@ -476,7 +476,9 @@ Response `200` — the import plan. `dry_run=true` and a real import return the 
 ```
 
 - On a `200` real import, `created`, `updated` and `unchanged` are what actually happened. On a dry-run they are the plan's expected counts. On a `409` nothing was written, so any counts in that body are plan-only.
-- `summary` is the authoritative per-type breakdown: `{total, new, update, unchanged, blocked}` for each entity type, and the four statuses always add up to `total`. The body carries no other counts — the legacy flat top-level `runtimes` / `models` / `pipelines` mirrors and the Slice 1 `existing` / `skipped` vocabulary are retired, with no compatibility shim.
+- `summary` is the authoritative per-type breakdown and the only place per-type counts live: `{total, new, update, unchanged, blocked}` for each entity type. The legacy flat top-level `runtimes` / `models` / `pipelines` mirrors and the Slice 1 `existing` / `skipped` vocabulary are retired, with no compatibility shim. `total` counts the entities the bundle carries for that type.
+- For an ordinary bundle plan the four statuses partition that type's `total`: `new + update + unchanged + blocked == total`.
+- One exception: the pre-write runtime-name invariant (defense-in-depth) can report **repository-held runtimes that the bundle does not carry** as additional blocked entries, with `can_import: false` and zero writes. They appear in `blocked[]` and are counted in `summary.runtimes.blocked` without adding to `total`, so on that body `blocked` can exceed the bundle's count and the partition does not hold. No other path manufactures blocked entries — the planner stays the only classification mechanism.
 - `created` and `updated` both zero with `blocked` empty means the repository already matches the file: there is nothing to import and `can_import` is `false`.
 - `blocked[]` lists each blocked entity as `{type, id, name, reason, related_id}`. `related_id` names the counterpart claimant and never depends on bundle order: for a contested name larger than two it is the lexicographically smallest **other** claimant ID.
 
