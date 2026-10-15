@@ -145,7 +145,7 @@ $env:GOOS='linux'; $env:GOARCH='amd64'; go build -o bin/goal-linux-amd64 ./cmd/g
 | `testdata/fake-runtime/` | Fake runtime for integration tests |
 | `deploy/` | Systemd unit file (the Windows service is registered in-binary via `goal --service`, ADR 011) |
 | `scripts/` | Build and bootstrap scripts |
-| `docs/acceptance/` | Manual Owner acceptance checklists and evidence records, each bound to the repository bytes it observed: real-SCM Windows Service acceptance ([ADR011-WINDOWS-SERVICE-MANUAL-ACCEPTANCE.md](acceptance/ADR011-WINDOWS-SERVICE-MANUAL-ACCEPTANCE.md)), the externally verified runtime interoperability register ([RUNTIME-INTEROPERABILITY-EVIDENCE.md](acceptance/RUNTIME-INTEROPERABILITY-EVIDENCE.md)), and the ADR 019 native HTTPS browser-acceptance record ([ADR019-HTTPS-BROWSER-ACCEPTANCE.md](acceptance/ADR019-HTTPS-BROWSER-ACCEPTANCE.md)) |
+| `docs/acceptance/` | Manual Owner acceptance checklists and evidence records, each bound to the repository bytes it observed: real-SCM Windows Service acceptance ([ADR011-WINDOWS-SERVICE-MANUAL-ACCEPTANCE.md](acceptance/ADR011-WINDOWS-SERVICE-MANUAL-ACCEPTANCE.md)), the externally verified runtime interoperability register ([RUNTIME-INTEROPERABILITY-EVIDENCE.md](acceptance/RUNTIME-INTEROPERABILITY-EVIDENCE.md)), and the ADR 019 native HTTPS browser-acceptance record ([ADR019-HTTPS-BROWSER-ACCEPTANCE.md](acceptance/ADR019-HTTPS-BROWSER-ACCEPTANCE.md)), and the ADR 018 portable import / restore browser-acceptance record ([ADR018-PORTABLE-IMPORT-BROWSER-ACCEPTANCE.md](acceptance/ADR018-PORTABLE-IMPORT-BROWSER-ACCEPTANCE.md)) |
 
 ## Code conventions
 

@@ -1,0 +1,193 @@
+# ADR 018 — Portable Configuration Restore Semantics: Manual Browser Acceptance Record
+
+**Purpose:** record what the OWNER-IMPORT-01 manual acceptance gates proved about ADR 018's restore semantics, in which evidence class each statement sits, what those gates did **not** prove, and which decisions are still the Owner's alone. This is the ADR 018 counterpart of [`ADR019-HTTPS-BROWSER-ACCEPTANCE.md`](ADR019-HTTPS-BROWSER-ACCEPTANCE.md), whose section C records the export half (`OWNER-EXPORT-01`) of the same product surface.
+
+**Source of truth:** repository bytes at HEAD `10de2d5b6e914288a6d39b04dd12aed5b47e3a87` (`docs: reconcile ADR 018 Slice 5 publication tracking`) — `HEAD == origin/main`, worktree/index/stash clean, divergence `0/0`, verified at every gate of this program. Design contract: [ADR 018 — Portable configuration restore semantics](../adr/018-portable-configuration-restore-semantics.md). Behavior as shipped: Slice 1 `85c7e9ca699f61668f5f441926ed09cda37bd1bd`, Slice 2′ `eec300796436f118622e4e07493186cb227fe25b`, Slice 5 `d64cbe9e778adf50c51c70b3259dadaf23e48004`. **No acceptance artifact lives in this repository:** every bundle, store snapshot, checker output and report was written outside the tree under `E:\accept\adr018\` and is registered by SHA-256 below, so the bytes can be re-verified independently of this prose.
+
+**Date of this record:** 2026-10-15. The runs it records were performed 2026-10-14 and 2026-10-15 (+05:00).
+
+---
+
+## The four results, kept separate
+
+| # | Result | Verdict | What it means |
+|---|--------|---------|---------------|
+| **A** | Implementation and publication of the behavior under test | **PUBLISHED** — with a provenance caveat that is not green | ADR 018's three slices are at `origin/main`. One of the three carriers never reached a green exact-SHA CI run, and a second was recovered only by an authorized same-SHA rerun; both facts are recorded, not smoothed over. |
+| **B** | Functional manual browser acceptance of the restore semantics | **PASS — 25 of 25 criteria Owner-confirmed** (2026-10-14/15) | The Owner performed the export, the dry-runs, the imports, the confirmation dialog, the cancel, the native browser Save As and the UI deletion in the Web UI at `http://127.0.0.1:8088/ru`, and stated each UI observation; the agent measured the resulting bytes. |
+| **C** | Formal closure of **OWNER-IMPORT-01** as a tracking task | **NOT PERFORMED — task stays OPEN** | Closure is an Owner decision, not an outcome of evidence. The 2026-10-15 gate that commissioned this record states it explicitly: «Не закрывать OWNER-IMPORT-01 до отдельного решения Owner». |
+| **D** | ADR 018 lifecycle label | **stays Proposed** | `Proposed → Accepted` is an Owner decision. Nothing in B moves it. |
+
+**B is not C.** Twenty-five confirmed UI criteria are acceptance *evidence*; they are not the Owner's decision to close the finding, and this record does not make that decision on the Owner's behalf. **A is not B either:** publication proves the shipped bytes, never that a person saw the behavior.
+
+---
+
+## A — What the run was performed against
+
+| Slice | Commit | Content | Exact-SHA CI |
+|---|---|---|---|
+| 1 | `85c7e9c` | planner classifications + projections + `pipeline_entries_empty` | run `37185521486`, attempt 1, 7/7 PASS |
+| contract | `bc6d117`, `acc55f0` | Owner adjudications D-7…D-9 and D-10…D-17 (ADR-only) | `acc55f0`: run FAILED attempt 1 → one authorized same-SHA rerun → attempt 2 7/7 |
+| 2′ | `eec3007` | restore planner/apply → result → HTTP body → Web UI → RU/EN i18n → browser corpus → `docs/API.md` (16 paths, 2416+/592−) | run `38303986246` **FAILED at attempt 1** on Vulnerability Check, **never rerun** — this SHA is permanently not full-CI-green |
+| toolchain | `4b62f02` | `.go-version` / `go.mod` pin to go1.26.9; the advisories that red `eec3007`'s Vulnerability Check are fixed in that toolchain | run `38310903770` green **only at attempt 2** after exactly one Owner-authorized same-SHA failed-job rerun |
+| 5 | `d64cbe9` | documentation reconciliation (11 `.md`, 58+/47−) | run `38385691793` **FAILED attempt 1** on Test (Windows) (6 of 7, an unrelated `runtime.semawakeup` fatal) → one authorized same-SHA rerun → attempt 2 7/7 |
+| tracking | `10de2d5` | post-publication tracking-truth pass — the baseline of this acceptance program | first-attempt green 7/7 |
+
+Consequence for reading this record: the Go bytes the Owner exercised are `eec3007`'s, carried by `4b62f02` (which is green at attempt 2) and reconciled by `d64cbe9`/`10de2d5`. **No commit in this chain except Slice 1 and `10de2d5` was green on its first CI attempt.**
+
+**Binary under test** (agent-verified): `E:\accept\adr018\goal.exe`, 15 661 568 B, SHA-256 `a7abf1a767440aeef7a9492d54b71499ea5737c241f2efa9e3d902f313246876`, built from the clean baseline working tree outside the repository with `GOTOOLCHAIN=go1.26.9 go build -o E:/accept/adr018/goal.exe ./cmd/goal`. `go version -m` reports `go1.26.9`, `vcs=git`, `vcs.revision=10de2d5b6e914288a6d39b04dd12aed5b47e3a87`, `vcs.time=2026-10-13T17:22:42Z`, `vcs.modified=false`, `GOOS=windows GOARCH=amd64 CGO_ENABLED=0`. `goal.exe -version` prints `GoAl dev (commit: none, time: unknown)` — the commit/time literals are injected only by the release workflow's ldflags, so the embedded VCS stamp is the authoritative provenance for this artifact. Helper: `E:\accept\adr018\fake-runtime.exe`, 3 008 512 B, `5b80d7613f963b82a8b42b17149627aaf4ba4331ce1734ec773a3d61ef281810` (single-file build of `testdata/fake-runtime/fake.go`; `testdata/` is excluded from package patterns, so no VCS stamp is emitted).
+
+## Acceptance environment
+
+- One instance, `E:\accept\adr018\inst1`, config `inst1/goal.json` (223 B, `663ad9818625ba9ec762e826f170db5eccbd69815352e1ccc28df91499741208`): `listenAddress 127.0.0.1`, `webPort 8088`, `authEnabled false`, `dataDir E:/accept/adr018/inst1/data`, and `"runtimes": []` / `"models": []` so that `SeedFromConfig` seeds nothing and the store starts genuinely empty.
+- **No `tls` block** ⇒ `cfg.TLS == nil` ⇒ the HTTPS listener is never started; the server log carries exactly one listener line. The origin exercised is therefore plain HTTP on loopback.
+- `authEnabled false` is acceptable **only** because the listener is loopback-only; that was re-checked in the environment gate against `netstat` (`127.0.0.1:8088`, PID 57608). It is not a statement that unauthenticated LAN operation is safe — AGENTS.md forbids that, and ADR 019's secure-origin work governs the non-loopback case.
+- Nothing was reused: the store's first-write snapshot (`evidence/goal_repo_empty.json`, 105 B) is preserved, no `*.bak` pre-existed, and the whole environment lives outside the repository tree.
+- Toolchain deviation, recorded rather than hidden: the workstation default is `go1.26.5`; every binary in this program was built with `GOTOOLCHAIN=go1.26.9` so the embedded toolchain equals the CI pin.
+
+## Evidence classes, kept separate
+
+Six classes are used throughout and are not interchangeable:
+
+- **Owner-confirmed** — a statement by the Owner about what they saw in the UI, or an artifact created in the Owner's browser session.
+- **Owner-mapped** — the narrower sub-case where the Owner explicitly bound a specific artifact (here: a screenshot) to a specific criterion.
+- **agent-verified** — a measurement of files, HTTP responses, processes or pixels made by the agent. **Not** a UI confirmation.
+- **agent-correlated** — an artifact the agent bound to a criterion by matching its on-screen literals against measured evidence-file mtimes, **without** an Owner statement mapping it. A sub-class of agent-verified: it **never** raises an Owner-confirmed or Owner-mapped criterion, and a picture the agent correlated is not a statement the Owner made.
+- **code-derived** — an expectation read out of the maintained bytes before the observation.
+- **Indirect** (косвенное) — an inference from another confirmation, e.g. "the model edit form was opened, therefore the model was in the list". **An indirect inference never raises a criterion.** This rule is what kept N-10, N-13 and N-14 open through gates 12 and 13 until the Owner supplied direct observations.
+- **NOT EXECUTED** — a leg that was not performed; absence of a claim, not a negative result.
+
+## The scenario legs
+
+Each leg below was prepared read-only by the agent (checklist + expected plan derived from the bytes), **executed by the Owner in the Web UI**, then verified read-only against the store, `.bak`, the audit ledger, `GET /api/v1/export`, `GET /api/v1/instances` and `tasklist`.
+
+| Leg | Fixture | Plan the Owner saw | Durable effect | Report |
+|---|---|---|---|---|
+| M-00 | empty instance | — | zero writes (store hash identical before/after) | `M-00_M-01_execution_report.md`, `m00_m01_checks.txt` |
+| M-01 | Owner builds 1 Runtime / 4 Models / 1 Pipeline with 3 entries, then native **Save As** → `B1.json` | — | one file chosen by the Owner | `m01_export_verification_report.md` (23 PASS lines), `m01_hashes.txt` |
+| O-1 → B2 | Owner adds `GOAL_TEST_SECRET` to `M-Env` and re-exports → `B2.json` | — | one export, no store write | `m01_b2_verification_report.md`, `m01_b2_verify_output.txt` |
+| M-02a | Owner edits two models in the UI, then imports `B2.json` over them | UPDATE — same ID, different content | **one** durable write; both models carry the identical restored `updated_at` | `m02a_post_import_report.md` (18 PASS + 1 literal FAIL, see DEV-2) |
+| M-02b | Owner deletes `PL-Three`, then imports `B2.json` | NEW — `created=1 updated=0 unchanged=5` | one durable write; original entity ID restored | `m02b_post_import_report.md` (17 PASS) |
+| UNCHANGED-only | Owner imports `B2.json` with nothing to do | all UNCHANGED, «Импортировать нечего» | **zero** writes — `.bak` provably did not advance | `unchanged_post_report.md` (9 PASS, three exact-nanosecond mtime comparisons) |
+| BLOCKED | Owner dry-runs `B3-blocked.json` (runtime name collision) | NEW 1 / UPDATE 0 / UNCHANGED 0 / BLOCKED 1, reason `runtime_name_taken_other_id`, blocked `ent_1791990000000000000_90`, related `ent_1791923641076430300_1` | zero writes; Import button stayed disabled | `blocked_preparation_report.md`, `blocked_post_report.md` (14 PASS) |
+| D-7 | Owner dry-runs and imports `B4-d7-newmodel.json` (NEW model carrying advisory env keys `D7_ADVISORY_ALPHA/BETA/GAMMA`) | «Будет импортировано: 1», Runtime UNCHANGED 1 | two durable writes across the leg (import, then the Owner's UI delete) | `d7_preparation_report.md` (17 PASS), `d7_post_import_report.md` (14 PASS), `d7_cleanup_report.md` (17 PASS) |
+| Final UI gates | cancelled confirmation dialog; second `B4` import; native **Save As**; UI delete of `M-D7Env` | K-1…K-10 and N-1…N-15 | the cancelled confirm left **zero** durable traces (16/16 immutability checks) | `g13_*`, `g14_*`, matrices v1 → v3 |
+
+## The final UI acceptance matrix — 25 criteria, all CONFIRMED
+
+The authoritative per-criterion register with its evidence IDs is `E:\accept\adr018\evidence\owner_import01_final_ui_matrix_v3.md` (11 847 B, SHA-256 `183e50ca68b47d9656ada4e1f96bad688340122fa447517b2e36db08286472a6`); matrices v1 and v2 remain dated records and were not rewritten (their bytes are proven unchanged by `g14_cleanup_checks.txt`, line CL-24). Verdict: **25 CONFIRMED / 0 PARTIAL / 0 PENDING / 0 NOT APPLICABLE**.
+
+D-7 leg (what ADR 018 D7 and the restore vocabulary had to show in the UI):
+
+| ID | Criterion | Verdict |
+|---|---|---|
+| N-1 | Header «Конфигурация корректна» | CONFIRMED |
+| N-2 | Runtime: 0 new, 0 restored, 1 unchanged | CONFIRMED |
+| N-3 | Models: 1 new, 0 restored, 1 unchanged | CONFIRMED |
+| N-4 | No «Пайплайны» line at all | CONFIRMED |
+| N-5 | «Будет импортировано: 1», no «Будут восстановлены» line | CONFIRMED |
+| N-6 | No blocked list and no «Технические детали» block | CONFIRMED |
+| N-7 | Import button active | CONFIRMED |
+| N-8 | Confirmation dialog states that environment values were not exported and will not be restored, and that AutoStart applies at the next server start | CONFIRMED |
+| N-9 | «Импорт завершён: добавлено 1, восстановлено 0, без изменений 2.» | CONFIRMED |
+| N-10 | The model list shows `M-D7Env` (4 → 5) with the other entities still present | CONFIRMED (was PARTIAL) |
+| N-11 | `M-D7Env` edit form: the «Переменные окружения» block is empty | CONFIRMED |
+| N-12 | `M-Env` edit form: exactly one key row, `GOAL_TEST_SECRET`, values write-only | CONFIRMED |
+| N-13 | No `fake-runtime.exe` process; the instances list is empty in the UI | CONFIRMED (was PARTIAL) |
+| N-14 | Post-import export obtained by the **browser Save As** equals `d7_expected_export.json` (1 979 B, `753afa24…`) | CONFIRMED (was PENDING) |
+| N-15 | `B1`/`B2`/`B3`/`B4` were never edited | CONFIRMED |
+
+BLOCKED leg:
+
+| ID | Criterion | Verdict |
+|---|---|---|
+| K-1 | Header «Конфигурация корректна, но импорт невозможен» | CONFIRMED |
+| K-2 | Counts NEW 1 / UPDATE 0 / UNCHANGED 0 / BLOCKED 1 | CONFIRMED |
+| K-3 | Reason plus blocked ID plus related ID | CONFIRMED |
+| K-4 | Technical details carry `(related: ent_1791923641076430300_1)` | CONFIRMED |
+| K-5 | No «Будет импортировано» summary line | CONFIRMED |
+| K-6 | Import button disabled | CONFIRMED |
+| K-7 | Raw wire tokens appear **only** inside the collapsed technical-details block | CONFIRMED (was PARTIAL) |
+| K-8 | The file is never called invalid (no `400` vocabulary) | CONFIRMED |
+| K-9 | UI census 1 Runtime / 4 Models / 1 Pipeline / 0 instances | CONFIRMED (was PENDING) |
+| K-10 | `blocked-probe` was never launched or created anywhere | CONFIRMED (was PARTIAL) |
+
+The six upgrades (N-10, N-13, N-14, K-7, K-9, K-10) each rest on a **direct** Owner statement, and each also has an independent agent measurement — the statement and the measurement are reported separately and neither is presented as the other. N-14 in particular: matrix v2 recorded exactly two admissible dispositions for it (an Owner decision to accept it without the artifact, or a documented NOT EXECUTED). Neither was needed — the Owner performed the real browser Save As at gate 14, and the saved file was measured at `C:\Users\dsdred\Downloads\goal-portable-config-d7.json` (1 979 B, `753afa24…`, mtime µs `1792007038577109`, unchanged in the cleanup leg), byte-equal to both the prepared expectation and the live export.
+
+## What the bytes showed (agent-verified, no UI claim)
+
+- **Restore is a genuine restore, not a skip.** M-02a: after two manual edits, importing `B2.json` produced **one** durable write whose two restored entities carry the identical `updated_at` (`09:43:16.0952195`), and the live export became byte-identical to `B2.json` again. M-02b: `PL-Three` deleted, then re-imported ⇒ `created=1 updated=0 unchanged=5`, with the **original** entity and entry IDs from the bundle.
+- **Environment values are never carried and never restored** (ADR 018 D7). `B1.json` pre-dated the `GOAL_TEST_SECRET` variable, which is why the Owner re-exported `B2.json` — that re-export is the D7 proof on real data: `B2` carries `environment_keys = ["GOAL_TEST_SECRET"]` and no value. After the D-7 import, `M-D7Env` has **no** `environment` field and no `environment_keys` in the export, `M-Env` still holds exactly one key and its stored value is untouched (entity hash `598c63a8…cf9a13` unchanged), and the file's advisory keys `D7_ADVISORY_*` appear neither in the store nor in the export.
+- **A blocked plan writes nothing.** The BLOCKED dry-run produced no durable effect; the import control stayed disabled; the gate-13 cancelled confirmation left all three store files equal to their freeze by SHA, size **and** microsecond mtime (16/16).
+- **The export projection is time-invariant**, so the D-7 expectation `d7_expected_export.json` is reproducible on a second import: `internal/application/portable/portable.go` copies no timestamps, and the marshal is `json.MarshalIndent` with no trailing newline. That property is what made N-14 reachable after the first D-7 cycle.
+- **Imports and dry-runs manufacture no audit records.** `internal/webui/handlers/portable.go` contains no audit call: every import, every dry-run and the cancelled confirmation left `goal_audit.jsonl` untouched at 13 lines / 2 139 B `1d2685417a271af920945b4fa395ba0cc7a06aedf1c7e0833ce4faa418f2e3be`. Each of the two D-7 cycles carried exactly one durable write beyond the import — the Owner's UI deletion of `M-D7Env` — which appended exactly one 127 B `model.delete` of `ent_1791990000000000002_92`: 13 → 14 (2 266 B, `c791e5a274f0f696c47ab19b0866db028bf0b9fa700e6b595928b6cca35e4453`) in the first cycle, and 14 → 15 (2 393 B, `0675fd795bce0be0a0cf1ebafbe53610c1df811c795fdbc851c122bfdc2717ba`, re-measured 2026-10-15) in the Gate 14 cycle. The append-only property is proven by the byte-prefix hash of the first 14 lines (`g14_post_import_checks.txt` PI-16, `g14_cleanup_checks.txt` CL-11), not by the size delta alone.
+- **The store returned to canonical bytes.** After the cleanup delete: `inst1/data/goal_repo.json` 2 472 B `38c00e192671a9453e97e51caa63cf44a2a5170dc35035dac81f6f2079cbe219` — byte-equal to the prepared pre-import snapshot — census `schema_version 8`, runtimes 1 / models 4 / pipelines 1 with 0 instances (re-measured from the store bytes 2026-10-15: arrays of length 1 / 4 / 1, `instances` null), and the live export byte-equal to `B2.json`. `goal_repo.json.bak` (2 781 B `ed54696e…b9e06d`) is the **post**-import state, which is exactly what `fsutil.WriteFileDurable`'s rotation means after two durable writes: the `.bak` is the before-image of the *last* write, not of the first.
+- **`created_at == updated_at` for a restored NEW entity**, both stamped at the import instant (measured 0.554 ms before the store's own mtime), and the new entity is appended at the end of the list.
+
+## Artifact register (all outside the repository; re-hashed 2026-10-15, Owner screenshots archived 2026-10-16)
+
+Bundles: `B1.json` 1 588 B `9877144de430fa547ede17b8b36ec979895c434f9fa65541bee6778d7de8dafb` · `B2.json` 1 784 B `6d6d5a7060d8ae8a5bb84b8f4ad14c4cbf43781262be987b30ffe9f68e115892` · `B3-blocked.json` 495 B `7066a1f76cca0b6b79507ca1538a6fa8c82e5830a69d09b451a6bd84de59d4b5` · `B4-d7-newmodel.json` 950 B `3a2774fc4ce220a3d6949bf01989e216cd0a846b0a204d6f8ebd39ad0a33dc68`.
+
+Store states: `d7_pre_import_repo.json` 2 472 B `38c00e192671a9453e97e51caa63cf44a2a5170dc35035dac81f6f2079cbe219` (== the live store now) · `m02a_pre_import_repo.json` 2 472 B `6e23e587c8784cf87a8dc10003bdb3e458cae11ea42b421a9e70ac00168c07b4` · `m02b_pre_import_repo.json` 1 787 B `226379d30974e32cd4120cbfd5b697f5ad3699eb3582f52475eaef3b5c35b6c0` · `g14_post_import_repo.json` 2 781 B `ed54696ee92ba8a29ad0a2d53ef4bb8d158cf1312059464bb80dcaf552b9e06d` (== the live `.bak` now) · `goal_repo_empty.json` 105 B `12166a4c8c4df60c00cae2036df1cadbe2a5b638c756edb96300773905bc7a77`.
+
+Exports: canonical `B2`-equal captures (1 784 B `6d6d5a70…`, all fifteen re-hashed 2026-10-15) — `live_export_now.json`, `live_export_m02a_freeze.json`, `live_export_m02a_precheck.json`, `live_export_m02b_precheck.json`, `m02a_post_export.json`, `m02b_post_export.json`, `unchanged_post_export.json`, `unchanged_live_export.json`, `blocked_pre_export.json`, `blocked_post_export.json`, `d7_pre_export.json`, `d7_cleanup_export.json`, `g13_live_export.json`, `g14_preflight_export.json`, `g14_cleanup_export.json` · D-7 post-import expectation (1 979 B `753afa24edb9abde6cb5a04c7acc0c5d8c7049d180d19464d1ff8c0d408c305e`) — `d7_expected_export.json`, `d7_post_export.json`, `g14_post_import_export.json`, `g14_save_as_export.json`.
+
+Audit ledger (`inst1/data/goal_audit.jsonl`): frozen 13 lines / 2 139 B `1d268541…f2e3be` (holds through both imports, every dry-run and the cancelled confirmation) → 14 lines / 2 266 B `c791e5a2…5e4453` (after the first D-7 cycle's `model.delete`) → 15 lines / 2 393 B `0675fd79…17ba` (after the Gate 14 cleanup `model.delete`; re-measured 2026-10-15). Both `model.delete` lines name `ent_1791990000000000002_92` and are 127 B each.
+
+Owner-session screenshots — the complete population. `C:\Users\dsdred\Pictures\Screenshots` holds 822 files (822 `.png`, no subdirectories, plus one `desktop.ini`); exactly **12** are dated in the acceptance window 2026-10-12…2026-10-16, and all 12 hashes are unique within the folder. The accounting, which an earlier draft of this register got wrong (see DEV-11): **12 discovered · 10 archived · 2 excluded as non-evidence · 2 Owner-mapped · 8 agent-correlated**. The two counts are orthogonal — both Owner-mapped captures are among the ten archived. The archive is `E:\accept\adr018\evidence\`, indexed by its own self-describing manifest `owner_screenshot_manifest.md` (12 901 B, SHA-256 `5fa219786e7c4e13a4fcf3e1119f134aaf944beedafd1d8e206008dd16b2a955`); every file was copied with `cp -p`, so each archived copy carries the original capture mtime, **no original was moved, renamed or modified**, and all ten re-hashed to the values below after the copy (10/10 PASS, 0 FAIL).
+
+**Owner-mapped — 2.** `C:\Users\dsdred\Pictures\Screenshots\Снимок экрана 2026-10-14 201203.png` 25 196 B `0bee5b182ab91f71680d30c54a419a6b936382e65d2e2b67275b115e37e56bfc` (`M-D7Env` form, empty environment block → N-11) · `…\201230.png` 30 527 B `9d383e96e4edd1abd0f66941e6b245b5899ed9308d34eefe712985915b508bef` (`M-Env` form, one key row, value write-only → N-12).
+
+**Agent-correlated — 8**, bound to a criterion or a leg by their on-screen literals plus measured evidence-file mtimes, **not** by an Owner statement. This class never substitutes for an Owner mapping and raises no verdict: `…\020348.png` 30 000 B `16315f2254210db03493179b905ef1c57f7fe3c2acc1f8c8c9e811218598dfe0` (the `M-Env` environment-key edit before the `B2` re-export → the D7 leg, not one of the 25) · `…\093941.png` 33 160 B `46dd5b40548fae6716ceb84c53a43d5720bfbd601b0d21e6539cf73185a316be` (M-02a UNCHANGED-only dry-run, «Импортировать нечего — репозиторий уже соответствует файлу.») · `…\094142.png` 32 344 B `baf5dfe7384ae53d9921812adc24070a7d6c3f1dc743942134d76f885e6cf285` (M-02a UPDATE dry-run, «Будут восстановлены: 2») · `…\094323.png` 26 621 B `8490e4ee008e3318fe9bd5cdcb91f3719cd5af77f06232eea7c3126a20f1c4f5` (M-02a result line «добавлено 0, восстановлено 2, без изменений 4», captured 7 s after the single durable write) · `…\222931.png` 23 751 B `ff8d0fe932ba833ac8e51f8514639d92123813257f581f4dc799c6835f823118` (BLOCKED dry-run → K-1…K-5, K-8) · `…\223119.png` 35 602 B `c6da001bc566fd97edaad146922000d7bafbc2043ddbe3883250e010874d6645` (the «Подтверждение» text → N-8, and the Gate 13 cancelled confirmation) · `…\2026-10-15 004220.png` 20 868 B `42915d98091dbb65b1de605185249edc1838f55d2083d752713c28aa8fbed9e3` (5 models including `M-D7Env` → N-10, 97 s before the Save As) · `…\014154.png` 17 551 B `1d52d6905d80df1c13f7cd2d32f75142c8c413b7a8eb9a0175d58456b6f0cd44` (4 models after the Gate 14 delete).
+
+**Excluded as non-evidence — 2**, and deliberately kept out of the archive: `…\2026-10-14 202036.png` 212 842 B `54277e65f3f4893a42855f43d77e48c0fef2e0a3a3ef35f06fde4ce11ba43154` shows a different local application at `aids:8086` and carries personal text, so it is excluded for confidentiality as well as relevance; `…\214840.png` 31 078 B `f07f2c09dbed07327d9df6ebd28fb475f831f8b22cda04f263e0cdc7b9fdbfad` shows an agent chat window. Matrix v1 §2 had already **excluded** both; this register previously listed them merely as «not mapped», which understated that adjudication, and named the Owner-session set as six images when it is twelve. Both originals remain untouched where they are.
+
+**Ten criteria have no screenshot at all**: N-1…N-7, N-9, N-13 and the N-14 dialog itself (the saved file, not the dialog, is that criterion's evidence). N-8, K-6, K-7 and K-9 are corroborated only partially. Obtaining the missing captures would require a fresh UI session with new durable writes — repeating a functional acceptance the Owner has already accepted — so it is **not** proposed, and those criteria keep their existing basis of an Owner statement plus an independent agent measurement.
+
+The one non-image Owner-session artifact stays as recorded: `C:\Users\dsdred\Downloads\goal-portable-config-d7.json` 1 979 B `753afa24…8c305e` (browser Save As → N-14). Two further captures were taken by the **agent's** browser during the environment gate and belong to no Owner session (class agent-verified, existence recorded, never a UI confirmation): `evidence/m00_landing_ru_empty.png` 10 092 B `9b11172a8ccf1e4392b502ce9a525b1f7ef580f2d0e46ad140d339ccb198382c` · `evidence/m00_settings_portable.png` 23 998 B `7707ce07da6fca2ad4e51a3a3f99516a073ddb89cde4d3db23e98c616fbba6b5`.
+
+Reports and raw checker output, with the PASS counts of each: `environment.txt` 4 230 B `a4b01148…` · `provenance.txt` 1 088 B `7789974c…` · `M-00_M-01_execution_report.md` 8 829 B `19b44062…` + `m00_m01_checks.txt` 6 742 B `bb7975e4…` · `m01_export_verification_report.md` 10 847 B `00b92c7d…` + `m01_verify_output.txt` 1 423 B `7e6aed6d…` (**23 PASS, 0 FAIL**) · `m01_b2_verification_report.md` 17 526 B `e07e241a…` + `m01_b2_verify_output.txt` 8 461 B `47dfefae…` · `m02a_post_import_report.md` 11 726 B `50e0d659…` + `m02a_post_import_checks.txt` 1 232 B `193c69aa…` (**18 PASS, 1 FAIL** — DEV-2) · `m02b_post_import_report.md` 9 787 B `8f7a2342…` + `m02b_post_import_checks.txt` 948 B `181f9429…` (**17 PASS**) · `unchanged_post_report.md` 5 008 B `4ee54b1a…` + `unchanged_post_checks.txt` 2 352 B `27df05f2…` (**9 PASS**) · `blocked_preparation_report.md` 16 992 B `977c17bc…` · `blocked_post_report.md` 12 463 B `98485dd4…` + `blocked_post_checks.txt` 3 493 B `10b4ac0f…` (**14 PASS**) · `d7_preparation_report.md` 26 882 B `31871357…` + `d7_prep_checks.txt` 5 857 B `66516492…` (**17 PASS**) · `d7_post_import_report.md` 26 270 B `c95890ff…` + `d7_post_checks.txt` 6 190 B `87e0fdb7…` (**14 PASS**) · `d7_cleanup_report.md` 20 643 B `57933c87…` + `d7_cleanup_checks.txt` 6 263 B `3dc6972e…` (**17 PASS**) · matrix v1 `cb0e14ef…` (11/6/8) · `g13_final_verification_report.md` 21 707 B `cb3ce9a0…` + `g13_post_checks.txt` 4 241 B `53f1976d…` (**16 PASS**) · matrix v2 `95609b3e…` (19/4/2) · `g14_final_ui_acceptance_plan.md` 27 459 B `17c0191c…` · `g14_owner_checklist.md` 18 462 B `2ff33624…` · `g14_preflight_checks.txt` 5 957 B `1acb3281…` (**23 PASS**) · `g14_post_import_report.md` 21 389 B `997dfd8a…` + `g14_post_import_checks.txt` 12 061 B `2f553957…` (**37 PASS / 0 FAIL / 3 NOTE**) · `g14_cleanup_report.md` 17 605 B `a02daab0…` + `g14_cleanup_checks.txt` 10 142 B `11f15284…` (**26 PASS / 0 FAIL / 1 NOTE**) · `g14_freeze.json` 1 920 B `0cc03957…` · `d7_frozen_state.json` 3 547 B `5262058c…` · matrix v3 `183e50ca…` (25/0/0).
+
+Evidence-directory completeness: `E:\accept\adr018\evidence` holds **116** entries — 105 at the 2026-10-15 re-hash pass, plus the 10 archived Owner screenshots and their manifest added by the DEV-11 archiving on 2026-10-16, all named above. Beyond the checker scripts (18 `*.mjs`) and the artifacts named above, the remainder is listed here by name so the directory carries no unregistered file; none of them carries a load-bearing figure for a verdict: the Owner checklists `blocked_owner_checklist.md`, `d7_owner_checklist.md`, `m02a_owner_checklist.md`, `m02b_owner_checklist.md`, `unchanged_owner_checklist.md` · the code-derived expectations written before the Owner acted `blocked_expected_plan.txt`, `d7_expected_dryrun_body.json`, `d7_expected_import_body.json`, `m02a_expected_plan.txt`, `m02b_expected_plan.txt`, `unchanged_expected_plan.txt` · the pre-action state tables `m02a_precheck_state_table.txt`, `m02b_precheck_state_table.txt`, `unchanged_precheck_state_table.txt` · the hash/forensic side-lists `m01_b2_hashes.txt`, `m02a_bak_forensic.txt`, `sha256_artifacts.txt`, `sha256_goal_repo_empty.txt` · the environment captures `inst1_server.log`, `listener_loopback.txt` · the superseded matrices kept unchanged as dated records `owner_import01_final_ui_matrix.md` (v1) and `owner_import01_final_ui_matrix_v2.md` · and two working notes `d7_revert_plan.md`, `i18n_env_placeholder_finding.md`.
+
+## Deviations and procedural findings
+
+| ID | Finding | Class | Disposition |
+|---|---|---|---|
+| DEV-1 | `environment.txt:42` registers `inst1/goal.json` as **190 B** with hash `663ad981…`; the file measures **223 B** with that same hash today. A SHA-256 is content-determined, so the size literal in that dated register is wrong while its hash is right. | class C, evidence hygiene | Dated record **not rewritten**; corrected here and in the register above. |
+| DEV-2 | `m02a_post_import_checks.txt` carries one literal **FAIL** (C-10: `.bak` must equal the pre-import snapshot). It failed because the snapshot was taken before the Owner's two manual edits, while `.bak` advances on every durable write. The single-write property C-10 exists to prove is established by other means in the same report (identical `updated_at` on both restored models; store/`.bak` mtime pair). | class C, harness expectation | Reported as a FAIL, never silently re-counted as 19/19. |
+| DEV-3 | Gate 14's post-import engine failed **6 of 35** on its first run. All six were harness defects (block-cut offset, `null` vs `[]` env keys, a wrong path expectation for the criterion that asserts absence, `mtime_us` vs the freeze's actual `µs` property, and one mis-copied expectation row). | class C, harness | Fixed, **full re-run** → 37 PASS / 0 FAIL. The first-run FAIL is recorded, not overwritten. |
+| DEV-4 | The same gate predicted the post-import store at 2 779 B and measured **2 781 B**. Cause: Go's `RFC3339Nano` trims trailing zeros of the fraction, so a timestamped store has variable width. | class C, method | Rule adopted: **never size-predict a timestamped store**; predict by content and hash the result. The cleanup leg's prediction (stamp-free canonical bytes) did hit exactly. |
+| DEV-5 | `g14_cleanup_report.md` first asserted two figures from memory rather than measurement (the `.bak`-era audit size/hash and an mtime µs value). | class C, report hygiene | Corrected in place against measured bytes before the verdict, per «verify current bytes, not reports». |
+| DEV-6 | `goal.exe -version` prints `dev / none / unknown`, which looks like missing provenance. | code-derived, expected | ldflags injection happens only in the release workflow; `go version -m` (recorded above) is the authoritative stamp. |
+| DEV-7 | Workstation default toolchain `go1.26.5` ≠ CI pin `go1.26.9`. | recorded deviation | Every binary was force-built with `GOTOOLCHAIN=go1.26.9`; no historical provenance record was re-pinned. |
+| DEV-8 | The value of the loopback fixture `GOAL_TEST_SECRET` (length 14) appears in **five artifacts written before** the no-echo rule (`owner_actions.md:24`, `M-00_M-01_execution_report.md:100`, `m01_export_verification_report.md`, `m01_verify_output.txt`, `verify_b1.mjs`). | class C, evidence hygiene | Historical artifacts not rewritten. It is a fixture, not a credential; every gate from M-02a onward compares the value only as a boolean and prints key names, never values. |
+| DEV-9 | The ADR 018 UI gates recorded no browser name/version and no OS build fingerprint for the Owner's session (unlike ADR 019 result C, which recorded Chrome 154 on Windows 11 25H2). | class C, evidence completeness | Recorded as a gap. The criteria are UI observations on one machine at a loopback origin; a browser matrix was never part of this program's scope. |
+| DEV-10 | ADR 019's result-C export artifact `C:\Users\dsdred\Downloads\goal-portable-config.json` (6 138 B `9a394577…`) is **no longer present** on disk, and `C:\tools\goal-portable-config.json` never was on this machine. | class C, evidence retention | That PASS is a dated record and stands on its own hashes; it is simply no longer re-verifiable in place. Nothing in this record re-opens it. |
+| DEV-11 | The Owner-session screenshot population is **12** images in the acceptance window, not the six this register first named: 2 Owner-mapped, 8 agent-correlated, and 2 that matrix v1 §2 had already **excluded as non-evidence** although this register listed them merely as «not mapped». None of them was archived in `E:\accept\adr018\evidence\` (matrix v2's action R5). | class C, evidence hygiene | **CLOSED 2026-10-16.** The 10 evidence-bearing captures were copied (`cp -p`, originals neither moved nor modified) into `E:\accept\adr018\evidence\` and indexed by `owner_screenshot_manifest.md` (12 901 B, SHA-256 `5fa21978…a955`, full value above); size and SHA-256 verified on every copy — **10/10 PASS / 0 FAIL**, first run, no retry. The 2 excluded images were deliberately not archived. Archiving is hygiene, not evidence: **no evidence class was raised** (agent-correlated ≠ Owner-mapped), **10 criteria still have no screenshot** (N-1…N-7, N-9, N-13, the N-14 dialog), and the accepted functional acceptance is **not** re-run to obtain them. Never a criterion and never a blocker for verdict B. |
+| DEV-12 | Several tracking documents cite line numbers into `ROADMAP.md` that have drifted (`:152-154`/`:163`/`:164` for content now at `:152`–`:156`/`:166`). | class C, citation drift | New text in this program cites **sections and commits, not line numbers**, to stop adding drift. |
+
+## Scope limitations — what this record does NOT prove
+
+1. It does not prove anything over **HTTPS or a secure origin**. The whole program ran on plain HTTP loopback; TLS was not configured and the HTTPS listener was never started. ADR 019 governs the secure-origin case and its own record is separate.
+2. It does not prove the LAN-security posture. `authEnabled false` was acceptable only for a loopback-only listener; that is an environment choice, not a product behavior, and authentication/CSRF remain governed by ADR 019's and the existing handler contracts.
+3. It does not make backup/restore a **credential** backup. Environment and secret values are excluded from bundle v1 by design (ADR 018 D7, open item U1); what was proven here is that local values are **preserved** and that a NEW entity arrives with **no** environment at all.
+4. It does not prove path portability (U3) or any mirror/full-replacement, deletion-by-absence semantics (U2). Nothing in this program imports a store into a *different* GoAl home, and absence in a bundle never deletes anything.
+5. It is a single-machine, single-store, one-browser run. It is not a matrix across browsers, operating systems, remote hosts or large bundles; the maintained browser corpus (`tests/browser/portable.cjs`) is what covers shapes this manual run could not, including the same-store re-import case that this manual program deliberately did **not** claim.
+6. Agent measurements are not UI observations. Wherever the Owner's statement is absent, this record says so; where an inference was available but not admissible (N-10 through K-10 before gate 14), the record shows the criterion staying open. The same discipline applies to the archived screenshots: 8 of the 12 are **agent-correlated**, and an agent correlation is not an Owner mapping — it corroborates a criterion that already rests on the Owner's own statement, it never replaces one.
+7. It is not a tag and not a release. The latest tag and release remain `v2.1.0`; nothing here authorizes either.
+8. It does not close **OWNER-IMPORT-01**, does not move ADR 018 from **Proposed**, does not close **OWNER-UX-01**, and does not resume ADR 015 (still FROZEN).
+
+## What this record closes, and what it deliberately leaves open
+
+- **Closes: functional manual browser acceptance of the ADR 018 restore semantics** — result B above, 25 of 25 criteria, with the evidence classes kept apart.
+- **Closes: DEV-11, the Owner-session screenshot evidence-hygiene action** (2026-10-16). Population: **12** images in the acceptance window — **10 archived** into `E:\accept\adr018\evidence\`, **2 excluded as non-evidence**; of the archived set **2 are Owner-mapped** and **8 agent-correlated**. Copy-only (`cp -p`), every original left in place unmodified, size and SHA-256 verified on all ten (10/10 PASS, first run), indexed by `E:\accept\adr018\evidence\owner_screenshot_manifest.md` (12 901 B, SHA-256 `5fa219786e7c4e13a4fcf3e1119f134aaf944beedafd1d8e206008dd16b2a955`). It closes nothing further: **10 criteria still have no screenshot**, no evidence class was raised, and the accepted functional acceptance is not re-run to produce captures after the fact.
+- **Does not close: OWNER-IMPORT-01 as a tracking task.** Its remaining condition is no longer "the Owner has not run it" — that run happened on 2026-10-14/15 and is recorded here — but the Owner's separate decision to close the finding. Until that decision, `ROADMAP.md`, `BACKLOG.md` and ADR 018 keep the finding **OPEN**, and ADR 020's Q11 start gate for SERVICES-CATALOG-01 (which is gated on ADR 018 completing **and** OWNER-IMPORT-01 closing) therefore stays shut.
+- **Does not move: ADR 018's lifecycle label**, which stays **Proposed**. The restore semantics themselves are shipped behavior at HEAD and are now manually accepted evidence; the label is a separate Owner decision.
+
+## Related state
+
+- Design contract: [ADR 018](../adr/018-portable-configuration-restore-semantics.md) — slices 1 → 2′ → 5 all published; bundle format stays **v1**, repository schema stays **v8**; nothing in `internal/process/` and no lifecycle semantics were touched.
+- Supersession history: ADR 014's 2026-09-25 SKIP EXISTING amendment remains a dated record; ADR 018 replaced that policy point and ADR 014's current-pointer lines point at it.
+- Export half: [ADR 019 acceptance record, section C](ADR019-HTTPS-BROWSER-ACCEPTANCE.md) — OWNER-EXPORT-01 **OWNER PASS** (2026-10-03), the native Windows Save As completed by the Owner. The mechanism that leg proved is the same one N-14 exercised here.
+- Tracking: the per-slice publication ledger lives in [`ROADMAP.md`](../../ROADMAP.md); open debt in [`BACKLOG.md`](../../BACKLOG.md).
+- **Next eligible ROADMAP task after this record:** the Owner's decision on formal closure of OWNER-IMPORT-01 (and, separately, formal closure of OWNER-UX-01). **NOT STARTED**, and not started by this gate.
