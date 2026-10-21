@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -96,7 +97,7 @@ func doArgvFile() {
 		os.Exit(1)
 	}
 	rest := os.Args[3:]
-	if err := os.WriteFile(os.Args[2], []byte(strings.Join(rest, "\n")), 0o600); err != nil {
+	if err := writeFileAtomic(os.Args[2], []byte(strings.Join(rest, "\n"))); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
@@ -126,10 +127,34 @@ func doEnvFile() {
 	for _, key := range os.Args[3:] {
 		lines = append(lines, key+"="+os.Getenv(key))
 	}
-	if err := os.WriteFile(os.Args[2], []byte(strings.Join(lines, "\n")), 0o600); err != nil {
+	if err := writeFileAtomic(os.Args[2], []byte(strings.Join(lines, "\n"))); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+}
+
+// writeFileAtomic replaces path via a same-directory temp file, so readers that
+// poll for a rewrite never observe the truncated state of an incomplete write.
+func writeFileAtomic(path string, data []byte) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".fake-runtime-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		os.Remove(tmpName)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpName)
+		return err
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		os.Remove(tmpName)
+		return err
+	}
+	return nil
 }
 
 func doStdout() {

@@ -47,6 +47,7 @@ func waitFileRewrite(t *testing.T, path string, old time.Time, timeout time.Dura
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
+	t.Fatalf("file %s was not rewritten within %v", path, timeout)
 }
 
 func readFile(t *testing.T, path string) string {
