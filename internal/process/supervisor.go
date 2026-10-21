@@ -260,9 +260,10 @@ func (s *Supervisor) abortPreSpawnCleanup(instID domain.InstanceID, ctrl *Instan
 	}
 	if terminalize && ctrl != nil {
 		ctrl.mu.Lock()
-		ctrl.instance.Fail(ErrLaunchAbortedByShutdown.Error(), domain.InstanceExitError)
+		ctrl.failLocked(ErrLaunchAbortedByShutdown.Error(), domain.InstanceExitError)
 		if s.store != nil {
-			s.store.Update(domain.ToStorageEntry(ctrl.instance))
+			view := ctrl.view.Load()
+			s.store.Update(domain.ToStorageEntry(&view.instance))
 		}
 		ctrl.mu.Unlock()
 	}
@@ -280,19 +281,20 @@ func (s *Supervisor) abortPreSpawnCleanup(instID domain.InstanceID, ctrl *Instan
 
 // failUnspawnedController terminalizes a launch that never produced a
 // supervised OS process (never reached a successful manager.Start), so no
-// wait() goroutine owns the instance. The controller shares its
-// *domain.LaunchInstance with Snapshot/List/ListActive/Status readers, so the
-// mutation and the storage snapshot are taken under ic.mu; the repository write
-// runs AFTER the unlock because repository implementations hold their own lock
-// across the file write and must never be nested under ic.mu.
+// wait() goroutine owns the instance. The failure is published to the
+// immutable view and the storage entry is built from that view, both under
+// ic.mu; the repository write runs AFTER the unlock because repository
+// implementations hold their own lock across the file write and must never be
+// nested under ic.mu.
 //
 // The caller MUST NOT hold ic.mu, s.mu or launchMu. It MUST NOT use this for an
 // ADR 016 residual (C/D) outcome: there the process may be alive and ownership
 // belongs to wait().
 func (s *Supervisor) failUnspawnedController(ctrl *InstanceController, cause string) error {
 	ctrl.mu.Lock()
-	ctrl.instance.Fail(cause, domain.InstanceExitError)
-	entry := domain.ToStorageEntry(ctrl.instance)
+	ctrl.failLocked(cause, domain.InstanceExitError)
+	view := ctrl.view.Load()
+	entry := domain.ToStorageEntry(&view.instance)
 	ctrl.mu.Unlock()
 
 	if s.store == nil {
@@ -1203,6 +1205,14 @@ type InstanceController struct {
 	run           *instanceRunState
 	broker        *LogBroker
 	supervisorRef *Supervisor
+	// view is the published immutable lifecycle projection (ADR 021 D1). It is
+	// written only by publishLocked under ic.mu and read without ic.mu. Every
+	// mutation of instance/run/active that a reader may observe must be followed
+	// by a publication before ic.mu is released (ADR 021 D3/D4).
+	view atomic.Pointer[lifecycleView]
+	// viewGeneration is the monotonic per-controller publication counter. It is
+	// guarded by ic.mu and copied into each published view.
+	viewGeneration uint64
 	// preSpawnToken is true iff this launch went through AdmitAndStart
 	// registration A (a PRE-SPAWN token was registered in
 	// preSpawnInFlight). It is read/cleared only under launchMu, so the token
@@ -1239,6 +1249,143 @@ func (run *instanceRunState) releaseSlot() {
 	}
 }
 
+// lifecycleView is the immutable projection of one controller's lifecycle
+// state (ADR 021 D1). A published view is never mutated: construction happens
+// under ic.mu, publication is a single atomic Store, and readers consume the
+// returned pointer and its value copy as-is. instance.Args and
+// instance.Environment own private copies so nothing in the view aliases
+// controller-owned mutable data.
+type lifecycleView struct {
+	instance   domain.LaunchInstance
+	generation uint64
+	run        *instanceRunState
+	active     *launchOperation
+}
+
+// publishLocked publishes an immutable copy of the controller's current
+// lifecycle state. The caller MUST hold ic.mu for writing, or be the sole
+// owner of a controller that is not reachable yet.
+func (ic *InstanceController) publishLocked() {
+	ic.viewGeneration++
+	view := &lifecycleView{
+		generation: ic.viewGeneration,
+		run:        ic.run,
+		active:     ic.active,
+	}
+	view.instance = *ic.instance
+	view.instance.Args = cloneStrings(ic.instance.Args)
+	view.instance.Environment = cloneStringMap(ic.instance.Environment)
+	ic.view.Store(view)
+}
+
+// cloneStrings returns an independent copy of s (nil stays nil).
+func cloneStrings(s []string) []string {
+	if s == nil {
+		return nil
+	}
+	out := make([]string, len(s))
+	copy(out, s)
+	return out
+}
+
+// cloneStringMap returns an independent copy of m (nil stays nil).
+func cloneStringMap(m map[string]string) map[string]string {
+	if m == nil {
+		return nil
+	}
+	out := make(map[string]string, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	return out
+}
+
+// setStateLocked replaces a bare instance.UpdateState call and publishes
+// (ADR 021 D4). The caller MUST hold ic.mu.
+func (ic *InstanceController) setStateLocked(state domain.InstanceState) {
+	ic.instance.UpdateState(state)
+	ic.publishLocked()
+}
+
+// setTerminalLocked applies the terminal transition that wait() derives from
+// the final manager status and publishes it as one view (ADR 021 D3 rows
+// 13-15). The caller MUST hold ic.mu. lastError is the already-merged value:
+// wait() decides whether the manager's final error is appended.
+func (ic *InstanceController) setTerminalLocked(state domain.InstanceState, pid int, exitCode *int, cls domain.InstanceExitClass, lastError string) {
+	ic.instance.PID = pid
+	ic.instance.ExitCode = exitCode
+	ic.instance.ExitClass = cls
+	ic.instance.LastError = lastError
+	ic.instance.State = state
+	now := time.Now()
+	ic.instance.StoppedAt = now
+	ic.instance.UpdatedAt = now
+	ic.publishLocked()
+}
+
+// failLocked replaces a bare instance.Fail call and publishes (ADR 021 D4).
+// The caller MUST hold ic.mu.
+func (ic *InstanceController) failLocked(cause string, cls domain.InstanceExitClass) {
+	ic.instance.Fail(cause, cls)
+	ic.publishLocked()
+}
+
+// setErrorLocked replaces a bare instance.UpdateError call and publishes
+// (ADR 021 D4). The caller MUST hold ic.mu.
+func (ic *InstanceController) setErrorLocked(msg string, cls domain.InstanceExitClass) {
+	ic.instance.UpdateError(msg, cls)
+	ic.publishLocked()
+}
+
+// setLastErrorLocked replaces LastError and publishes without touching any
+// other field. UpdateError is not usable for this: it would also overwrite
+// ExitClass and UpdatedAt, which the terminal-persist-exhaustion append
+// (ADR 021 D3 row 16) must not change after the terminal entry was captured.
+// The caller MUST hold ic.mu.
+func (ic *InstanceController) setLastErrorLocked(msg string) {
+	ic.instance.LastError = msg
+	ic.publishLocked()
+}
+
+// setRunLocked publishes the run that becomes the controller's current
+// generation (ADR 021 D3 row 4). The caller MUST hold ic.mu.
+func (ic *InstanceController) setRunLocked(run *instanceRunState) {
+	ic.run = run
+	ic.publishLocked()
+}
+
+// setOperationLocked publishes the operation that owns this controller's next
+// spawn authorization (ADR 021 D3 rows 1 and the test-support site). The
+// caller MUST hold ic.mu.
+func (ic *InstanceController) setOperationLocked(op *launchOperation) {
+	ic.active = op
+	ic.publishLocked()
+}
+
+// clearOperationLocked ends the operation identified by opID and publishes.
+// It is exact-operation: a release that no longer owns the controller is a
+// no-op and publishes nothing. The caller MUST hold ic.mu.
+func (ic *InstanceController) clearOperationLocked(opID uint64) {
+	if ic.active == nil || ic.active.id != opID {
+		return
+	}
+	ic.active = nil
+	ic.publishLocked()
+}
+
+// setLaunchFieldsLocked refreshes the frozen launch snapshot of a restart and
+// publishes it (ADR 021 D3 row 12). The caller MUST hold ic.mu.
+func (ic *InstanceController) setLaunchFieldsLocked(runtimeID string, spec *domain.CommandSpec) {
+	if runtimeID != "" {
+		ic.instance.RuntimeID = runtimeID
+	}
+	ic.instance.Executable = spec.Executable
+	ic.instance.Args = spec.Args
+	ic.instance.WorkingDirectory = spec.WorkingDirectory
+	ic.instance.Environment = specEnvironmentMap(spec.Environment)
+	ic.publishLocked()
+}
+
 // newController constructs the controller for an admitted launch and wires the
 // supervisor back-reference. It is the single production path for controller
 // creation so the optional test managerStartHook (RB-015b) applies uniformly.
@@ -1253,7 +1400,7 @@ func (s *Supervisor) newController(inst *domain.LaunchInstance) *InstanceControl
 
 // NewInstanceController creates a controller for an instance.
 func NewInstanceController(inst *domain.LaunchInstance, store InstanceStore, resolver *domain.LaunchResolver, broker *LogBroker) *InstanceController {
-	return &InstanceController{
+	ctrl := &InstanceController{
 		instance:      inst,
 		instanceID:    inst.ID,
 		modelID:       inst.ModelID,
@@ -1263,6 +1410,12 @@ func NewInstanceController(inst *domain.LaunchInstance, store InstanceStore, res
 		broker:        broker,
 		supervisorRef: nil, // set by Supervisor.newController after construction
 	}
+	// ADR 021 D2/I-4: the initial immutable view is published here, before any
+	// registry insertion path can make the controller reachable.
+	ctrl.mu.Lock()
+	ctrl.publishLocked()
+	ctrl.mu.Unlock()
+	return ctrl
 }
 
 // IsRunning returns true if the instance is in a live state.
@@ -1356,7 +1509,7 @@ func (ic *InstanceController) startCore(operationCtx context.Context, reservatio
 	// handoff, and consume the PRE-SPAWN token as COMMITTED. After this
 	// point the token no longer exists: no later startCore/ADR 016
 	// failure path may touch preSpawnInFlight.
-	ic.instance.UpdateState(domain.InstanceStateStarting)
+	ic.setStateLocked(domain.InstanceStateStarting)
 	if ic.preSpawnToken {
 		s.preSpawnInFlight--
 		ic.preSpawnToken = false
@@ -1365,7 +1518,7 @@ func (ic *InstanceController) startCore(operationCtx context.Context, reservatio
 	s.launchMu.Unlock()
 
 	run := newInstanceRunState(reservation)
-	ic.run = run
+	ic.setRunLocked(run)
 	// Persist the starting state while ic.mu is held so wait() reads consistent ic.instance.
 	if err := ic.persistStateLocked(); err != nil {
 		ic.mu.Unlock()
@@ -1391,7 +1544,7 @@ func (ic *InstanceController) startCore(operationCtx context.Context, reservatio
 
 	if err := ic.manager.Start(operationCtx, *spec); err != nil {
 		cancelLogs()
-		ic.instance.Fail(err.Error(), domain.InstanceExitError)
+		ic.failLocked(err.Error(), domain.InstanceExitError)
 		slog.Error("instance start failed", "instance_id", string(ic.instance.ID), "model_id", ic.instance.ModelID, "error", err.Error())
 		if persistErr := ic.persistStateLocked(); persistErr != nil {
 			slog.Error("persist start failure state", "instance_id", string(ic.instance.ID), "persist_error", persistErr)
@@ -1408,7 +1561,7 @@ func (ic *InstanceController) startCore(operationCtx context.Context, reservatio
 	status := ic.manager.Status()
 	ic.instance.PID = status.PID
 	ic.instance.StartedAt = status.StartedAt
-	ic.instance.UpdateState(domain.InstanceStateRunning)
+	ic.setStateLocked(domain.InstanceStateRunning)
 
 	// Persist running state with the full running identity (state=running,
 	// PID, StartedAt) — ADR 016 S1/S2: Start() may return success ONLY after
@@ -1426,6 +1579,12 @@ func (ic *InstanceController) startCore(operationCtx context.Context, reservatio
 			"executable", ic.instance.Executable,
 			"error", persistErr)
 		residual, rollbackErr := ic.rollbackRunningPersistenceLocked(persistErr)
+		// I-13: copy the published view under ic.mu instead of leaking the
+		// controller-owned instance pointer to the caller.
+		var residualSnap domain.LaunchInstance
+		if residual {
+			residualSnap = ic.Snapshot()
+		}
 		ic.mu.Unlock()
 		go ic.forwardLogs(logCh)
 		go ic.wait(run, cancelLogs)
@@ -1440,11 +1599,16 @@ func (ic *InstanceController) startCore(operationCtx context.Context, reservatio
 		}
 		// Outcome C/D: slot and run ownership stay with the wait()
 		// goroutine until it confirms exit (exactly once, sync.Once).
-		return ic.instance, rollbackErr
+		return &residualSnap, rollbackErr
 	}
 
 	// Publish start event via broker.
 	ic.publishBrokerEvent(LogStreamSystem, "instance started")
+
+	// I-13: return the published view's value copy, never the live
+	// controller-owned pointer. The copy is taken under ic.mu; Snapshot reads
+	// the view, so it cannot deadlock on this lock.
+	snap := ic.Snapshot()
 
 	// Release ic.mu before starting wait goroutine and returning.
 	// wait() will acquire ic.mu after process exit, and Sup.Start() will
@@ -1456,7 +1620,7 @@ func (ic *InstanceController) startCore(operationCtx context.Context, reservatio
 	go ic.forwardLogs(logCh)
 	go ic.wait(run, cancelLogs)
 
-	return ic.instance, nil
+	return &snap, nil
 }
 
 // rollbackRunningPersistenceLocked implements the ADR 016 §4 fail-closed
@@ -1500,8 +1664,8 @@ func (ic *InstanceController) rollbackRunningPersistenceLocked(persistErr error)
 
 	if confirmed {
 		// Outcome A/B.
-		ic.instance.UpdateState(domain.InstanceStateFailed)
-		ic.instance.LastError = fmt.Sprintf("persist running state failed: %v; rollback: terminated", persistErr)
+		ic.setStateLocked(domain.InstanceStateFailed)
+		ic.setLastErrorLocked(fmt.Sprintf("persist running state failed: %v; rollback: terminated", persistErr))
 		if ferr := ic.persistStateLocked(); ferr != nil {
 			// Outcome B: the failed state is not durable either. The
 			// repository retains starting (no PID); recovery classifies
@@ -1521,15 +1685,15 @@ func (ic *InstanceController) rollbackRunningPersistenceLocked(persistErr error)
 	// goroutine and the ERROR log. Ownership moves to the wait() goroutine,
 	// which releases the slot and completes the run exactly once when it
 	// confirms exit.
-	ic.instance.UpdateState(domain.InstanceStateStarting)
+	ic.setStateLocked(domain.InstanceStateStarting)
 	if killErr == nil {
-		ic.instance.UpdateError(fmt.Sprintf("persist running state failed: %v; rollback: unconfirmed", persistErr), "")
+		ic.setErrorLocked(fmt.Sprintf("persist running state failed: %v; rollback: unconfirmed", persistErr), "")
 		slog.Error("rollback: kill accepted but termination unconfirmed; holding slot and run ownership",
 			"instance_id", string(ic.instance.ID), "model_id", ic.instance.ModelID,
 			"pid", ic.instance.PID, "executable", ic.instance.Executable)
 		return true, errors.Join(ErrPersistenceFailure, persistErr, ErrTerminationUnconfirmed)
 	}
-	ic.instance.UpdateError(fmt.Sprintf("persist running state failed: %v; rollback: failed: %v", persistErr, killErr), "")
+	ic.setErrorLocked(fmt.Sprintf("persist running state failed: %v; rollback: failed: %v", persistErr, killErr), "")
 	slog.Error("rollback: kill refused by OS; holding slot and run ownership",
 		"instance_id", string(ic.instance.ID), "model_id", ic.instance.ModelID,
 		"pid", ic.instance.PID, "executable", ic.instance.Executable, "kill_error", killErr)
@@ -1556,7 +1720,7 @@ func (ic *InstanceController) stop(ctx context.Context) error {
 		ic.mu.Unlock()
 		return ErrLaunchInFlight
 	}
-	ic.instance.UpdateState(domain.InstanceStateStopping)
+	ic.setStateLocked(domain.InstanceStateStopping)
 	ic.mu.Unlock()
 
 	return ic.stopCore(ctx)
@@ -1620,7 +1784,7 @@ func (ic *InstanceController) stopCore(ctx context.Context) error {
 	// Update instance error if stop failed.
 	ic.mu.Lock()
 	if stopErr != nil {
-		ic.instance.UpdateError(stopErr.Error(), domain.InstanceExitError)
+		ic.setErrorLocked(stopErr.Error(), domain.InstanceExitError)
 	}
 	ic.mu.Unlock()
 
@@ -1689,13 +1853,7 @@ func (ic *InstanceController) restartWithRefresh(ctx context.Context, spec *doma
 		// while holding the same lock, and lifecycleMu orders this refresh
 		// before the new run is published — no race with the new startCore.
 		ic.mu.Lock()
-		if runtimeID != "" {
-			ic.instance.RuntimeID = runtimeID
-		}
-		ic.instance.Executable = spec.Executable
-		ic.instance.Args = spec.Args
-		ic.instance.WorkingDirectory = spec.WorkingDirectory
-		ic.instance.Environment = specEnvironmentMap(spec.Environment)
+		ic.setLaunchFieldsLocked(runtimeID, spec)
 		ic.mu.Unlock()
 	}
 
@@ -1727,18 +1885,24 @@ func specEnvironmentMap(env []string) map[string]string {
 	return envMap
 }
 
-// Snapshot returns a copy of the current instance state.
+// Snapshot returns a caller-independent copy of the current published
+// lifecycle view (ADR 021 D5). It never acquires ic.mu, so a stop holding the
+// lock across Manager.Stop cannot withhold the stopping state from readers.
+// The returned Args/Environment are independent copies because callers mutate
+// what they receive (handlers nil Environment before writing JSON).
 func (ic *InstanceController) Snapshot() domain.LaunchInstance {
-	ic.mu.RLock()
-	defer ic.mu.RUnlock()
-
-	snap := *ic.instance
-	snap.Environment = make(map[string]string, len(ic.instance.Environment))
-	for k, v := range ic.instance.Environment {
-		snap.Environment[k] = v
+	view := ic.view.Load()
+	snap := view.instance
+	snap.Args = cloneStrings(view.instance.Args)
+	snap.Environment = cloneStringMap(view.instance.Environment)
+	// Preserve the pre-ADR-021 container shape: Snapshot always returned
+	// non-nil, possibly empty, Args and Environment.
+	if snap.Args == nil {
+		snap.Args = []string{}
 	}
-	snap.Args = make([]string, len(ic.instance.Args))
-	copy(snap.Args, ic.instance.Args)
+	if snap.Environment == nil {
+		snap.Environment = map[string]string{}
+	}
 	return snap
 }
 
@@ -1771,9 +1935,6 @@ func (ic *InstanceController) wait(run *instanceRunState, cancelLogs func()) {
 
 	finalStatus := ic.manager.Status()
 
-	ic.instance.PID = finalStatus.PID
-	ic.instance.ExitCode = finalStatus.ExitCode
-
 	var domainExitClass domain.InstanceExitClass
 	var targetState domain.InstanceState
 
@@ -1804,17 +1965,17 @@ func (ic *InstanceController) wait(run *instanceRunState, cancelLogs func()) {
 		targetState = domain.InstanceStateFailed
 	}
 
-	ic.instance.ExitClass = domainExitClass
+	lastError := ic.instance.LastError
 	if finalStatus.LastError != "" {
-		if ic.instance.LastError == "" {
-			ic.instance.LastError = finalStatus.LastError
+		if lastError == "" {
+			lastError = finalStatus.LastError
 		} else {
-			ic.instance.LastError = ic.instance.LastError + "; " + finalStatus.LastError
+			lastError = lastError + "; " + finalStatus.LastError
 		}
 	}
-	ic.instance.State = targetState
-	ic.instance.StoppedAt = time.Now()
-	ic.instance.UpdatedAt = ic.instance.StoppedAt
+	// ADR 021 D3 rows 13-15: PID, ExitCode, ExitClass, the merged LastError and
+	// the terminal State/StoppedAt/UpdatedAt are published as one immutable view.
+	ic.setTerminalLocked(targetState, finalStatus.PID, finalStatus.ExitCode, domainExitClass, lastError)
 
 	if ic.store != nil {
 		// The terminal state in memory is authoritative (ADR 016 T3): the
@@ -1843,11 +2004,11 @@ func (ic *InstanceController) wait(run *instanceRunState, cancelLogs func()) {
 			// Update LastError — caller has already seen the snapshot,
 			// but we record it for monitoring.
 			ic.mu.Lock()
+			msg := persistErr.Error()
 			if ic.instance.LastError != "" {
-				ic.instance.LastError = ic.instance.LastError + "; " + persistErr.Error()
-			} else {
-				ic.instance.LastError = persistErr.Error()
+				msg = ic.instance.LastError + "; " + msg
 			}
+			ic.setLastErrorLocked(msg)
 			ic.mu.Unlock()
 		}
 	} else {

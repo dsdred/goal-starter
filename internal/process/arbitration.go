@@ -262,7 +262,7 @@ func (s *Supervisor) publishClaimLocked(c claimant) (*spawnClaim, error) {
 	// through the registry, so a scan can never observe an operation that is
 	// visible but unauthorized, nor an authorized operation that is invisible.
 	c.ctrl.mu.Lock()
-	c.ctrl.active = op
+	c.ctrl.setOperationLocked(op)
 	c.ctrl.mu.Unlock()
 	if c.mode == claimNewAdmission {
 		s.mu.Lock()
@@ -361,9 +361,7 @@ func (ic *InstanceController) activeOperation() *launchOperation {
 // operation's reservation. The caller MUST NOT hold ic.mu.
 func (ic *InstanceController) releaseLaunchOperation(opID uint64) {
 	ic.mu.Lock()
-	if ic.active != nil && ic.active.id == opID {
-		ic.active = nil
-	}
+	ic.clearOperationLocked(opID)
 	ic.mu.Unlock()
 }
 
@@ -446,7 +444,7 @@ func (s *Supervisor) mintTestSpawnClaim(ctrl *InstanceController, owner domain.L
 	}
 	op := &launchOperation{id: claim.opID, owner: owner, claim: claim}
 	ctrl.mu.Lock()
-	ctrl.active = op
+	ctrl.setOperationLocked(op)
 	ctrl.mu.Unlock()
 	return claim
 }
