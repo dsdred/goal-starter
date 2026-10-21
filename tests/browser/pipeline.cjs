@@ -388,15 +388,45 @@ async function main() {
     await H.screenshot(page, ws, '04-pipeline-restarted');
 
     // ═══ SECTION 7: Stop pipeline (icon strip, end-to-end) ═══
+    // ADR 021 Slice 1 makes the real `stopping` state observable, so "no
+    // instance is running" is NOT a completion signal: the group stop is
+    // synchronous and its response returns only after every entry reached a
+    // terminal state. Await that response, then verify each affected instance
+    // is `exited` and no owned instance remains in an in-flight state.
+    const stopIds = (await runningFor(pipeId)).map(i => i.id).sort();
+    const stopResponse = page.waitForResponse(
+      r => r.request().method() === 'POST' && r.url().includes('/api/v1/pipelines/' + pipeId + '/stop'),
+      { timeout: 45000 },
+    ).catch(() => null);
     await page.locator('#pipeline-list .icon-btn[onclick*="stopPipeline"]').filter({ visible: true }).first().click();
+    const stopRes = await stopResponse;
+    suite.log('7.0 Stop request completed (200)', !!stopRes && stopRes.status() === 200,
+      `status=${stopRes ? stopRes.status() : 'timeout'} expected_instances=${stopIds.length}`);
+    // Terminal state is `exited` for a completed stop; the instance list can
+    // drop a stopped controller, so read each id through the per-instance
+    // route, which also falls back to the durable record.
+    const IN_FLIGHT = ['pending', 'starting', 'running', 'stopping'];
+    let lastStopState = '';
     const allStopped = await poll(async () => {
-      const r = await runningFor(pipeId);
-      return r.length === 0 ? true : null;
-    }, 20000);
-    suite.log('7.1 Stop: all owned instances stopped', allStopped === true);
-    await page.waitForTimeout(600);
+      const results = await Promise.all(stopIds.map(async (id) => {
+        const r = await api('GET', '/api/v1/instances/' + encodeURIComponent(id));
+        return { id, state: r.status === 200 && r.data ? r.data.state : null, status: r.status };
+      }));
+      const owned = (await pipelineInstances()).filter(i => i.pipeline_id === pipeId);
+      const inFlight = owned.filter(i => IN_FLIGHT.indexOf(i.state) !== -1).map(i => i.id + ':' + i.state);
+      lastStopState = 'instances=' + JSON.stringify(results.map(x => x.id + ':' + (x.state || 'http-' + x.status)))
+        + ' in_flight=' + JSON.stringify(inFlight);
+      return stopIds.length === 2 && results.every(x => x.state === 'exited') && inFlight.length === 0;
+    }, 15000);
+    suite.log('7.1 Stop: all owned instances reached terminal state', allStopped === true, lastStopState);
+    const chipsStopped = await poll(async () =>
+      (await page.locator('#pipeline-list .pl-chips-wrap .status-badge.stopped').count()) === 2, 8000);
     const stoppedAfter = await page.locator('#pipeline-list .pl-chips-wrap .status-badge.stopped').count();
-    suite.log('7.2 Per-model status chips back to stopped (2)', stoppedAfter === 2, `stopped=${stoppedAfter}`);
+    const chipStates = await page.evaluate(() => Array.from(
+      document.querySelectorAll('#pipeline-list .pl-chips-wrap .status-badge'),
+    ).map(el => el.className.replace(/^status-badge\s*/, '')));
+    suite.log('7.2 Per-model status chips back to stopped (2)', chipsStopped === true && stoppedAfter === 2,
+      `stopped=${stoppedAfter} chips=${JSON.stringify(chipStates)}`);
     await H.screenshot(page, ws, '05-pipeline-stopped');
 
     // ═══ SECTION 8: Pipeline Active (persistent, distinct from Start) ═══
