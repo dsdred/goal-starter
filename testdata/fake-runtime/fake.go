@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -31,6 +32,10 @@ import (
 //   - argv-file       Write the remaining arguments (after the output path),
 //                     one per line, to the given file, then stay alive
 //   - env-file        Write selected environment values to a file and exit
+//   - signal-delay <marker-dir> [exit-delay-ms]
+//                     Write ready.json after signal registration, then on the
+//                     real OS stop signal write signal.json atomically, sleep
+//                     exit-delay-ms (default 4000) and exit 0
 
 func main() {
 	// Check for -sleep <duration> flag (used by supervisor tests).
@@ -80,6 +85,8 @@ func main() {
 		doArgvFile()
 	case "env-file":
 		doEnvFile()
+	case "signal-delay":
+		doSignalDelay()
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown mode: %s\n", mode)
 		os.Exit(1)
@@ -155,6 +162,85 @@ func writeFileAtomic(path string, data []byte) error {
 		return err
 	}
 	return nil
+}
+
+const signalDelayDefaultMS = 4000
+
+type signalDelayMarker struct {
+	Event       string `json:"event"`
+	PID         int    `json:"pid"`
+	Executable  string `json:"executable"`
+	Signal      string `json:"signal,omitempty"`
+	ExitDelayMS int    `json:"exit_delay_ms,omitempty"`
+	Timestamp   string `json:"timestamp"`
+}
+
+// doSignalDelay provides a controlled graceful-shutdown dwell for lifecycle
+// tests: the process acknowledges a real OS stop signal, records that receipt,
+// stays alive for the configured delay, then exits normally.
+func doSignalDelay() {
+	if len(os.Args) < 3 {
+		fmt.Fprintln(os.Stderr, "signal-delay mode: need a marker directory")
+		os.Exit(1)
+	}
+	markerDir := os.Args[2]
+	exitDelayMS := signalDelayDefaultMS
+	if len(os.Args) > 3 {
+		n, err := strconv.Atoi(os.Args[3])
+		if err != nil || n < 0 {
+			fmt.Fprintln(os.Stderr, "signal-delay mode: exit delay must be a non-negative integer of milliseconds")
+			os.Exit(1)
+		}
+		exitDelayMS = n
+	}
+	if err := os.MkdirAll(markerDir, 0o755); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
+
+	executable, err := os.Executable()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+
+	ready := signalDelayMarker{
+		Event:      "ready",
+		PID:        os.Getpid(),
+		Executable: executable,
+		Timestamp:  time.Now().UTC().Format(time.RFC3339Nano),
+	}
+	if err := writeSignalDelayMarker(filepath.Join(markerDir, "ready.json"), ready); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+
+	sig := <-sigCh
+	received := signalDelayMarker{
+		Event:       "signal",
+		PID:         os.Getpid(),
+		Executable:  executable,
+		Signal:      sig.String(),
+		ExitDelayMS: exitDelayMS,
+		Timestamp:   time.Now().UTC().Format(time.RFC3339Nano),
+	}
+	if err := writeSignalDelayMarker(filepath.Join(markerDir, "signal.json"), received); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+
+	time.Sleep(time.Duration(exitDelayMS) * time.Millisecond)
+}
+
+func writeSignalDelayMarker(path string, marker signalDelayMarker) error {
+	data, err := json.Marshal(marker)
+	if err != nil {
+		return err
+	}
+	return writeFileAtomic(path, append(data, '\n'))
 }
 
 func doStdout() {
