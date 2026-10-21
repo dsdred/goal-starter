@@ -19,6 +19,11 @@ GoAl — лёгкий однофайловый менеджер для лока�
 - **Атомарное JSON-хранилище** — tmp + rename + backup recovery, без внешней БД
 - **Консервативное восстановление** — обнаружение stale/orphan-инстансов при перезапуске
 
+## Видео
+
+- [GoAl первый запуск](https://www.youtube.com/watch?v=FtXztKYLU0Y)
+- [Запуск Yue2-3B на локальной видеокарте](https://youtu.be/dwHAaJy7dPw)
+
 ## Быстрый старт
 
 ```powershell

@@ -21,6 +21,11 @@ GoAl is a lightweight, single-binary manager for local AI runtimes and models. O
 - **Atomic JSON persistence** — tmp + rename + backup recovery, no external database
 - **Conservative recovery** — stale/orphan instance detection on restart
 
+## Video
+
+- [GoAl первый запуск](https://www.youtube.com/watch?v=FtXztKYLU0Y)
+- [Запуск Yue2-3B на локальной видеокарте](https://youtu.be/dwHAaJy7dPw)
+
 ## Quick start
 
 ```powershell
