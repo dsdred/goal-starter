@@ -21,7 +21,7 @@ This is an observability defect, not a correctness defect: no duplicate process 
 
 ### Label collision (recorded so the two never get conflated)
 
-`ROADMAP.md:142` carries an **unrelated** finding also labelled **F-7**: ADR 019 Slice 5's pre-commit review finding about the new HTTPS suite's Linux-CI reproducibility, which that record closed as observed fact on 2026-10-01. The lifecycle finding is referred to in this ADR and in its acceptance document as **MA-06 F-7**, never as bare `F-7`.
+The **Slice 5 — HTTPS browser acceptance + reconciliation** bullet of `ROADMAP.md` carries an **unrelated** finding also labelled **F-7**: ADR 019 Slice 5's pre-commit review finding about the new HTTPS suite's Linux-CI reproducibility, which that record closed as observed fact on 2026-10-01. *(Citation repaired 2026-10-21, D62-R2: this note cited `ROADMAP.md:142`, which in the `0a88cd61` bytes is that file's Slice 2 bullet — the Slice 5 finding is at `:145`; cite by title, not by line.)* The lifecycle finding is referred to in this ADR and in its acceptance document as **MA-06 F-7**, never as bare `F-7`.
 
 ### What shipped behavior already guarantees
 
