@@ -87,6 +87,15 @@ type Manager struct {
 	// non-nil return fails Start without spawning (test seam, RB-015b).
 	// It is nil in production.
 	startOverride func(spec CommandSpec) error
+	// stopGate, if set, is invoked by Stop after the graceful signal has been
+	// handed to the platform control and before Stop waits for the process to
+	// exit (test seam, ADR 021 §Test-only stop gate). It exists so a test can
+	// hold a stop inside the window where the state is "stopping" and the
+	// managed process is still alive. It is nil in production: the nil path
+	// performs no read beyond the existing locked region, no wait, and no
+	// allocation. It is package-private and has no exported installer, so no
+	// caller outside internal/process and no configuration can widen the window.
+	stopGate func()
 }
 
 // NewManager creates a Manager already in the stopped state.
@@ -219,6 +228,7 @@ func (m *Manager) Stop(ctx context.Context) error {
 	}
 	done := m.done
 	control := m.control
+	gate := m.stopGate
 	m.status.State = StateStopping
 	m.stopReq.Store(true)
 	m.mu.Unlock()
@@ -231,6 +241,15 @@ func (m *Manager) Stop(ctx context.Context) error {
 			Stream:  "system",
 			Message: fmt.Sprintf("graceful stop signal failed: %v", gracefulErr),
 		})
+	}
+
+	// Test seam (ADR 021): the gate runs inside the stopping window, after the
+	// graceful signal and before any wait for the exit, so a test can read the
+	// transitional state while the process is still alive. It is nil in
+	// production, and it never holds m.mu — the readers under test must not be
+	// blocked by the stop.
+	if gate != nil {
+		gate()
 	}
 
 	// Wait for process to exit or force-kill after timeout.
@@ -300,6 +319,16 @@ func (m *Manager) SetKillOverride(fn func() error) {
 func (m *Manager) SetStartOverride(fn func(spec CommandSpec) error) {
 	m.mu.Lock()
 	m.startOverride = fn
+	m.mu.Unlock()
+}
+
+// setStopGate installs the stop gate (test seam, ADR 021 §Test-only stop gate).
+// It is deliberately package-private: the seam must not become an API, a
+// configuration switch, or anything a production caller can reach. Pass nil to
+// restore the default path.
+func (m *Manager) setStopGate(fn func()) {
+	m.mu.Lock()
+	m.stopGate = fn
 	m.mu.Unlock()
 }
 
