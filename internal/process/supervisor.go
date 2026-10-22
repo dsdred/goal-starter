@@ -1419,10 +1419,10 @@ func NewInstanceController(inst *domain.LaunchInstance, store InstanceStore, res
 }
 
 // IsRunning returns true if the instance is in a live state.
+// ADR 021 D5: resolved from the published immutable view; it takes no
+// controller lock, so a stop holding ic.mu cannot withhold this read.
 func (ic *InstanceController) IsRunning() bool {
-	ic.mu.RLock()
-	defer ic.mu.RUnlock()
-	return ic.instance.IsLive()
+	return ic.view.Load().instance.IsLive()
 }
 
 // startWithReservation is the lifecycle-wrapped spawn of one generation. The
@@ -1827,10 +1827,11 @@ func (ic *InstanceController) restartWithRefresh(ctx context.Context, spec *doma
 		return nil, err
 	}
 
-	ic.mu.RLock()
-	running := ic.instance.State == domain.InstanceStateRunning
-	previousRun := ic.run
-	ic.mu.RUnlock()
+	// ADR 021 D5/D13: one view load keeps the state and the run from the same
+	// generation; two loads could pair the two sides of a publication.
+	view := ic.view.Load()
+	running := view.instance.State == domain.InstanceStateRunning
+	previousRun := view.run
 	if running {
 		if err := ic.stop(ctx); err != nil {
 			return nil, err
@@ -1976,6 +1977,9 @@ func (ic *InstanceController) wait(run *instanceRunState, cancelLogs func()) {
 	// ADR 021 D3 rows 13-15: PID, ExitCode, ExitClass, the merged LastError and
 	// the terminal State/StoppedAt/UpdatedAt are published as one immutable view.
 	ic.setTerminalLocked(targetState, finalStatus.PID, finalStatus.ExitCode, domainExitClass, lastError)
+	// ADR 021 D5/D13: retain the terminal publication itself, so the exit
+	// reporting below reads an immutable view instead of the shared struct.
+	terminalView := ic.view.Load()
 
 	if ic.store != nil {
 		// The terminal state in memory is authoritative (ADR 016 T3): the
@@ -2018,12 +2022,14 @@ func (ic *InstanceController) wait(run *instanceRunState, cancelLogs func()) {
 	// Release the concurrency slot OUTSIDE the lock to avoid holding mutex during I/O.
 	run.releaseSlot()
 
-	// Publish exit event via broker (no lock needed).
+	// Publish exit event via broker (no lock needed). ADR 021 D5: the values
+	// come from the terminal view published above; the only later publication
+	// in this function (persistence exhaustion) changes LastError alone.
 	exitCode := 0
-	if ic.instance.ExitCode != nil {
-		exitCode = *ic.instance.ExitCode
+	if terminalView.instance.ExitCode != nil {
+		exitCode = *terminalView.instance.ExitCode
 	}
-	ic.publishBrokerEvent(LogStreamSystem, fmt.Sprintf("instance exited: code=%d class=%s", exitCode, ic.instance.ExitClass))
+	ic.publishBrokerEvent(LogStreamSystem, fmt.Sprintf("instance exited: code=%d class=%s", exitCode, terminalView.instance.ExitClass))
 
 	// Completion is the final run-side effect. Restart may proceed immediately
 	// after this close without sharing any synchronization primitive with run.
@@ -2037,7 +2043,7 @@ func (ic *InstanceController) forwardLogs(events <-chan LogEvent) {
 	for event := range events {
 		ic.broker.Publish(LogStreamEvent{
 			InstanceID: string(ic.instanceID),
-			ModelID:    ic.instance.ModelID,
+			ModelID:    ic.view.Load().instance.ModelID,
 			Stream:     LogStream(event.Stream),
 			Message:    event.Message,
 			Timestamp:  event.Time,
@@ -2052,7 +2058,7 @@ func (ic *InstanceController) publishBrokerEvent(stream LogStream, message strin
 	}
 	ic.broker.Publish(LogStreamEvent{
 		InstanceID: string(ic.instanceID),
-		ModelID:    ic.instance.ModelID,
+		ModelID:    ic.view.Load().instance.ModelID,
 		Stream:     stream,
 		Message:    message,
 		Timestamp:  time.Now(),
@@ -2147,23 +2153,23 @@ func (ic *InstanceController) GetDoneChannel() <-chan struct{} {
 // including persist-final-state and reservation.Release().
 // It allows callers to wait for ALL controller-side effects to finish
 // before inspecting instance state (e.g., LastError).
+// ADR 021 D5: resolved from the published view, without acquiring ic.mu.
 func (ic *InstanceController) GetControllerDone() <-chan struct{} {
 	if ic == nil {
 		return nil
 	}
-	ic.mu.RLock()
-	defer ic.mu.RUnlock()
-	if ic.run == nil {
+	run := ic.view.Load().run
+	if run == nil {
 		return nil
 	}
-	return ic.run.done
+	return run.done
 }
 
+// currentRun returns the run of the currently published generation.
+// ADR 021 D5: resolved from the published view, without acquiring ic.mu.
 func (ic *InstanceController) currentRun() *instanceRunState {
 	if ic == nil {
 		return nil
 	}
-	ic.mu.RLock()
-	defer ic.mu.RUnlock()
-	return ic.run
+	return ic.view.Load().run
 }

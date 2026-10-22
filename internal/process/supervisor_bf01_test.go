@@ -182,13 +182,15 @@ func (h *bf01Harness) fabricate(id domain.InstanceID, m *domain.Model, state dom
 }
 
 // bf01BindClaim publishes a possibly forged claim as the controller's active
-// operation. TEST ONLY: it reproduces exactly the state a valid arbitration
-// publication produces, so each individual consumption check can be exercised
-// without weakening the boundary itself.
+// operation. TEST ONLY: it reproduces exactly the publication a valid
+// arbitration produces (field write plus view publication under the same lock),
+// so each individual consumption check can be exercised without weakening the
+// boundary itself, and the view-based readers see the same operation the locked
+// readers do.
 func bf01BindClaim(ctrl *InstanceController, claim *spawnClaim, opID uint64, owner domain.LaunchOwner) {
 	op := &launchOperation{id: opID, owner: owner, claim: claim}
 	ctrl.mu.Lock()
-	ctrl.active = op
+	ctrl.setOperationLocked(op)
 	ctrl.mu.Unlock()
 }
 
@@ -937,7 +939,7 @@ func TestRestart_DuringShutdown_DrainWins(t *testing.T) {
 		target := h.fabricate(domain.InstanceID("bf01-drain-commit-c-target"), model, domain.InstanceStateStopping)
 		run := newInstanceRunState(nil)
 		target.mu.Lock()
-		target.run = run
+		target.setRunLocked(run)
 		target.mu.Unlock()
 
 		res := make(chan error, 1)
@@ -1120,7 +1122,7 @@ func TestArbitration_DoesNotHoldAcrossRestartStop(t *testing.T) {
 		target := h.fabricate(domain.InstanceID("bf01-wait-target"), waiting, domain.InstanceStateStopping)
 		run := newInstanceRunState(nil)
 		target.mu.Lock()
-		target.run = run
+		target.setRunLocked(run)
 		target.mu.Unlock()
 
 		type outcome struct {
@@ -1316,7 +1318,7 @@ func TestRestart_Stopping_AwaitsExistingGeneration(t *testing.T) {
 	ctrl := h.fabricate(domain.InstanceID("bf01-stopping-target"), target, domain.InstanceStateStopping)
 	run := newInstanceRunState(nil)
 	ctrl.mu.Lock()
-	ctrl.run = run
+	ctrl.setRunLocked(run)
 	ctrl.mu.Unlock()
 	pidBefore := ctrl.Snapshot().PID
 

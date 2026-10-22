@@ -36,7 +36,9 @@ func d3ControllerWithState(id domain.InstanceID, state domain.InstanceState, run
 	if runClosed {
 		run.complete()
 	}
-	ctrl.run = run
+	ctrl.mu.Lock()
+	ctrl.setRunLocked(run)
+	ctrl.mu.Unlock()
 	return ctrl
 }
 
@@ -222,7 +224,9 @@ func TestD3Cleanup_ActiveOperationAndReservationSurvive(t *testing.T) {
 	t.Run("published_operation", func(t *testing.T) {
 		sup := d3Supervisor(newMockStore(), 2)
 		ctrl := d3ControllerWithState("d3-active", domain.InstanceStateExited, true)
-		ctrl.active = &launchOperation{id: 7, owner: domain.ManualOwner}
+		ctrl.mu.Lock()
+		ctrl.setOperationLocked(&launchOperation{id: 7, owner: domain.ManualOwner})
+		ctrl.mu.Unlock()
 		d3Register(sup, ctrl)
 
 		if err := sup.ForgetCleanedControllers(); err != nil {
@@ -259,7 +263,7 @@ func TestD3Cleanup_ActiveOperationAndReservationSurvive(t *testing.T) {
 		// the way publishClaimLocked does.
 		sup.cleanupScanHook = func() {
 			ctrl.mu.Lock()
-			ctrl.active = &launchOperation{id: 11, owner: domain.ManualOwner}
+			ctrl.setOperationLocked(&launchOperation{id: 11, owner: domain.ManualOwner})
 			ctrl.mu.Unlock()
 		}
 

@@ -194,11 +194,14 @@ func (s *Supervisor) scanConflicts(c claimant) error {
 		if id == c.instanceID {
 			continue
 		}
-		snap := ctrl.Snapshot()
+		// ADR 021 D5/D13: one view load keeps the lifecycle state and the
+		// published operation from the same generation.
+		view := ctrl.view.Load()
+		snap := view.instance
 		if snap.ModelID != c.modelID {
 			continue
 		}
-		if !snap.IsInFlight() && ctrl.activeOperation() == nil {
+		if !snap.IsInFlight() && view.active == nil {
 			continue
 		}
 		if !compatible(c.owner, &snap) {
@@ -302,7 +305,10 @@ func instanceOwner(snap *domain.LaunchInstance) (domain.LaunchOwner, error) {
 //	stale    refuse — terminal-but-unrecoverable attribution
 //	orphan   refuse — the repository orphan fence is authoritative
 func checkRestartTarget(ctrl *InstanceController) error {
-	snap := ctrl.Snapshot()
+	// ADR 021 D5/D13: one view load keeps the state and the published
+	// operation from the same generation.
+	view := ctrl.view.Load()
+	snap := view.instance
 	switch snap.State {
 	case domain.InstanceStatePending:
 		return fmt.Errorf("restart instance %s: %w: launch in flight", string(ctrl.instanceID), ErrLaunchInFlight)
@@ -313,7 +319,7 @@ func checkRestartTarget(ctrl *InstanceController) error {
 	default:
 		return fmt.Errorf("restart instance %s: %w (state %s)", string(ctrl.instanceID), ErrNotRestartable, string(snap.State))
 	}
-	if ctrl.activeOperation() != nil {
+	if view.active != nil {
 		return fmt.Errorf("restart instance %s: %w: restart already in flight", string(ctrl.instanceID), ErrLaunchInFlight)
 	}
 	return nil
@@ -347,12 +353,11 @@ func (s *Supervisor) PreflightRestart(ids []domain.InstanceID) error {
 }
 
 // activeOperation returns the controller's currently published operation, or
-// nil. The returned record's fields are immutable after publication. The caller
-// MUST NOT hold ic.mu.
+// nil. The returned record's fields are immutable after publication.
+// ADR 021 D5: resolved from the published view; the caller MUST NOT hold ic.mu
+// and this takes no controller lock.
 func (ic *InstanceController) activeOperation() *launchOperation {
-	ic.mu.RLock()
-	defer ic.mu.RUnlock()
-	return ic.active
+	return ic.view.Load().active
 }
 
 // releaseLaunchOperation ends the operation identified by opID. Release is
@@ -367,10 +372,10 @@ func (ic *InstanceController) releaseLaunchOperation(opID uint64) {
 
 // revalidateOperation re-checks, after lifecycleMu has been acquired, that the
 // caller's claim is still the operation that owns this controller.
+// ADR 021 D5: the operation is resolved from the published view; lifecycleMu
+// still provides the ordering this check depends on.
 func (ic *InstanceController) revalidateOperation(claim *spawnClaim) error {
-	ic.mu.RLock()
-	op := ic.active
-	ic.mu.RUnlock()
+	op := ic.view.Load().active
 	if op == nil || claim == nil || op.claim != claim || op.id != claim.opID {
 		return fmt.Errorf("instance %s: %w: operation identity no longer held", string(ic.instanceID), ErrLaunchInFlight)
 	}
