@@ -1253,39 +1253,88 @@ func TestD4ScanDoesNotInventViolations(t *testing.T) {
 // TestD4ScanFailsOnAVanishedPublication is requirement 4's other direction,
 // executed rather than implied: the multiset comparison catches a site that
 // disappears, but a site that stays while losing its publication must also
-// fail. The control re-scans the real supervisor.go with setStateLocked's
-// publishLocked call deleted — the exact regression §D4 was written to prevent,
-// "forgot to publish" as a review finding rather than a structural impossibility.
+// fail. The control re-scans supervisor.go with setStateLocked's publishLocked
+// call deleted — the exact regression §D4 was written to prevent, "forgot to
+// publish" as a review finding rather than a structural impossibility.
+//
+// The deletion is made line-wise, never with a byte string that spans a line
+// break, and it runs over both the LF and the CRLF spelling of the same
+// content: the fixture must not depend on how a checkout terminates lines. The
+// published `38070d86` proved that a byte-string needle does, because a Windows
+// checkout re-terminates the source while Linux keeps it as committed. Each
+// direction is also paired with a scan of the unmutated content of the same
+// variant, so "the scanner rejected the mutation" cannot be satisfied by a scan
+// that stopped authorizing anything at all.
 func TestD4ScanFailsOnAVanishedPublication(t *testing.T) {
-	src, err := os.ReadFile(filepath.Join(d4PackageDir, "supervisor.go"))
+	raw, err := os.ReadFile(filepath.Join(d4PackageDir, "supervisor.go"))
 	if err != nil {
 		t.Fatalf("read supervisor.go: %v", err)
 	}
-	const mutated = "\tic.instance.UpdateState(state)\n\tic.publishLocked()\n"
-	patched := strings.Replace(string(src), mutated, "\tic.instance.UpdateState(state)\n", 1)
-	if patched == string(src) {
-		t.Fatal("setStateLocked no longer has the UpdateState + publishLocked shape the control patches; the vanished-publication fixture would prove nothing")
-	}
-
-	sc, err := d4ScanSources(d4PackageDir, map[string]string{"supervisor.go": patched})
-	if err != nil {
-		t.Fatalf("scan with the publication removed: %v", err)
-	}
-
-	// The site is still detected — the scan does not look for publications to
-	// decide what to count.
-	var site *d4Site
-	for i, s := range sc.owned {
-		if s.File == "supervisor.go" && s.Func == "setStateLocked" {
-			site = &sc.owned[i]
-			break
+	lf := strings.ReplaceAll(string(raw), "\r\n", "\n")
+	for _, variant := range []struct{ name, content string }{
+		{"LF", lf},
+		{"CRLF", strings.ReplaceAll(lf, "\n", "\r\n")},
+	} {
+		patched, ok := d4DropLineAfter(variant.content,
+			"\tic.instance.UpdateState(state)",
+			"\tic.publishLocked()")
+		if !ok {
+			t.Fatalf("%s variant: setStateLocked no longer has the UpdateState + publishLocked shape the control removes; the vanished-publication fixture would prove nothing", variant.name)
 		}
+		assertPublicationRemovalIsRejected(t, variant.name, variant.content, patched)
 	}
-	if site == nil {
-		t.Fatal("the scan stopped detecting setStateLocked's UpdateState write; a lost publication must not make a mutation invisible")
+}
+
+// d4DropLineAfter removes the first line equal to second that immediately
+// follows a line equal to first, comparing lines with their terminators stripped
+// so the match cannot depend on the source's line endings. Every other line,
+// terminators included, comes back byte-for-byte unchanged.
+func d4DropLineAfter(src, first, second string) (string, bool) {
+	lines := strings.SplitAfter(src, "\n")
+	for i := 0; i+1 < len(lines); i++ {
+		if strings.TrimRight(lines[i], "\r\n") != first ||
+			strings.TrimRight(lines[i+1], "\r\n") != second {
+			continue
+		}
+		out := make([]string, 0, len(lines)-1)
+		out = append(out, lines[:i+1]...)
+		out = append(out, lines[i+2:]...)
+		return strings.Join(out, ""), true
 	}
-	if reason, ok := sc.authorizationOf(*site); ok {
-		t.Fatalf("setStateLocked's mutation was still authorized after its publication was deleted (%s)", reason)
+	return "", false
+}
+
+// assertPublicationRemovalIsRejected proves, for one line-ending variant, that
+// setStateLocked's mutation is authorized before the removal, is still detected
+// after it, and is rejected after it.
+func assertPublicationRemovalIsRejected(t *testing.T, variant, content, patched string) {
+	t.Helper()
+
+	// authorize scans `src` as supervisor.go and returns the scan with the
+	// setStateLocked site it must still detect.
+	authorize := func(src string) (*d4Scan, d4Site) {
+		t.Helper()
+		sc, err := d4ScanSources(d4PackageDir, map[string]string{"supervisor.go": src})
+		if err != nil {
+			t.Fatalf("%s variant: scan: %v", variant, err)
+		}
+		for _, site := range d4SitesIn(sc.owned, "supervisor.go") {
+			if site.Func == "setStateLocked" {
+				return sc, site
+			}
+		}
+		t.Fatalf("%s variant: the scan stopped detecting setStateLocked's UpdateState write; a lost publication must not make a mutation invisible", variant)
+		return nil, d4Site{}
+	}
+
+	sc, site := authorize(content)
+	if _, ok := sc.authorizationOf(site); !ok {
+		t.Fatalf("%s variant: setStateLocked's mutation is not authorized even before the removal, so rejecting it after the removal would prove nothing", variant)
+	}
+
+	sc, site = authorize(patched)
+	if reason, ok := sc.authorizationOf(site); ok {
+		t.Fatalf("%s variant: setStateLocked's mutation was still authorized after its publication was deleted (%s)", variant, reason)
 	}
 }
 

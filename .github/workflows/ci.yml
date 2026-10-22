@@ -6,6 +6,13 @@ on:
   pull_request:
     branches: [main]
 
+# ADR 021 Slice 3, RV-1 gate visibility: a package-level "ok" line hides an
+# individual SKIP, so each OS test job re-runs exactly the 24 Slice 3 legs
+# verbosely. The names are the audit record — a leg renamed or removed out from
+# under this list makes the guard fail instead of silently matching nothing.
+env:
+  ADR021_SLICE3_TESTS: '^(TestD4InstanceFieldEnumerationIsComplete|TestD4PublicationScanAuthorizesTestSupportPublications|TestD4PublicationScanInventoryMatchesTheRepository|TestD4ScanCatchesPlantedViolations|TestD4ScanDocumentsItsOwnBlindSpots|TestD4ScanDoesNotInventViolations|TestD4ScanFailsClosedOnAnUnattributedControllerReceiver|TestD4ScanFailsOnAVanishedPublication|TestD4ScanIgnoresNonControllerLookAlikes|TestT1StoppingViewReadableWhileProcessAlive|TestT2CollectionRouteReportsStoppingWhileProcessIsAlive|TestT2InstanceServiceListReportsStoppingWhileProcessIsAlive|TestT2InstanceServiceStatusReportsStoppingWhileProcessIsAlive|TestT2ItemRouteReportsStoppingWhileProcessIsAlive|TestT2SupervisorListReportsStoppingWhileHeld|TestT2SupervisorStatusReportsStoppingWhileHeld|TestT3CrossModelArbitrationCompletesWhileHeld|TestT3I3ReaderPrimitivesCompleteWhileHeld|TestT4RestartDuringHeldStopDoesNotPublishThroughLiveRun|TestT4StartDuringHeldStopIsArbitratedAgainstStopping|TestT4StopDuringHeldStopTakesNoSecondOwnership|TestT5DurableRecordStaysRunningWhileLiveViewIsStopping|TestT6ReleasedGateStopMatchesUngatedStop|TestT6StopGateIsNilByDefault)$'
+
 jobs:
   lint:
     name: Lint
@@ -94,6 +101,20 @@ jobs:
       - name: Run go vet
         run: go vet ./...
 
+      # Scoped and additive: the two full-suite steps above keep their coverage and
+      # their commands byte-for-byte. -count=1 stops a cached replay from standing
+      # in for a live run; nothing here uses continue-on-error, so a failing leg
+      # still fails the job.
+      - name: Run ADR 021 Slice 3 tests verbosely
+        shell: bash
+        run: |
+          set -euo pipefail
+          PKGS='./internal/process ./internal/application ./internal/webui/handlers'
+          matched=$(go test -list "$ADR021_SLICE3_TESTS" $PKGS | grep -c '^Test')
+          echo "ADR 021 Slice 3 legs matched by -list: $matched (24 expected)"
+          test "$matched" -eq 24
+          go test -count=1 -timeout 20m -v -run "$ADR021_SLICE3_TESTS" $PKGS
+
   test-windows:
     name: Test (Windows)
     runs-on: windows-latest
@@ -111,6 +132,19 @@ jobs:
 
       - name: Run go vet
         run: go vet ./...
+
+      # The same scoped verbose evidence as the Linux job, on the runner whose
+      # checkout re-terminates the source: the individual result lines below are
+      # what make a Windows-side regression visible in the log.
+      - name: Run ADR 021 Slice 3 tests verbosely
+        shell: bash
+        run: |
+          set -euo pipefail
+          PKGS='./internal/process ./internal/application ./internal/webui/handlers'
+          matched=$(go test -list "$ADR021_SLICE3_TESTS" $PKGS | grep -c '^Test')
+          echo "ADR 021 Slice 3 legs matched by -list: $matched (24 expected)"
+          test "$matched" -eq 24
+          go test -count=1 -timeout 20m -v -run "$ADR021_SLICE3_TESTS" $PKGS
 
   vulncheck:
     name: Vulnerability Check
