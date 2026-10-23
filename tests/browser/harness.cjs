@@ -3,7 +3,7 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const https = require('https');
-const { execFileSync, spawn } = require('child_process');
+const { execFileSync, execFile, spawn } = require('child_process');
 
 const IS_WIN = process.platform === 'win32';
 const EXE = IS_WIN ? '.exe' : '';
@@ -39,6 +39,33 @@ function buildFakeRuntime(ws) {
 
 function buildTLSFixture(ws) {
   return buildBin(ws, 'tls-fixture', ['./testdata/tls-fixture']);
+}
+
+// buildProcIdentity builds the test-only process-identity probe. The browser
+// stopping leg needs the executable-path and start-time anchors that production
+// recovery reads (ADR 021 F-7.2), which Node cannot obtain portably.
+function buildProcIdentity(ws) {
+  return buildBin(ws, 'proc-identity', ['./testdata/proc-identity']);
+}
+
+// processIdentity runs the probe for one PID and returns its JSON result. It is
+// async so the browser event loop keeps pumping while the stop is in flight — a
+// synchronous exec would stall the very page whose render is being timed.
+function processIdentity(probeBin, pid) {
+  return new Promise((resolve, reject) => {
+    execFile(probeBin, [String(pid)], { windowsHide: true }, (err, stdout, stderr) => {
+      if (err) {
+        reject(new Error(`proc-identity ${pid} failed: ${err.message} ${(stderr || '').trim()}`));
+        return;
+      }
+      const line = String(stdout).trim().split('\n').pop();
+      try {
+        resolve(JSON.parse(line));
+      } catch (e) {
+        reject(new Error(`proc-identity ${pid} returned unparsable output ${JSON.stringify(line)}: ${e.message}`));
+      }
+    });
+  });
 }
 
 function writeConfig(ws, overrides) {
@@ -183,13 +210,24 @@ function newSuite(title) {
     title,
     pass: 0,
     fail: 0,
+    skip: 0,
     failed: [],
+    skipped: [],
     consoleErrors: [],
     serverErrors: [],
     log(name, ok, detail) {
       const status = ok ? 'PASS' : 'FAIL';
       console.log(`  ${status} | ${name}${detail ? ' — ' + detail : ''}`);
       if (ok) s.pass++; else { s.fail++; s.failed.push(name + (detail ? ' — ' + detail : '')); }
+    },
+    // notObserved records the contract's NOT OBSERVED disposition (ADR 021
+    // acceptance contract §16): the attempt was made and the measurement could
+    // not land. It is neither a product FAIL nor a PASS, so it is printed as a
+    // visible SKIP line and counted, and it never flips the suite exit code.
+    notObserved(name, detail) {
+      console.log(`  SKIP | ${name}${detail ? ' — ' + detail : ''}`);
+      s.skip++;
+      s.skipped.push(name + (detail ? ' — ' + detail : ''));
     },
     watchPage(page) {
       page.on('console', msg => {
@@ -201,10 +239,14 @@ function newSuite(title) {
       page.on('pageerror', e => s.consoleErrors.push('pageerror: ' + e.message));
     },
     async finish() {
-      console.log(`\n  ${s.title}: TOTAL ${s.pass + s.fail} | PASS ${s.pass} | FAIL ${s.fail}`);
+      console.log(`\n  ${s.title}: TOTAL ${s.pass + s.fail + s.skip} | PASS ${s.pass} | FAIL ${s.fail} | SKIP ${s.skip}`);
       if (s.failed.length > 0) {
         console.log('  FAILED:');
         s.failed.forEach(f => console.log(`    - ${f}`));
+      }
+      if (s.skipped.length > 0) {
+        console.log('  NOT OBSERVED:');
+        s.skipped.forEach(f => console.log(`    - ${f}`));
       }
       return s.fail === 0;
     },
@@ -231,6 +273,8 @@ module.exports = {
   buildGoal,
   buildFakeRuntime,
   buildTLSFixture,
+  buildProcIdentity,
+  processIdentity,
   writeConfig,
   waitForHealth,
   startServer,

@@ -121,6 +121,15 @@ Instances are running processes created from models.
 | `POST` | `/api/v1/instances/{id}/dismiss` | Yes | Yes | Dismiss an orphan instance (transitions `orphan` → `stale`). No process is touched. |
 | `POST` | `/api/v1/instances/{id}/kill` | Yes | Yes | Terminate an orphan process (destructive, ADR 008). Strict identity re-verification before every signal; `orphan`-only. |
 
+### The `state` field is a live projection, not the durable record
+
+`GET /api/v1/instances` and `GET /api/v1/instances/{id}` project the supervisor's **published immutable lifecycle view** for each controller ([ADR 021](adr/021-lifecycle-state-observability-view.md)), so the transitional `stopping` state is readable — with the same `pid` and `executable` the instance had while running — **while the managed OS process is still alive**, and the collection and the item route cannot disagree mid-stop. Consequences that belong to the observable contract:
+
+- **Live and durable states legitimately differ.** While a stop is in progress the API reports `stopping` and the persisted record — and therefore `GET /api/v1/history` — still reports `running`; the terminal state is written when the process is observed to have exited. ADR 021 moved no persist call and reordered none.
+- **`Stop` stays synchronous.** `POST /api/v1/instances/{id}/stop` still answers `200 {"status":"stopped"}` only after the process is gone: no `202`, and ADR 021 adds no field to any request or response. The transitional state is visible on the *read* routes during a stop; it is never implied by the stop response.
+- **`stopping` is read, not inferred.** The Web UI badge comes from these routes; nothing about the transitional state is fabricated or guessed in the browser.
+- **`GET /api/v1/pipelines/{id}` is not an instance-state source.** Its `models[].state` is a projection gated on "running or starting", so it reports `stopped` for an instance that is `stopping` — both before and after ADR 021. Use the two instance routes above.
+
 ### POST /api/v1/instances/{id}/kill
 
 Terminate an orphaned process. Requires auth + CSRF. Per [ADR 008](adr/008-recovery-kill-orphan.md), the process identity (executable path + start time) is **strictly re-verified immediately before every destructive syscall** — a missing or mismatched start-time anchor refuses the kill (no PID-only kill exists). Unix: `SIGTERM` → 5 s grace → re-verify → `SIGKILL` only if still alive and still identity-matching. Windows: immediate `TerminateProcess` (no graceful phase).
