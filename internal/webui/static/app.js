@@ -554,7 +554,10 @@ function renderModels() {
             actionBtns = iconBtn(ICONS.restart, t('models.actions.restart'), 'warning', 'restartModel', m.id) +
                 iconBtn(ICONS.stop, t('models.actions.stop'), 'danger', 'stopModel', m.id);
         } else if (status === 'starting' || status === 'stopping') {
-            actionBtns = '<span class="hint-text model-transitional">' + t('models.status.' + status) + '</span>';
+            const tPhase = Date.now() % 1000;
+            actionBtns = '<span class="model-transitional model-progress" aria-hidden="true">' +
+                '<span class="model-progress-ring" style="animation-delay:-' + tPhase + 'ms"></span>' +
+                '</span>';
         } else if (status === 'orphan') {
             actionBtns = '<span class="hint-text model-transitional">' + t('instances.orphan.hint') + '</span>';
         } else {

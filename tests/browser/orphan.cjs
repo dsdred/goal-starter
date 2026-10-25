@@ -8,6 +8,21 @@ const PORT = 19484;
 const BASE = `http://127.0.0.1:${PORT}`;
 const ADMIN_USER = 'admin';
 const ADMIN_PASS = 'testpass123';
+const I18N = { ru: require('../../internal/webui/static/i18n/ru.json'), en: require('../../internal/webui/static/i18n/en.json') };
+
+// modelStripInPage reads the ADR 022 facts off the first My Models row. The orphan
+// branch keeps its hint sentence and must never render the transition marker, which
+// replaces only the state-word branch of the renderer.
+function modelStripInPage() {
+  const row = document.querySelector('#model-list .model-row');
+  if (!row) return null;
+  const strip = row.querySelector('.model-row-actions');
+  return {
+    text: strip ? (strip.textContent || '').trim() : '(no strip)',
+    transitional: !!row.querySelector('.model-transitional'),
+    marker: !!row.querySelector('.model-progress'),
+  };
+}
 
 async function main() {
   console.log('=== Orphan recovery / Dismiss (real Chromium) ===\n');
@@ -136,6 +151,10 @@ async function main() {
     suite.log('UI: Models page no Start button for orphan model (RU)', mStartBtns === 0, `start buttons=${mStartBtns}`);
     const mRowSub = (await pageRU.locator('#model-list .model-row .model-row-sub').first().textContent().catch(() => '')) || '';
     suite.log('UI: Models page shows orphan PID (RU)', mRowSub.includes(String(helperPid)), mRowSub.trim());
+    const stripRU = await pageRU.evaluate(modelStripInPage);
+    suite.log('UI: Models page orphan hint preserved, no transition marker (RU)',
+      !!stripRU && stripRU.transitional === true && stripRU.marker === false && stripRU.text === I18N.ru['instances.orphan.hint'],
+      stripRU ? `transitional=${stripRU.transitional} marker=${stripRU.marker} strip_text=${JSON.stringify(stripRU.text)} want=${JSON.stringify(I18N.ru['instances.orphan.hint'])}` : 'model row absent');
     await H.screenshot(pageRU, ws, 'orphan_models_ru');
 
     await pageRU.evaluate(() => { const s = document.getElementById('mf-state'); s.value = 'orphan'; s.dispatchEvent(new Event('change')); });
@@ -178,6 +197,10 @@ async function main() {
       mBadgeEnVis ? `text="${(await mBadgeEn.textContent()).trim()}"` : 'not visible');
     const mStartBtnsEn = await pageRU.locator('#model-list .model-row button[aria-label="Start"]').count();
     suite.log('UI: Models page no Start button for orphan model (EN)', mStartBtnsEn === 0, `start buttons=${mStartBtnsEn}`);
+    const stripEN = await pageRU.evaluate(modelStripInPage);
+    suite.log('UI: Models page orphan hint preserved, no transition marker (EN)',
+      !!stripEN && stripEN.transitional === true && stripEN.marker === false && stripEN.text === I18N.en['instances.orphan.hint'],
+      stripEN ? `transitional=${stripEN.transitional} marker=${stripEN.marker} strip_text=${JSON.stringify(stripEN.text)} want=${JSON.stringify(I18N.en['instances.orphan.hint'])}` : 'model row absent');
     await H.screenshot(pageRU, ws, 'orphan_models_en');
 
     // Mobile viewport (RU)

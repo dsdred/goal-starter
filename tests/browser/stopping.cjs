@@ -147,6 +147,16 @@ const WINDOW_LEGS = [
   'correlation t0 < t3 <= t4 < t5',
 ];
 const PIPE_WINDOW_LEG = 'pipeline endpoint projection stays not-stopping (RV-7)';
+// ADR 022: the model row's action strip must carry a decorative indicator instead of
+// a second copy of the state word. Named once, for the same reason as WINDOW_LEGS.
+const MODEL_STRIP_LEGS = [
+  'model action strip carries no second state word',
+  'transition indicator is decorative and text-free',
+  'no start/stop/restart control during the transition',
+];
+// hasStateWord is the ADR 022 duplicate-word predicate: any text left in the
+// transition strip is a second state word, because the badge is the only one.
+const hasStateWord = (stripText) => String(stripText == null ? '' : stripText).trim() !== '';
 
 // pathsEqual mirrors internal/process/supervisor.go pathsEqual: exact match, or
 // on Windows case-insensitive with an optional .exe extension in either form.
@@ -203,10 +213,26 @@ function collectDomInPage(arg) {
     return n && (n.textContent || '').trim() === arg.modelName;
   });
   if (mrow) {
+    const strip = mrow.querySelector('.model-row-actions');
+    const mk = mrow.querySelector('.model-progress');
     out.model = Object.assign(badgeOf(mrow) || { cls: '', text: '', title: '' }, {
       transitional: !!mrow.querySelector('.model-transitional'),
       stopBtn: !!mrow.querySelector('.icon-btn[onclick*="stopModel("]'),
       startBtn: !!mrow.querySelector('.icon-btn[onclick*="startModel("]'),
+      restartBtn: !!mrow.querySelector('.icon-btn[onclick*="restartModel("]'),
+      stripText: strip ? (strip.textContent || '').trim() : null,
+      // ADR 022: the transition indicator must be decorative — no text, no name of
+      // any kind (title/data-tooltip/aria-label would re-introduce the state word as
+      // a tooltip) and not focusable.
+      marker: mk ? {
+        present: true,
+        text: (mk.textContent || '').trim(),
+        ariaHidden: mk.getAttribute('aria-hidden'),
+        tabindex: mk.getAttribute('tabindex'),
+        named: (mk.matches('[title],[data-tooltip],[aria-label]') ? 1 : 0)
+          + mk.querySelectorAll('[title],[data-tooltip],[aria-label]').length,
+        visible: visible(mk),
+      } : { present: false, text: '', ariaHidden: null, tabindex: null, named: 0, visible: false },
       sub: ((mrow.querySelector('.model-row-sub') || {}).textContent || '').trim(),
       visible: visible(mrow),
     });
@@ -325,6 +351,9 @@ async function main() {
     { key: 'I1 model-route stop (RU)', tag: 'i1', lang: 'ru', view: 'models', name: 'S4 Stop Via Model', kind: 'model' },
     { key: 'I2 instance-route stop (EN)', tag: 'i2', lang: 'en', view: 'adv-instances', name: 'S4 Stop Via Instance', kind: 'model' },
     { key: 'I3 pipeline-route stop (EN)', tag: 'i3', lang: 'en', view: 'pipelines', name: 'S4 Stop Via Pipeline', kind: 'pipeline' },
+    // ADR 022 covers the model card in both languages. Appended, never inserted:
+    // specs[2] is the pipeline's own model by index below.
+    { key: 'I4 model-route stop (EN)', tag: 'i4', lang: 'en', view: 'models', name: 'S4 Model EN', kind: 'model' },
   ];
   for (const spec of specs) {
     spec.markerDir = path.join(ws.dir, 'markers', spec.tag);
@@ -347,7 +376,7 @@ async function main() {
   let ok = false;
 
   try {
-    suite.log('Seed: three dwell fixtures registered', specs.every((x) => !!x.modelId),
+    suite.log('Seed: four dwell fixtures registered', specs.every((x) => !!x.modelId),
       specs.map((x) => `${x.tag}=${x.modelStatus}`).join(' '));
     suite.log('Seed: pipeline created', pipeRes.status < 300 && !!specs[2].pipelineId, `status=${pipeRes.status}`);
 
@@ -379,6 +408,24 @@ async function main() {
       suite.notObserved('Badge label painted in RU and EN across the intervals',
         `${labelObserved} — at least one interval ended without a stopping paint (the shipped ${UI_REFRESH_PERIOD_MS} ms tick missed the ${DWELL_MS} ms window), so the RU+EN pair is not covered by this run; an interval that painted the wrong word is judged FAIL above`);
     }
+
+    // Negative control for the duplicate-word predicate: the same predicate is fed
+    // (a) a synthetic strip carrying the RU stopping label — built in the page with
+    // the very classes the pre-ADR-022 renderer used — and (b) the empty strip that
+    // shipped renderer now produces. It must report the label as a word and the empty
+    // strip as clean, so a passing duplicate-word leg cannot be tautological.
+    const syntheticStripText = await page.evaluate((label) => {
+      const host = document.createElement('div');
+      host.className = 'model-row-actions';
+      const span = document.createElement('span');
+      span.className = 'hint-text model-transitional';
+      span.textContent = label;
+      host.appendChild(span);
+      return (host.textContent || '').trim();
+    }, LABELS.ru);
+    suite.log('Negative control: the duplicate-word predicate is live',
+      hasStateWord(syntheticStripText) === true && hasStateWord('') === false,
+      `synthetic_strip_with_ru_label=${hasStateWord(syntheticStripText)} empty_strip=${hasStateWord('')} probe_label=${JSON.stringify(LABELS.ru)}`);
 
     // Scope notes are prose, never PASS/FAIL/SKIP lines: they state what the
     // executed test does not prove.
@@ -445,7 +492,12 @@ async function runInterval(c, spec) {
       `primary_state=${badgeState(primaryBadgeOf(spec, domBefore))} visible=${primaryVisible(spec, domBefore)} label=${JSON.stringify((labelBadgeOf(spec, domBefore) || {}).text || '')} want=${JSON.stringify(RUNNING_LABELS[spec.lang])}`);
 
     const listBefore = await c.api('GET', '/api/v1/instances');
-    state.othersBefore = (listBefore.data || []).filter((i) => i.id !== inst.id).map((i) => `${i.id}:${i.state}`).join(',');
+    // Supervisor.List iterates a map (internal/process/supervisor.go:798-802), so the
+    // route's slice order is unspecified and may differ between two identical reads.
+    // The other entries are therefore compared as a set of id:state, never by position.
+    const othersBeforeRaw = (listBefore.data || []).filter((i) => i.id !== inst.id).map((i) => `${i.id}:${i.state}`);
+    state.othersBefore = othersBeforeRaw.slice().sort().join(',');
+    state.othersBeforeRaw = othersBeforeRaw;
 
     // ── The interval ─────────────────────────────────────────────────────────
     const stopUrl = spec.kind === 'pipeline'
@@ -649,6 +701,43 @@ function paintRuns(spec, f) {
 const shortSeries = (spec, f) =>
   `${f.paints.length} samples: ${paintRuns(spec, f).map((r) => `${r.state} x${r.count}(+${off(r.from, f.t0)}..+${off(r.to, f.t0)}ms)`).join(' -> ') || '(none)'}`;
 
+// reportModelStrip judges the ADR 022 facts on the same painted sample the badge
+// legs bind to (t4), so the strip is never judged in a different state than the
+// badge it must not duplicate. A run whose shipped tick missed the interval has no
+// strip sample: that is NOT OBSERVED (§16), never a product FAIL.
+function reportModelStrip(s, spec, f, win, missReason) {
+  const K = spec.key;
+  const row = f.t4 ? (paintAt(f, f.t4) || {}).model : null;
+  const legs = {};
+  if (win && row && row.marker) {
+    const mk = row.marker;
+    legs['model action strip carries no second state word'] = {
+      ok: !hasStateWord(row.stripText),
+      detail: `strip_text=${JSON.stringify(row.stripText)} badge_text=${JSON.stringify(row.text)} badge_cls=${JSON.stringify(row.cls)} — ADR 022 D-1/D-6: the badge is the only state word`,
+    };
+    legs['transition indicator is decorative and text-free'] = {
+      ok: mk.present === true && mk.visible === true && mk.text === '' && mk.ariaHidden === 'true'
+        && mk.tabindex === null && mk.named === 0,
+      detail: `present=${mk.present} visible=${mk.visible} text=${JSON.stringify(mk.text)} aria-hidden=${JSON.stringify(mk.ariaHidden)} tabindex=${JSON.stringify(mk.tabindex)} naming_attrs=${mk.named} — ADR 022 D-2/D-3: no text, no name, not focusable, not a progressbar`,
+    };
+    legs['no start/stop/restart control during the transition'] = {
+      ok: row.startBtn === false && row.stopBtn === false && row.restartBtn === false,
+      detail: `start=${row.startBtn} stop=${row.stopBtn} restart=${row.restartBtn} — ADR 022 D-5: the blocking semantics of the shipped branch are unchanged`,
+    };
+  }
+  for (const name of MODEL_STRIP_LEGS) {
+    if (!win) { s.notObserved(`${K}: ${name}`, missReason); continue; }
+    const l = legs[name];
+    if (!l) {
+      s.notObserved(`${K}: ${name}`, f.t4
+        ? 'the model row was not in the sampled DOM, so the strip was never observed'
+        : `no in-window stopping paint to judge the strip on (dwell=${DWELL_MS}ms poll=${UI_REFRESH_PERIOD_MS}ms)`);
+      continue;
+    }
+    s.log(`${K}: ${name}`, l.ok, l.detail);
+  }
+}
+
 function reportWindow(c, spec, inst, capture, f, state) {
   const s = c.suite;
   const K = spec.key;
@@ -691,9 +780,10 @@ function reportWindow(c, spec, inst, capture, f, state) {
 
     const ent = pick(f.listInWindow, inst.id);
     const agrees = !!ent && ent.state === 'stopping' && ent.pid === win.item.pid && ent.started_at === win.item.started_at;
-    const othersUnchanged = (f.listInWindow || []).filter((i) => i.id !== inst.id).map((i) => `${i.id}:${i.state}`).join(',') === state.othersBefore;
+    const othersMidRaw = (f.listInWindow || []).filter((i) => i.id !== inst.id).map((i) => `${i.id}:${i.state}`);
+    const othersUnchanged = othersMidRaw.slice().sort().join(',') === state.othersBefore;
     leg('list route agrees with the item route', agrees && othersUnchanged,
-      `list_state=${ent ? ent.state : '(absent)'} list_pid=${ent ? ent.pid : '-'} pid_and_started_at_match=${agrees} other_entries_unchanged=${othersUnchanged} — F-7.3`);
+      `list_state=${ent ? ent.state : '(absent)'} list_pid=${ent ? ent.pid : '-'} pid_and_started_at_match=${agrees} other_entries_unchanged=${othersUnchanged} others_before=[${(state.othersBeforeRaw || []).join(',')}] others_mid=[${othersMidRaw.join(',')}] (compared as a set: Supervisor.List iterates a map, so the route slices entries in unspecified order) — F-7.3`);
 
     leg('durable record still running mid-window',
       !!f.durableInWindow && f.durableInWindow.state === 'running' && f.durableInWindow.pid === inst.pid,
@@ -813,6 +903,10 @@ function reportWindow(c, spec, inst, capture, f, state) {
     s.log(`${K}: ${name}`, l.ok, l.detail);
   }
 
+  // The instances and pipeline rows have no model card, so the defect this ADR
+  // removes cannot exist on them and the legs are not applicable there.
+  if (spec.view === 'models') reportModelStrip(s, spec, f, win, missReason);
+
   if (spec.kind !== 'pipeline') return;
   if (!win) { s.notObserved(`${K}: ${PIPE_WINDOW_LEG}`, missReason); return; }
   // RV-7 negative control: the pipeline detail endpoint promotes a per-entry state
@@ -875,6 +969,14 @@ async function reportTerminal(c, spec, inst, capture, f, state) {
   const active = afterState === 'stopping' || afterState === 'running' || afterState === 'starting';
   s.log(`${K}: UI converged with the terminal state`, !active && (!domAfter.model || !domAfter.model.transitional),
     `primary_state=${afterState} api_state=${entAfter ? entAfter.state : '(absent)'} transitional=${!!(domAfter.model && domAfter.model.transitional)} start_button_back=${!!(domAfter.model && domAfter.model.startBtn)} — [A] only; F-7.5/F-7.7 keep their Owner half open`);
+  // ADR 022 AC-4 on the model card: the indicator is a transition marker, so it must
+  // be gone once the row is terminal and the Start action is back.
+  if (spec.view === 'models') {
+    const mkAfter = domAfter.model ? domAfter.model.marker : null;
+    s.log(`${K}: transition indicator is gone after convergence`,
+      !!mkAfter && mkAfter.present === false && !!domAfter.model.startBtn,
+      `marker_present=${mkAfter ? mkAfter.present : '(row absent)'} strip_text=${JSON.stringify(domAfter.model ? domAfter.model.stripText : '(row absent)')} start_button_back=${!!(domAfter.model && domAfter.model.startBtn)} primary_state=${afterState} — ADR 022 AC-4`);
+  }
   await H.screenshot(c.page, c.ws, `${spec.tag}_after_convergence`);
 }
 

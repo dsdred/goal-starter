@@ -264,6 +264,18 @@ code { font-family: var(--font-mono); font-size: 0.9em; background: var(--bg-inp
 .icon-btn-ghost { color: var(--text-muted); }
 .icon-btn-ghost:hover { background: var(--bg-input); color: var(--text-primary); }
 .model-transitional { font-size: 0.78rem; font-style: italic; padding: 0 4px; }
+/* Decorative transition indicator: the status badge stays the only state word. */
+.model-progress { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 28px; }
+.model-progress-ring {
+    width: 16px; height: 16px; border-radius: 50%;
+    border: 2px solid var(--text-secondary);
+    border-right-color: transparent;
+    animation: modelSpin 1000ms linear infinite;
+}
+@keyframes modelSpin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+    .model-progress-ring { animation: none; border-right-color: var(--text-secondary); }
+}
 
 /* Status Badges */
 .status-badge {
