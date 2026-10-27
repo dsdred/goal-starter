@@ -51,6 +51,16 @@ async function main() {
   await sleep(1500);
   const bStop = await api('POST', `/api/v1/models/${m2.data.id}/stop`);
   await sleep(1500);
+  // ADR 023 T-5 needs a rendered Pipeline card in this suite: the density and
+  // casing rules are scoped to #model-list, so the Pipeline card is the control
+  // that proves they did not leak onto the shared .model-row pattern. Model C is
+  // never started and the pipeline owns no instance, so both chips and the
+  // aggregate badge resolve to the deterministic `stopped` state.
+  const m3 = await api('POST', '/api/v1/models', { name: 'Resp Model C', runtime_id: 'rt-a', args: ['stdout'] });
+  const pipe = await api('POST', '/api/v1/pipelines', {
+    name: 'Resp Isolation Pipeline',
+    models: [{ model_id: m2.data.id }, { model_id: m3.data.id }],
+  });
 
   const suite = H.newSuite('RESPONSIVE (monotonic 768px contract)');
   suite.log('Seed: model A created', m1.status === 201, `status=${m1.status}`);
@@ -58,6 +68,8 @@ async function main() {
   suite.log('Seed: instance A started', s1.status === 200, `state=${s1.data && s1.data.state}`);
   suite.log('Seed: instance B started', s2.status === 200, `state=${s2.data && s2.data.state}`);
   suite.log('Seed: instance B stopped (history entry)', bStop.status === 200);
+  suite.log('Seed: model C created', m3.status === 201, `status=${m3.status}`);
+  suite.log('Seed: isolation pipeline created', pipe.status === 201, `status=${pipe.status} id=${pipe.data && pipe.data.id}`);
 
   const instList = await api('GET', '/api/v1/instances');
   const live = (instList.data || []).filter(i => i.state === 'running' || i.state === 'starting' || i.state === 'orphan');
@@ -378,6 +390,280 @@ async function main() {
     suite.log('@390: Settings icon in the mobile drawer is a symmetric outline gear', mobileDrawerVisible && mobileSettings.ok, JSON.stringify(mobileSettings.issues));
     await page.evaluate(() => window.toggleDrawer());
     await page.waitForTimeout(200);
+
+    // ═══ ADR 023 — Models density, Pipeline isolation, casing scope (T-5, T-7) ═══
+    // Baseline literals are the shipped declarations at c3002ec: `.model-list`
+    // gap 6px (style.css:231), `.model-row` gap 12px / padding 9px 14px (:232-236)
+    // and the ≤768px `.model-row{gap:8px}` (:740). Pipelines still reuse them
+    // verbatim, so a Pipeline card that drifts from these values means the
+    // #model-list density block leaked onto the shared pattern (violates Q2/D-4).
+    const BASELINE_CARD = { padding: '9px 14px', gap: '12px', listGap: '6px' };
+    const BASELINE_CARD_MOBILE = { padding: '9px 14px', gap: '8px', listGap: '6px' };
+    const DENSE_CARD = { padding: '4px 14px', gap: '10px', listGap: '4px' };
+    const DENSE_MOBILE_GAP = '6px';
+
+    const measureCard = (id, base) => page.evaluate((a) => {
+      window.scrollTo(0, 0);
+      const list = document.getElementById(a.id);
+      const row = list ? list.querySelector('.model-row') : null;
+      if (!row) return null;
+      const cs = getComputedStyle(row);
+      const badge = row.querySelector('.model-row-name .status-badge');
+      const chips = [...row.querySelectorAll('.pl-chips-wrap .status-badge')];
+      const icons = [...row.querySelectorAll('.model-row-actions .icon-btn')];
+      const title = row.querySelector('.model-row-title');
+      const sub = row.querySelector('.model-row-sub');
+      const mainEl = row.querySelector('.model-row-main');
+      const mainRect = mainEl ? mainEl.getBoundingClientRect() : null;
+      const vw = window.innerWidth, vh = window.innerHeight;
+      const overlaps = (r) => !!mainRect &&
+        r.left < mainRect.right - 1 && mainRect.left < r.right - 1 &&
+        r.top < mainRect.bottom - 1 && mainRect.top < r.bottom - 1;
+      const box = (el) => {
+        const r = el.getBoundingClientRect();
+        return { w: Math.round(r.width * 100) / 100, h: Math.round(r.height * 100) / 100,
+          inViewport: r.left >= -0.5 && r.top >= -0.5 && r.right <= vw + 0.5 && r.bottom <= vh + 0.5,
+          overlapsMain: overlaps(r) };
+      };
+      const shipped = box(row);
+      // Snapshot the shipped computed values BEFORE any mutation: the object
+      // returned by getComputedStyle is live and reports in-flight transition
+      // values, which would attribute the A/B baseline to the shipped row.
+      const out = {
+        listGap: getComputedStyle(list).gap,
+        padding: cs.padding, gap: cs.gap, fontSize: cs.fontSize,
+        height: shipped.h,
+        badgeClass: badge ? badge.className : null,
+        badgeTransform: badge ? getComputedStyle(badge).textTransform : null,
+        chipCount: chips.length,
+        chipTransforms: chips.map(c => getComputedStyle(c).textTransform),
+        chipTexts: chips.map(c => c.textContent.trim()),
+        iconBoxes: icons.map(box),
+        titleText: title ? title.textContent.trim() : null,
+        titleBox: title ? box(title) : null,
+        subText: sub ? sub.textContent.trim() : null,
+        subBox: sub ? box(sub) : null,
+      };
+      // A/B on the same element: reinstate the c3002ec density declarations
+      // inline, re-measure, then release the element back to the shipped sheet.
+      // Same content, fonts and viewport — the delta is the density block alone.
+      // `.model-row` animates `transition: all 0.15s` (style.css:235), so the
+      // padding/gap change is applied with the transition off: a synchronous
+      // getBoundingClientRect inside the 150ms window returns the FROM value,
+      // which would report a zero delta as a real finding. The transition is
+      // switched back on only after the inline styles are released, so the
+      // restore is instant and no later leg observes an animating row.
+      row.style.transition = 'none';
+      row.style.padding = a.base.padding;
+      row.style.gap = a.base.gap;
+      out.heightWithBaseline = box(row).h;
+      row.style.padding = '';
+      row.style.gap = '';
+      row.style.transition = '';
+      return out;
+    }, { id, base });
+
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.evaluate(() => window.navigate('pipelines'));
+    await page.waitForTimeout(600);
+    const pipeDesktop = await measureCard('pipeline-list', BASELINE_CARD);
+    await page.evaluate(() => window.navigate('models'));
+    await page.waitForTimeout(600);
+    const modelsDesktop = await measureCard('model-list', BASELINE_CARD);
+
+    suite.log('T-5 Pipeline card keeps the baseline density (padding/gap/list gap == c3002ec)',
+      !!pipeDesktop && pipeDesktop.padding === BASELINE_CARD.padding && pipeDesktop.gap === BASELINE_CARD.gap &&
+        pipeDesktop.listGap === BASELINE_CARD.listGap,
+      pipeDesktop ? `padding=${pipeDesktop.padding} gap=${pipeDesktop.gap} list_gap=${pipeDesktop.listGap}` : 'pipeline row absent');
+    suite.log('T-5 Pipeline card keeps its baseline icon strip (3 icon buttons at 44x44, stopped pipeline)',
+      !!pipeDesktop && pipeDesktop.iconBoxes.length === 3 && pipeDesktop.iconBoxes.every(b => b.w >= 44 && b.h >= 44),
+      pipeDesktop ? `icons=${JSON.stringify(pipeDesktop.iconBoxes.map(b => b.w + 'x' + b.h))}` : 'pipeline row absent');
+    suite.log('T-7 Models card carries the density block (padding/gap/list gap)',
+      !!modelsDesktop && modelsDesktop.padding === DENSE_CARD.padding && modelsDesktop.gap === DENSE_CARD.gap &&
+        modelsDesktop.listGap === DENSE_CARD.listGap,
+      modelsDesktop ? `padding=${modelsDesktop.padding} gap=${modelsDesktop.gap} list_gap=${modelsDesktop.listGap}` : 'model row absent');
+    suite.log('T-7 Density is a real height reduction on the same card (measured px)',
+      !!modelsDesktop && modelsDesktop.heightWithBaseline > modelsDesktop.height,
+      modelsDesktop ? `baseline=${modelsDesktop.heightWithBaseline}px dense=${modelsDesktop.height}px delta=${(modelsDesktop.heightWithBaseline - modelsDesktop.height).toFixed(2)}px` : 'no measurement');
+    suite.log('T-7 Title and sub text survive the density change (non-empty, non-zero width)',
+      !!modelsDesktop && !!modelsDesktop.titleText && modelsDesktop.titleBox && modelsDesktop.titleBox.w > 0 &&
+        !!modelsDesktop.subText && modelsDesktop.subBox && modelsDesktop.subBox.w > 0,
+      modelsDesktop ? `title=${JSON.stringify(modelsDesktop.titleText)} sub=${JSON.stringify(modelsDesktop.subText)}` : 'no measurement');
+    // Absolute, not just relative: the shared value is pinned to the c3002ec
+    // typography (`html { font-size: 14px }`, style.css:54 — untouched by this
+    // delta, whose first insertion sits at :263), so a drift moving both the
+    // Models and the Pipeline row cannot pass.
+    suite.log('T-5/D-5 Density changed no typography (Models and Pipeline rows both stay at the baseline 14px)',
+      !!modelsDesktop && !!pipeDesktop && modelsDesktop.fontSize === '14px' &&
+        pipeDesktop.fontSize === '14px' && modelsDesktop.fontSize === pipeDesktop.fontSize,
+      `models=${modelsDesktop && modelsDesktop.fontSize} pipeline=${pipeDesktop && pipeDesktop.fontSize}`);
+    suite.log('T-5/D-4 Pipeline chip names keep text-transform: uppercase (excluded from D-3 by container)',
+      !!pipeDesktop && pipeDesktop.chipCount === 2 && pipeDesktop.chipTransforms.every(x => x === 'uppercase'),
+      pipeDesktop ? `chips=${pipeDesktop.chipCount} transforms=${JSON.stringify(pipeDesktop.chipTransforms)} texts=${JSON.stringify(pipeDesktop.chipTexts)}` : 'pipeline row absent');
+    suite.log('T-4/D-3 The exemption is class-scoped, not container-wide: the Pipeline aggregate badge of a stopped pipeline stays uppercase',
+      !!pipeDesktop && pipeDesktop.badgeClass === 'status-badge stopped' && pipeDesktop.badgeTransform === 'uppercase',
+      pipeDesktop ? `badge_class=${JSON.stringify(pipeDesktop.badgeClass)} transform=${pipeDesktop.badgeTransform}` : 'pipeline row absent');
+
+    // The casing exemption is a closed set: exactly the eight D-3 surface
+    // selectors declare text-transform:none. This is the machine check for "no
+    // global .status-badge override and no .pl-chips-wrap restore rule" — a
+    // restore or a leak would have to appear as a declaration here.
+    const casingDeclarations = await page.evaluate(() => {
+      const none = [], uppercase = [], other = [];
+      const push = (selectorText, value) => {
+        selectorText.split(',').forEach(s => {
+          const one = s.trim();
+          if (value === 'none') none.push(one);
+          else if (value === 'uppercase') uppercase.push(one);
+          else other.push(one + ' => ' + value);
+        });
+      };
+      const walk = (rules) => {
+        for (const r of rules) {
+          if (r.selectorText && r.style && r.style.textTransform) push(r.selectorText, r.style.textTransform);
+          if (r.cssRules) walk(r.cssRules);
+        }
+      };
+      for (const sheet of document.styleSheets) {
+        try { walk(sheet.cssRules); } catch (e) { /* cross-origin sheet: none are loaded */ }
+      }
+      return { none, uppercase, other };
+    });
+    const D3_SURFACES = [
+      '#model-list .status-badge.orphan', '#model-list .status-badge.pending',
+      '#adv-instances-body .status-badge.orphan', '#adv-instances-body .status-badge.pending',
+      '#instances-compact .status-badge.orphan', '#instances-compact .status-badge.pending',
+      '#pipeline-list .model-row-name .status-badge.orphan', '#pipeline-list .model-row-name .status-badge.pending',
+    ];
+    const noneSet = [...new Set(casingDeclarations.none)].sort();
+    suite.log('T-5/D-3 Casing exemption is exactly the eight state-word surfaces (no global override, no chip restore)',
+      casingDeclarations.other.length === 0 && noneSet.length === 8 &&
+        noneSet.join('|') === [...D3_SURFACES].sort().join('|'),
+      `none=${JSON.stringify(noneSet)} other=${JSON.stringify(casingDeclarations.other)}`);
+    suite.log('T-5/D-3 No text-transform declaration names the chip container',
+      !casingDeclarations.none.concat(casingDeclarations.uppercase).some(s => s.includes('pl-chips-wrap')),
+      `uppercase_selectors=${casingDeclarations.uppercase.length}`);
+    suite.log('T-4/D-3 The base .status-badge rule still declares uppercase',
+      casingDeclarations.uppercase.includes('.status-badge'),
+      `uppercase=${JSON.stringify(casingDeclarations.uppercase)}`);
+
+    await page.setViewportSize({ width: 430, height: 932 });
+    await page.evaluate(() => window.navigate('pipelines'));
+    await page.waitForTimeout(600);
+    const pipeMobile = await measureCard('pipeline-list', BASELINE_CARD_MOBILE);
+    await page.evaluate(() => window.navigate('models'));
+    await page.waitForTimeout(600);
+    const modelsMobile = await measureCard('model-list', BASELINE_CARD_MOBILE);
+    suite.log('T-5 Pipeline card keeps the baseline mobile density (gap 8px, padding 9px 14px)',
+      !!pipeMobile && pipeMobile.gap === BASELINE_CARD_MOBILE.gap && pipeMobile.padding === BASELINE_CARD_MOBILE.padding,
+      pipeMobile ? `gap=${pipeMobile.gap} padding=${pipeMobile.padding}` : 'pipeline row absent');
+    suite.log('T-7 Models card stays denser at mobile too (gap < the baseline 8px, padding 4px 14px)',
+      !!modelsMobile && modelsMobile.gap === DENSE_MOBILE_GAP && modelsMobile.padding === DENSE_CARD.padding &&
+        modelsMobile.heightWithBaseline > modelsMobile.height,
+      modelsMobile ? `gap=${modelsMobile.gap} padding=${modelsMobile.padding} dense=${modelsMobile.height}px baseline=${modelsMobile.heightWithBaseline}px` : 'no measurement');
+    await H.screenshot(page, ws, 'models-density-430');
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.evaluate(() => window.navigate('models'));
+    await page.waitForTimeout(400);
+    await H.screenshot(page, ws, 'models-density-1440');
+
+    // ═══ ADR 023 T-6 — touch-target floor at all eight sweep viewports ═══
+    console.log('\n═══ ADR 023 T-6: Models touch targets at all eight viewports ═══');
+    for (const vp of viewports) {
+      await page.setViewportSize({ width: vp.w, height: vp.h });
+      await page.evaluate(() => window.navigate('models'));
+      await page.waitForTimeout(350);
+      const strip = await page.evaluate(() => {
+        window.scrollTo(0, 0);
+        const rows = [...document.querySelectorAll('#model-list .model-row')];
+        const vw = window.innerWidth, vh = window.innerHeight;
+        const cells = [];
+        rows.forEach(row => {
+          const mainRect = (row.querySelector('.model-row-main') || { getBoundingClientRect: () => null }).getBoundingClientRect();
+          [...row.querySelectorAll('.model-row-actions .icon-btn')].forEach(btn => {
+            const r = btn.getBoundingClientRect();
+            cells.push({ row: rows.indexOf(row), w: Math.round(r.width * 100) / 100, h: Math.round(r.height * 100) / 100,
+              inViewport: r.left >= -0.5 && r.top >= -0.5 && r.right <= vw + 0.5 && r.bottom <= vh + 0.5,
+              overlapsMain: !!mainRect && r.left < mainRect.right - 1 && mainRect.left < r.right - 1 &&
+                            r.top < mainRect.bottom - 1 && mainRect.top < r.bottom - 1 });
+          });
+        });
+        return { rows: rows.length, cells, vw, vh };
+      });
+      const tooSmall = strip.cells.filter(c => c.w < 44 || c.h < 44);
+      const offscreen = strip.cells.filter(c => !c.inViewport);
+      const clashing = strip.cells.filter(c => c.overlapsMain);
+      suite.log(`T-6 @${vp.w}: ${strip.cells.length} Models action targets >=44x44, in-viewport, no .model-row-main overlap`,
+        strip.rows > 0 && tooSmall.length === 0 && offscreen.length === 0 && clashing.length === 0,
+        `rows=${strip.rows} too_small=${JSON.stringify(tooSmall.slice(0, 3))} offscreen=${JSON.stringify(offscreen.slice(0, 3))} overlap=${JSON.stringify(clashing.slice(0, 3))}`);
+    }
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.waitForTimeout(200);
+
+    // ═══ ADR 023 T-10 — reduced motion, the project's first automated leg ═══
+    // The ring is only emitted while a model is transitioning, and that interval
+    // is sub-frame for the shipped 3000 ms tick, so the ring is asserted on an
+    // element built with the renderer's own classes (`app.js:558-559`) appended
+    // into a real Models row, with a non-reduced-motion negative control proving
+    // the probe is sensitive to the media query. No production timing, seam or
+    // state is fabricated.
+    const ringProbe = (p) => p.evaluate(() => {
+      window.scrollTo(0, 0);
+      const row = document.querySelector('#model-list .model-row');
+      if (!row) return null;
+      const strip = row.querySelector('.model-row-actions');
+      const host = document.createElement('span');
+      host.className = 'model-transitional model-progress';
+      host.setAttribute('aria-hidden', 'true');
+      const ring = document.createElement('span');
+      ring.className = 'model-progress-ring';
+      host.appendChild(ring);
+      strip.appendChild(host);
+      let out;
+      try {
+        const rr = ring.getBoundingClientRect();
+        const sr = strip.getBoundingClientRect();
+        const br = row.getBoundingClientRect();
+        out = {
+          rowTransitionDuration: getComputedStyle(row).transitionDuration,
+          rowTransitionProperty: getComputedStyle(row).transitionProperty,
+          ringAnimationName: getComputedStyle(ring).animationName,
+          ringW: Math.round(rr.width * 100) / 100, ringH: Math.round(rr.height * 100) / 100,
+          ringInStrip: rr.left >= sr.left - 0.5 && rr.right <= sr.right + 0.5 &&
+            rr.top >= sr.top - 0.5 && rr.bottom <= sr.bottom + 0.5,
+          ringInRow: rr.left >= br.left - 0.5 && rr.right <= br.right + 0.5 &&
+            rr.top >= br.top - 0.5 && rr.bottom <= br.bottom + 0.5,
+          rowH: Math.round(br.height * 100) / 100,
+        };
+      } finally {
+        strip.removeChild(host);
+      }
+      return out;
+    });
+    const rmContext = await browser.newContext({ viewport: { width: 1440, height: 900 }, reducedMotion: 'reduce' });
+    const rmPage = await rmContext.newPage();
+    suite.watchPage(rmPage);
+    await rmPage.goto(BASE, { waitUntil: 'networkidle' });
+    await rmPage.waitForTimeout(600);
+    await rmPage.evaluate(() => window.navigate('models'));
+    await rmPage.waitForTimeout(400);
+    const reduced = await ringProbe(rmPage);
+    const normal = await ringProbe(page);
+    suite.log('T-10/D-8 Reduced motion: Models row transition suppressed (0s)',
+      !!reduced && reduced.rowTransitionDuration === '0s',
+      reduced ? `duration=${reduced.rowTransitionDuration} property=${reduced.rowTransitionProperty}` : 'model row absent');
+    suite.log('T-10/D-8 Reduced motion: transition ring animation suppressed (animation-name none)',
+      !!reduced && reduced.ringAnimationName === 'none', reduced ? `animation=${reduced.ringAnimationName}` : 'no probe');
+    suite.log('T-10 Negative control: the same probe is sensitive without reduced motion',
+      !!normal && normal.rowTransitionDuration !== '0s' && normal.ringAnimationName !== 'none',
+      normal ? `duration=${normal.rowTransitionDuration} animation=${normal.ringAnimationName}` : 'no probe');
+    // AC-7 after D-5: the ring is an ADR 022 marker living in the strip whose row
+    // this delta made denser, so its box is measured, not assumed — non-zero and
+    // inside both the action strip and the compacted row at 1440.
+    suite.log('AC-7/D-5 The ring keeps a non-zero box inside the strip and inside the denser row (1440)',
+      !!reduced && reduced.ringW > 0 && reduced.ringH > 0 && reduced.ringInStrip && reduced.ringInRow,
+      reduced ? `ring=${reduced.ringW}x${reduced.ringH} in_strip=${reduced.ringInStrip} in_row=${reduced.ringInRow} row_h=${reduced.rowH}` : 'no probe');
+    await rmContext.close();
 
     suite.log('no console errors', suite.consoleErrors.length === 0, suite.consoleErrors.slice(0, 3).join(' | '));
     suite.log('no server 5xx errors', suite.serverErrors.length === 0, JSON.stringify(suite.serverErrors.slice(0, 3)));

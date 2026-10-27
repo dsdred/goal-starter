@@ -263,6 +263,15 @@ code { font-family: var(--font-mono); font-size: 0.9em; background: var(--bg-inp
 .icon-btn-warning { color: var(--warning); }
 .icon-btn-ghost { color: var(--text-muted); }
 .icon-btn-ghost:hover { background: var(--bg-input); color: var(--text-primary); }
+/* ADR 023 D-5: denser Models cards, scoped to #model-list only. The shared
+   .model-list / .model-row / .icon-btn / .status-badge rules are reused by
+   Pipelines, Instances and History, so no density rule edits those in place —
+   every lever below is prefixed with the #model-list id. Compactness comes from
+   padding, gaps and typography only; .icon-btn keeps its 44x44 touch target
+   (D-6) and the ADR 022 transition strip/ring are untouched (D-7). */
+#model-list { gap: 4px; }
+#model-list .model-row { padding: 4px 14px; gap: 10px; }
+#model-list .model-row-sub { margin-top: 1px; }
 .model-transitional { font-size: 0.78rem; font-style: italic; padding: 0 4px; }
 /* Decorative transition indicator: the status badge stays the only state word. */
 .model-progress { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 28px; }
@@ -275,6 +284,10 @@ code { font-family: var(--font-mono); font-size: 0.9em; background: var(--bg-inp
 @keyframes modelSpin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) {
     .model-progress-ring { animation: none; border-right-color: var(--text-secondary); }
+    /* ADR 023 D-8: the Models row animates transition:all 0.15s; reduced motion
+       suppresses it. #model-list scoping keeps it off the shared .model-row used
+       by Pipelines. No new animation is introduced anywhere. */
+    #model-list .model-row { transition: none; }
 }
 
 /* Status Badges */
@@ -291,6 +304,22 @@ code { font-family: var(--font-mono); font-size: 0.9em; background: var(--bg-inp
 .status-badge.orphan { background: rgba(155, 89, 182, 0.15); color: #9b59b6; }
 .status-badge.stale { background: rgba(154, 154, 180, 0.12); color: var(--text-muted); }
 .status-badge.pending { background: rgba(96, 165, 250, 0.10); color: var(--info); opacity: 0.8; }
+/* ADR 023 D-3: user-facing state words on the state-word surfaces (Models,
+   Instances table + compact, Pipeline aggregate) must render as stored, so the
+   renamed «Вне GoAl» / «Ожидание» are exempted from the uppercase transform.
+   Scoped by container — never a global .status-badge rule and never a blanket
+   .status-badge.orphan/.pending class rule — so unrelated status badges, the
+   Pipeline chips and the frozen History/Logs hint badges keep text-transform:uppercase. */
+#model-list .status-badge.orphan,
+#model-list .status-badge.pending,
+#adv-instances-body .status-badge.orphan,
+#adv-instances-body .status-badge.pending,
+#instances-compact .status-badge.orphan,
+#instances-compact .status-badge.pending,
+#pipeline-list .model-row-name .status-badge.orphan,
+#pipeline-list .model-row-name .status-badge.pending {
+    text-transform: none;
+}
 .status-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
 .status-dot.online { background: var(--success); }
 .status-dot.offline { background: var(--danger); }
@@ -710,6 +739,11 @@ code { font-family: var(--font-mono); font-size: 0.9em; background: var(--bg-inp
        JS; no viewport-breakpoint override here. */
     .model-row { flex-wrap: wrap; gap: 8px; }
     .model-row-actions { width: 100%; justify-content: flex-end; margin-top: 4px; }
+    /* ADR 023 D-5: the desktop #model-list gap (10px) outranks the shared 8px
+       mobile rule, so the wrapped Models row would grow at <=768px. Restate the
+       one declaration the density contract owns; flex-wrap stays from the rule
+       above. Pipelines keep the shared 8px. */
+    #model-list .model-row { gap: 6px; }
     .form-row { grid-template-columns: 1fr; }
     .modal-box { max-height: 85vh; }
     .filter-bar { flex-wrap: wrap; }

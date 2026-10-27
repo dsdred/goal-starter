@@ -134,6 +134,8 @@ The indicator contains no translatable content, so there is nothing to translate
 | `orphan` | `ORPHAN` / «Сирота» | hint sentence (unchanged — a different string, not the state word) |
 | `stopped` | `STOPPED` / «Остановлен» | Start · Logs · Edit · Delete (unchanged) |
 
+> 2026-10-27, dated supersession note (the row above is ADR 022's published record and is not rewritten): [ADR 023](023-model-card-density-and-status-vocabulary.md) renames the displayed `orphan` state word to «Вне GoAl» / `UNMANAGED` and renders it as stored on the state-word surfaces. The badge stays the only state word in the row, the ring and hint sentence are untouched, and the internal `orphan` token, its CSS class and its i18n key are unchanged.
+
 ## Alternatives considered
 
 | Option | Why not |
