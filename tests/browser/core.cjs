@@ -25,6 +25,14 @@ async function instanceStates(page, modelId) {
   return (res.data || []).filter(i => i.model_id === modelId).map(i => i.state);
 }
 
+// expectedAuthNotice is the only console entry the auth phase tolerates: the
+// browser's own notice for a pre-login 401. Everything else, a dropped
+// connection (net::ERR_CONNECTION_REFUSED) included, stays a defect — nothing
+// may be added to this predicate to silence a failing run.
+function expectedAuthNotice(text) {
+  return /Failed to load resource[^\n]*401 \(Unauthorized\)/.test(text);
+}
+
 module.exports = { BASE };
 
 async function main() {
@@ -340,6 +348,19 @@ async function main() {
       }
     }
 
+    // ═══ SECTION 22b: Retire the auth-OFF page before the intentional restart ═══
+    // This page runs a 3 s refresh loop and a 5 s health probe for its whole
+    // lifetime. Carried across the deliberate stop below it reaches a listener
+    // that is gone and records net::ERR_CONNECTION_REFUSED in the suite's shared
+    // console-error array, which leg 24.1 would report as an auth-phase defect.
+    // Phase A asserts its own console errors at hand-off, then the page is
+    // retired so the auth phase's error scope starts empty.
+    await page.close();
+    await sleep(250); // let any console event already queued behind close() drain
+    suite.log('22.4 Auth-OFF phase leaves no console errors at hand-off', suite.consoleErrors.length === 0,
+      suite.consoleErrors.slice(0, 3).join('; '));
+    const authPhaseErrorBase = suite.consoleErrors.length;
+
     ok = await suite.finish();
 
     // ═══ PHASE B: Auth ON (restart server, same data dir) ═══
@@ -384,10 +405,20 @@ async function main() {
 
       // Pre-login app shell requests returning 401 are expected auth-gating
       // behavior, not defects. Filter them; keep any real JS/resource error.
-      const unexpectedConsole = suite.consoleErrors.filter(e =>
-        !/Failed to load resource[^\n]*401 \(Unauthorized\)/.test(e));
+      // Only entries recorded after the auth-OFF page was retired count here:
+      // that page's own errors were asserted at hand-off (22.4), so nothing
+      // from the deliberate restart can be misattributed to the auth phase.
+      const authPhaseErrors = suite.consoleErrors.slice(authPhaseErrorBase);
+      const unexpectedConsole = authPhaseErrors.filter(e => !expectedAuthNotice(e));
       suite.log('24.1 Auth phase: no unexpected console errors', unexpectedConsole.length === 0,
-        unexpectedConsole.slice(0, 3).join('; ') || `(${suite.consoleErrors.length} expected 401 network notices ignored)`);
+        unexpectedConsole.slice(0, 3).join('; ') || `(${authPhaseErrors.length} expected 401 network notices ignored)`);
+      // Negative control for 24.1's tolerance: it admits pre-login 401 notices
+      // and nothing else, so a dropped connection or a 5xx still fails the leg.
+      suite.log('24.2 Auth-phase tolerance admits only pre-login 401 notices',
+        expectedAuthNotice('Failed to load resource: the server responded with a status of 401 (Unauthorized)') &&
+        !expectedAuthNotice('Failed to load resource: net::ERR_CONNECTION_REFUSED') &&
+        !expectedAuthNotice('Failed to load resource: the server responded with a status of 500 (Internal Server Error)') &&
+        !expectedAuthNotice('pageerror: TypeError: cannot read properties of undefined'));
       ok = (await suite.finish()) && ok;
       await server2.stop();
     } else {
