@@ -10,17 +10,45 @@ const ADMIN_USER = 'admin';
 const ADMIN_PASS = 'testpass123';
 const I18N = { ru: require('../../internal/webui/static/i18n/ru.json'), en: require('../../internal/webui/static/i18n/en.json') };
 
-// modelStripInPage reads the ADR 022 facts off the first My Models row. The orphan
-// branch keeps its hint sentence and must never render the transition marker, which
-// replaces only the state-word branch of the renderer.
-function modelStripInPage() {
+// orphanStripInPage reads the ADR 023 UX V-2.1 T-4′ facts off the first My
+// Models row. The orphan hint is no longer a visible sentence: the strip must be
+// text-free and carry exactly one info control whose tooltip AND accessible name
+// are the dictionary hint, with no native title duplicating it anywhere in the row.
+function orphanStripInPage(hint) {
   const row = document.querySelector('#model-list .model-row');
   if (!row) return null;
   const strip = row.querySelector('.model-row-actions');
+  if (!strip) return null;
+  const triggers = [...strip.querySelectorAll('[data-tooltip]')].filter(el => el.getAttribute('aria-label') === hint);
+  const el = triggers[0] || null;
+  const r = el ? el.getBoundingClientRect() : null;
+  const buttons = [...strip.querySelectorAll('button')];
   return {
-    text: strip ? (strip.textContent || '').trim() : '(no strip)',
+    text: (strip.textContent || '').trim(),
+    hintTextEls: strip.querySelectorAll('.hint-text').length,
     transitional: !!row.querySelector('.model-transitional'),
     marker: !!row.querySelector('.model-progress'),
+    triggerCount: triggers.length,
+    tag: el ? el.tagName : null,
+    type: el ? el.getAttribute('type') : null,
+    tooltip: el ? el.getAttribute('data-tooltip') : null,
+    ariaLabel: el ? el.getAttribute('aria-label') : null,
+    box: r ? { w: Math.round(r.width * 100) / 100, h: Math.round(r.height * 100) / 100 } : null,
+    rowTitles: [...row.querySelectorAll('[title]')].map(n => n.getAttribute('title')),
+    order: buttons.map(b => (b.getAttribute('aria-label') || '').trim()),
+    infoIndex: el ? buttons.indexOf(el) : -1,
+  };
+}
+
+// tipState reads the single canonical tooltip. `count` is the duplicate check:
+// the project has exactly one #goaltip element, never one per trigger.
+function tipState() {
+  const el = document.getElementById('goaltip');
+  return {
+    count: document.querySelectorAll('#goaltip').length,
+    visible: !!el && el.classList.contains('visible'),
+    text: el ? el.textContent : null,
+    ariaHidden: el ? el.getAttribute('aria-hidden') : null,
   };
 }
 
@@ -77,6 +105,93 @@ function instanceOptionInPage(instanceId) {
   const opt = document.querySelector('#log-instance-select option[value="' + instanceId + '"]');
   if (!opt) return null;
   return { value: opt.getAttribute('value'), label: (opt.textContent || '').trim() };
+}
+
+// togglePair performs two activations on ONE DOM node and reports every state
+// around them. Since C-4 (a) makes touch the only toggling modality, this helper
+// serves the touch legs. The models list is rebuilt through innerHTML every
+// 3000 ms (BACKLOG ADR 022 F-3, deliberately out of this design's scope); a
+// rebuild between the activations hides the tooltip through focusout and re-arms
+// the latch on a fresh node, so a locator re-resolved between the two taps would
+// measure the rebuild instead of the control. A detached node therefore
+// invalidates the pair and it is re-run — bounded, and the attempt count is
+// printed, so a list that rebuilt continuously would fail loudly rather than
+// pass quietly.
+async function togglePair(page, locator, state, act, between) {
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const handle = await locator.elementHandle();
+    if (!handle) return { missing: true };
+    try {
+      await act(handle);
+      const first = await page.evaluate(state);
+      const describedFirst = await handle.evaluate(n => n.getAttribute('aria-describedby'));
+      const middle = between ? await between() : null;
+      await act(handle);
+      const second = await page.evaluate(state);
+      const describedSecond = await handle.evaluate(n => n.getAttribute('aria-describedby'));
+      if (!(await handle.evaluate(n => n.isConnected))) continue;
+      return { attempt, first, describedFirst, middle, second, describedSecond };
+    } catch (e) { /* node detached mid-pair: the rebuild won the race, re-run */ }
+  }
+  return { stale: true };
+}
+
+// hoverFlow drives the pointer path on ONE DOM node — enter, a click while the
+// tooltip is shown, leave — and reports the tooltip state and the control's
+// aria-describedby after each step. It is the negative control for C-4: under
+// the superseded activation model that click hid the hint, and under a
+// visibility-based toggle the first click would have dismissed the hover
+// reveal. Same detached-node guard as togglePair (the 3000 ms rebuild).
+async function hoverFlow(page, locator, state) {
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const handle = await locator.elementHandle();
+    if (!handle) return { missing: true };
+    try {
+      await handle.hover();
+      const enter = await page.evaluate(state);
+      const describedEnter = await handle.evaluate(n => n.getAttribute('aria-describedby'));
+      await handle.click();
+      const click = await page.evaluate(state);
+      const describedClick = await handle.evaluate(n => n.getAttribute('aria-describedby'));
+      await page.locator('#model-list .model-row-name').first().hover();
+      const leave = await page.evaluate(state);
+      const describedLeave = await handle.evaluate(n => n.getAttribute('aria-describedby'));
+      if (!(await handle.evaluate(n => n.isConnected))) continue;
+      return { attempt, enter, describedEnter, click, describedClick, leave, describedLeave };
+    } catch (e) { /* node detached mid-sequence: the rebuild won the race, re-run */ }
+  }
+  return { stale: true };
+}
+
+// staleArmFlow reproduces the S-3 state: a touch pointerup that never produces a
+// click leaves the touch-activation flag armed. The pointerup is dispatched
+// synthetically — no real gesture reliably yields "pointerup without click" —
+// while the assertion is on public tooltip behaviour, not on the flag: after the
+// stale arm, Enter must stay inert, so a hover-leave must still hide the hint.
+// The observable fingerprint of an Enter that wrongly acts is the latch: it
+// becomes true, and the mouseout early-return then keeps the hint visible.
+async function staleArmFlow(page, locator, state) {
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const handle = await locator.elementHandle();
+    if (!handle) return { missing: true };
+    try {
+      await handle.hover();
+      const hovered = await page.evaluate(state);
+      await handle.click();
+      const focused = await handle.evaluate(n => {
+        if (n.ownerDocument.activeElement !== n) n.focus();
+        return n.ownerDocument.activeElement === n;
+      });
+      await handle.evaluate(n => n.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerType: 'touch' })));
+      await page.keyboard.press('Enter');
+      const afterEnter = await page.evaluate(state);
+      await page.locator('#model-list .model-row-name').first().hover();
+      const afterLeave = await page.evaluate(state);
+      if (!(await handle.evaluate(n => n.isConnected))) continue;
+      return { attempt, hovered, focused, afterEnter, afterLeave };
+    } catch (e) { /* node detached mid-sequence: the rebuild won the race, re-run */ }
+  }
+  return { stale: true };
 }
 
 async function main() {
@@ -221,11 +336,154 @@ async function main() {
     suite.log('UI: Models page no Start button for orphan model (RU)', mStartBtns === 0, `start buttons=${mStartBtns}`);
     const mRowSub = (await pageRU.locator('#model-list .model-row .model-row-sub').first().textContent().catch(() => '')) || '';
     suite.log('UI: Models page shows orphan PID (RU)', mRowSub.includes(String(helperPid)), mRowSub.trim());
-    const stripRU = await pageRU.evaluate(modelStripInPage);
-    suite.log('UI: Models page orphan hint preserved, no transition marker (RU)',
-      !!stripRU && stripRU.transitional === true && stripRU.marker === false && stripRU.text === I18N.ru['instances.orphan.hint'],
-      stripRU ? `transitional=${stripRU.transitional} marker=${stripRU.marker} strip_text=${JSON.stringify(stripRU.text)} want=${JSON.stringify(I18N.ru['instances.orphan.hint'])}` : 'model row absent');
+    // ═══ ADR 023 UX V-2.1 T-4′ — the hint is an accessible info control (RU) ═══
+    // Replaces the two `strip.textContent === hint` legs of ADR 023 T-4, which
+    // described the superseded presentation. Every expected string is read from
+    // the shipped dictionary; T-2 and the Instances title legs are the controls
+    // proving a broken dictionary cannot make these legs pass vacuously.
+    const ruHint = I18N.ru['instances.orphan.hint'];
+    const stripRU = await pageRU.evaluate(orphanStripInPage, ruHint);
+    suite.log('T-4′ RU Models: the action strip is text-free (no hint sentence, no .hint-text, no marker)',
+      !!stripRU && stripRU.text === '' && stripRU.hintTextEls === 0 &&
+        stripRU.transitional === false && stripRU.marker === false,
+      stripRU ? `strip_text=${JSON.stringify(stripRU.text)} hint_text_els=${stripRU.hintTextEls} transitional=${stripRU.transitional} marker=${stripRU.marker}` : 'model row absent');
+    suite.log('T-4′ RU Models: exactly one info BUTTON carries the hint as tooltip + accessible name, >=44x44',
+      !!stripRU && stripRU.triggerCount === 1 && stripRU.tag === 'BUTTON' && stripRU.type === 'button' &&
+        stripRU.tooltip === ruHint && stripRU.ariaLabel === ruHint && !!stripRU.box &&
+        stripRU.box.w >= 44 && stripRU.box.h >= 44,
+      stripRU ? `triggers=${stripRU.triggerCount} tag=${stripRU.tag} type=${stripRU.type} tooltip=${JSON.stringify(stripRU.tooltip)} box=${stripRU.box ? stripRU.box.w + 'x' + stripRU.box.h : 'null'}` : 'model row absent');
+    suite.log('T-4′ RU Models: no native title in the row carries the hint (the badge title is gone)',
+      !!stripRU && !stripRU.rowTitles.includes(ruHint),
+      stripRU ? `row_titles=${JSON.stringify(stripRU.rowTitles)}` : 'model row absent');
+    suite.log('T-4′ RU Models: Logs/Edit/Delete keep their order after the info control',
+      !!stripRU && stripRU.order.length === 4 && stripRU.infoIndex === 0 &&
+        stripRU.order.slice(1).join('|') === [I18N.ru['models.actions.logs'], I18N.ru['models.actions.edit'], I18N.ru['models.actions.delete']].join('|'),
+      stripRU ? `order=${JSON.stringify(stripRU.order)}` : 'model row absent');
     await H.screenshot(pageRU, ws, 'orphan_models_ru');
+
+    // Keyboard first, from a clean focus origin: Tab must reach the control, focus
+    // must reveal the hint through the canonical focusin path, :focus-visible must
+    // paint the shared outline, Enter and Space must perform no tooltip action,
+    // and the next Tab must follow the DOM order (info -> Logs) while the single
+    // tooltip retargets instead of duplicating.
+    await pageRU.evaluate(() => { if (document.activeElement && document.activeElement.blur) document.activeElement.blur(); });
+    let tabHits = 0, reached = false;
+    for (; tabHits < 160; tabHits++) {
+      await pageRU.keyboard.press('Tab');
+      reached = await pageRU.evaluate(hint => {
+        const a = document.activeElement;
+        return !!a && a.tagName === 'BUTTON' && a.getAttribute('aria-label') === hint;
+      }, ruHint);
+      if (reached) break;
+    }
+    const focusRU = await pageRU.evaluate(() => {
+      const a = document.activeElement;
+      const cs = getComputedStyle(a);
+      return { visible: document.getElementById('goaltip').classList.contains('visible'),
+        text: document.getElementById('goaltip').textContent, described: a.getAttribute('aria-describedby'),
+        outlineStyle: cs.outlineStyle, outlineWidth: cs.outlineWidth, outlineColor: cs.outlineColor };
+    });
+    suite.log('T-4′ RU keyboard: Tab reaches the info control, focus shows the hint, focus-visible paints the shared outline',
+      reached && focusRU.visible && focusRU.text === ruHint && focusRU.described === 'goaltip' &&
+        focusRU.outlineStyle === 'solid' && parseFloat(focusRU.outlineWidth) >= 2,
+      `tab_presses=${tabHits + 1} reached=${reached} visible=${focusRU.visible} described_by=${focusRU.described} outline=${focusRU.outlineStyle}+${focusRU.outlineWidth}+${focusRU.outlineColor}`);
+    await pageRU.keyboard.press('Enter');
+    await pageRU.keyboard.press('Space');
+    const keysRU = await pageRU.evaluate(tipState);
+    suite.log('T-4′ RU keyboard: Enter and Space perform no tooltip action — the focused hint stays visible',
+      keysRU.visible && keysRU.text === ruHint && keysRU.count === 1,
+      `visible=${keysRU.visible} text=${JSON.stringify(keysRU.text)} tooltips=${keysRU.count}`);
+    await pageRU.keyboard.press('Tab');
+    const nextStopRU = await pageRU.evaluate(() => {
+      const a = document.activeElement;
+      return { label: a ? a.getAttribute('aria-label') : null,
+        visible: document.getElementById('goaltip').classList.contains('visible'),
+        text: document.getElementById('goaltip').textContent, count: document.querySelectorAll('#goaltip').length };
+    });
+    suite.log('T-4′ RU keyboard: Tab moves to Logs in DOM order and retargets the one tooltip (no duplicate)',
+      nextStopRU.label === I18N.ru['models.actions.logs'] && nextStopRU.visible &&
+        nextStopRU.text === I18N.ru['models.actions.logs'] && nextStopRU.count === 1,
+      `next=${JSON.stringify(nextStopRU.label)} tip=${JSON.stringify(nextStopRU.text)} tooltips=${nextStopRU.count}`);
+
+    // Blur is the keyboard counterpart of pointer leave: Shift+Tab returns to the
+    // control, focus shows the hint again through focusin, and blurring it must
+    // hide the tooltip and clear aria-describedby.
+    await pageRU.keyboard.down('Shift');
+    await pageRU.keyboard.press('Tab');
+    await pageRU.keyboard.up('Shift');
+    const backRU = await pageRU.evaluate(() => {
+      const a = document.activeElement;
+      return { label: a ? a.getAttribute('aria-label') : null,
+        visible: document.getElementById('goaltip').classList.contains('visible') };
+    });
+    const blurRU = await pageRU.evaluate(() => {
+      const a = document.activeElement;
+      if (a && a.blur) a.blur();
+      const tip = document.getElementById('goaltip');
+      return { visible: tip.classList.contains('visible'), ariaHidden: tip.getAttribute('aria-hidden'),
+        describedBy: a ? a.getAttribute('aria-describedby') : 'none' };
+    });
+    suite.log('T-4′ RU keyboard: focus shows the hint again, blur hides it and clears aria-describedby',
+      backRU.label === ruHint && backRU.visible && !blurRU.visible && blurRU.describedBy === null,
+      `back=${JSON.stringify(backRU.label)} shown=${backRU.visible} after_blur=${blurRU.visible} aria_hidden=${blurRU.ariaHidden} described_by=${JSON.stringify(blurRU.describedBy)}`);
+
+    // Mouse: hover owns the tooltip. Pointer enter shows it, a click while it is
+    // shown is inert — it neither shows nor hides — and pointer leave hides it
+    // and clears aria-describedby.
+    const infoBtnRU = pageRU.locator('#model-list .model-row-actions button[data-tooltip]').first();
+    const mouseRU = await hoverFlow(pageRU, infoBtnRU, tipState);
+    const enterRU = mouseRU.enter || {};
+    const clickRU = mouseRU.click || {};
+    const leaveRU = mouseRU.leave || {};
+    suite.log('T-4′ RU mouse: pointer enter shows the hint, the click neither shows nor hides it, pointer leave hides it',
+      !mouseRU.missing && !mouseRU.stale && enterRU.visible && enterRU.text === ruHint &&
+        mouseRU.describedEnter === 'goaltip' && clickRU.visible && clickRU.text === ruHint &&
+        mouseRU.describedClick === 'goaltip' && !leaveRU.visible && leaveRU.ariaHidden === 'true' &&
+        mouseRU.describedLeave === null && enterRU.count === 1,
+      mouseRU.enter
+        ? `attempts=${mouseRU.attempt} enter=${enterRU.visible}/${JSON.stringify(enterRU.text)} described=${mouseRU.describedEnter} click=${clickRU.visible} described_after_click=${mouseRU.describedClick} leave=${leaveRU.visible} described_after_leave=${mouseRU.describedLeave} tooltips=${enterRU.count}`
+        : `flow invalid: ${JSON.stringify(mouseRU)}`);
+    await pageRU.evaluate(() => { if (document.activeElement && document.activeElement.blur) document.activeElement.blur(); });
+
+    // S-3 (2026-10-28): a touch pointerup that produced no click must not turn
+    // the next keyboard activation into a tooltip action. Enter has no pointer,
+    // so only the stale flag could arm it — see staleArmFlow for the fingerprint.
+    const staleRU = await staleArmFlow(pageRU, infoBtnRU, tipState);
+    const staleEnter = staleRU.afterEnter || {};
+    const staleLeave = staleRU.afterLeave || {};
+    suite.log('T-4′ RU keyboard: a touch pointerup with no click does not turn a later Enter into a tooltip action (S-3)',
+      !staleRU.missing && !staleRU.stale && (staleRU.hovered || {}).visible === true && staleRU.focused === true &&
+        staleEnter.visible === true && staleLeave.visible === false && staleLeave.count === 1,
+      staleRU.afterEnter
+        ? `attempts=${staleRU.attempt} hovered=${(staleRU.hovered || {}).visible} focused=${staleRU.focused} after_enter=${staleEnter.visible} after_leave=${staleLeave.visible} tooltips=${staleLeave.count}`
+        : `flow invalid: ${JSON.stringify(staleRU)}`);
+    await pageRU.evaluate(() => { if (document.activeElement && document.activeElement.blur) document.activeElement.blur(); });
+
+    // Touch: there is no hover, so the tap is the reveal and the only dismissal
+    // is a second tap on the same control (Owner-ratified C-4 (a)). The reveal
+    // must outlive the trailing synthetic mouseout Chromium emits after a tap.
+    // A separate hasTouch context keeps the desktop context's modality untouched.
+    const ctxT = await browser.newContext({ viewport: { width: 1280, height: 800 }, locale: 'ru-RU', hasTouch: true });
+    const pageT = await ctxT.newPage();
+    suite.watchPage(pageT);
+    await H.login(pageT, BASE, ADMIN_USER, ADMIN_PASS);
+    await pageT.evaluate(() => window.navigate('models'));
+    await pageT.waitForTimeout(600);
+    const infoBtnT = pageT.locator('#model-list .model-row-actions button[data-tooltip]').first();
+    const touchRU = await togglePair(
+      pageT, infoBtnT, tipState,
+      h => h.tap(),
+      async () => { await pageT.waitForTimeout(400); return pageT.evaluate(tipState); });
+    const tap1 = touchRU.first || {};
+    const tap1b = touchRU.middle || {};
+    const tap2 = touchRU.second || {};
+    await ctxT.close();
+    suite.log('T-4′ RU touch: one tap shows the hint (it survives), a second tap hides it',
+      !!touchRU.first && tap1.visible && tap1.text === ruHint && touchRU.describedFirst === 'goaltip' &&
+        tap1b.visible && !tap2.visible && tap2.count === 1 && touchRU.describedSecond === null,
+      touchRU.first
+        ? `attempts=${touchRU.attempt} tap1=${tap1.visible} tap1+400ms=${tap1b.visible} tap2=${tap2.visible} described=${touchRU.describedFirst} described_after=${touchRU.describedSecond} tooltips=${tap2.count}`
+        : `pair invalid: ${JSON.stringify(touchRU)}`);
 
     // ═══ ADR 023 T-4/T-5/T-8/T-9 — renamed vocabulary and casing, per surface (RU) ═══
     // Every expected string is read from the shipped dictionary, never hardcoded:
@@ -349,10 +607,31 @@ async function main() {
       mBadgeEnVis ? `text="${(await mBadgeEn.textContent()).trim()}"` : 'not visible');
     const mStartBtnsEn = await pageRU.locator('#model-list .model-row button[aria-label="Start"]').count();
     suite.log('UI: Models page no Start button for orphan model (EN)', mStartBtnsEn === 0, `start buttons=${mStartBtnsEn}`);
-    const stripEN = await pageRU.evaluate(modelStripInPage);
-    suite.log('UI: Models page orphan hint preserved, no transition marker (EN)',
-      !!stripEN && stripEN.transitional === true && stripEN.marker === false && stripEN.text === I18N.en['instances.orphan.hint'],
-      stripEN ? `transitional=${stripEN.transitional} marker=${stripEN.marker} strip_text=${JSON.stringify(stripEN.text)} want=${JSON.stringify(I18N.en['instances.orphan.hint'])}` : 'model row absent');
+    // ADR 023 UX V-2.1 T-4′ in EN (D-11: RU and EN move together) — the same
+    // text-free strip, one info control, one hint, dictionary-derived strings.
+    const enHint = I18N.en['instances.orphan.hint'];
+    const stripEN = await pageRU.evaluate(orphanStripInPage, enHint);
+    suite.log('T-4′ EN Models: the action strip is text-free and carries one info BUTTON with the EN hint',
+      !!stripEN && stripEN.text === '' && stripEN.hintTextEls === 0 && stripEN.marker === false &&
+        stripEN.triggerCount === 1 && stripEN.tag === 'BUTTON' && stripEN.type === 'button' &&
+        stripEN.tooltip === enHint && stripEN.ariaLabel === enHint && !!stripEN.box &&
+        stripEN.box.w >= 44 && stripEN.box.h >= 44 && !stripEN.rowTitles.includes(enHint) &&
+        stripEN.order.length === 4 && stripEN.infoIndex === 0 &&
+        stripEN.order.slice(1).join('|') === [I18N.en['models.actions.logs'], I18N.en['models.actions.edit'], I18N.en['models.actions.delete']].join('|'),
+      stripEN ? `strip_text=${JSON.stringify(stripEN.text)} triggers=${stripEN.triggerCount} tooltip=${JSON.stringify(stripEN.tooltip)} box=${stripEN.box ? stripEN.box.w + 'x' + stripEN.box.h : 'null'} order=${JSON.stringify(stripEN.order)} titles=${JSON.stringify(stripEN.rowTitles)}` : 'model row absent');
+    const infoBtnEN = pageRU.locator('#model-list .model-row-actions button[data-tooltip]').first();
+    const mouseEN = await hoverFlow(pageRU, infoBtnEN, tipState);
+    const enterEN = mouseEN.enter || {};
+    const clickEN = mouseEN.click || {};
+    const leaveEN = mouseEN.leave || {};
+    suite.log('T-4′ EN mouse: pointer enter shows the EN hint, the click is inert, pointer leave hides it',
+      !mouseEN.missing && !mouseEN.stale && enterEN.visible && enterEN.text === enHint &&
+        mouseEN.describedEnter === 'goaltip' && clickEN.visible && clickEN.text === enHint &&
+        !leaveEN.visible && mouseEN.describedLeave === null && leaveEN.count === 1,
+      mouseEN.enter
+        ? `attempts=${mouseEN.attempt} enter=${enterEN.visible}/${JSON.stringify(enterEN.text)} click=${clickEN.visible} leave=${leaveEN.visible} described=${mouseEN.describedEnter}/${mouseEN.describedLeave} tooltips=${leaveEN.count}`
+        : `flow invalid: ${JSON.stringify(mouseEN)}`);
+    await pageRU.evaluate(() => { if (document.activeElement && document.activeElement.blur) document.activeElement.blur(); });
     await H.screenshot(pageRU, ws, 'orphan_models_en');
 
     // ═══ ADR 023 T-4/T-5/T-8/T-9 — same contract in EN (D-11: RU and EN move together) ═══

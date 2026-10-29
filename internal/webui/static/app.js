@@ -430,7 +430,8 @@ var ICONS = {
     edit: '<svg viewBox="0 0 24 24"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1 1 0 000-1.41l-2.34-2.34a1 1 0 00-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>',
     del: '<svg viewBox="0 0 24 24"><path d="M6 19c0 1.1.9 2 2 2h8a2 2 0 002-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>',
     kill: '<svg viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>',
-    drag: '<svg viewBox="0 0 24 24"><path d="M11 18c0 1.1-.9 2-2 2s-2-.9-2-2 .9-2 2-2 2 .9 2 2zm-2-8c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0-6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm6 4c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 6c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 6c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2z"/></svg>'
+    drag: '<svg viewBox="0 0 24 24"><path d="M11 18c0 1.1-.9 2-2 2s-2-.9-2-2 .9-2 2-2 2 .9 2 2zm-2-8c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0-6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm6 4c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 6c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 6c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2z"/></svg>',
+    info: '<svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/></svg>'
 };
 
 // parseArgs splits a launch-args string into argv tokens (ADR 013 D7). Shared by
@@ -559,19 +560,21 @@ function renderModels() {
                 '<span class="model-progress-ring" style="animation-delay:-' + tPhase + 'ms"></span>' +
                 '</span>';
         } else if (status === 'orphan') {
-            actionBtns = '<span class="hint-text model-transitional">' + t('instances.orphan.hint') + '</span>';
+            actionBtns = '<button type="button" class="icon-btn icon-btn-ghost"' +
+                ' data-tooltip="' + esc(t('instances.orphan.hint')) + '"' +
+                ' aria-label="' + esc(t('instances.orphan.hint')) + '"' +
+                ' onclick="toggleHint(this)">' + ICONS.info + '</button>';
         } else {
             actionBtns = iconBtn(ICONS.start, t('models.actions.start'), 'success', 'startModel', m.id);
         }
 
         const autoBadge = m.active ? '<span class="autostart-indicator" title="' + esc(t('models.autostart')) + '">A</span>' : '';
-        const badgeTitle = status === 'orphan' ? ' title="' + esc(t('instances.orphan.hint')) + '"' : '';
 
         return '<div class="model-row">' +
             '<div class="model-row-main">' +
                 '<div class="model-row-name">' +
                     autoBadge +
-                    '<span class="status-badge ' + status + '"' + badgeTitle + '>' + t('models.status.' + status) + '</span>' +
+                    '<span class="status-badge ' + status + '">' + t('models.status.' + status) + '</span>' +
                     '<span class="model-row-title">' + esc(m.name) + '</span>' +
                 '</div>' +
                 '<div class="model-row-sub">' +
@@ -2135,6 +2138,15 @@ function friendlyError(err) {
 // above the target when it fits, otherwise below; horizontally clamped to the
 // viewport so the tooltip is never clipped or causes horizontal overflow.
 let tipActiveEl = null;
+// Set by a touch activation of the info control, so that a second touch
+// activation hides the hint. Hover and focus already run tipShow() before the
+// click fires, so tooltip visibility alone cannot tell an activation from a
+// passive reveal.
+let tipHintLatched = false;
+// A click only acts when the tap behind it was a real touch. Armed by a touch
+// pointerup and cleared by every pointerdown, so a mouse click — and Enter or
+// Space, which have no pointer at all — reach toggleHint unarmed and do nothing.
+let tipTouchActivation = false;
 
 function tipShow(target) {
     const tipEl = document.getElementById('goaltip');
@@ -2156,6 +2168,7 @@ function tipShow(target) {
     tipEl.style.left = Math.round(left) + 'px';
     tipEl.style.top = Math.round(top) + 'px';
     target.setAttribute('aria-describedby', 'goaltip');
+    if (tipActiveEl !== target) tipHintLatched = false;
     tipActiveEl = target;
 }
 
@@ -2164,10 +2177,20 @@ function tipHide() {
     if (!tipEl) return;
     tipEl.classList.remove('visible');
     tipEl.setAttribute('aria-hidden', 'true');
+    tipHintLatched = false;
     if (tipActiveEl) {
         tipActiveEl.removeAttribute('aria-describedby');
         tipActiveEl = null;
     }
+}
+
+function toggleHint(el) {
+    const fromTouch = tipTouchActivation;
+    tipTouchActivation = false;
+    if (!el || !fromTouch) return;
+    if (tipActiveEl === el && tipHintLatched) { tipHide(); return; }
+    tipShow(el);
+    tipHintLatched = true;
 }
 
 function tipTargetFromEvent(e) {
@@ -2181,10 +2204,22 @@ function bindTooltipSystem() {
         if (tEl && tEl !== tipActiveEl) tipShow(tEl);
     });
     document.addEventListener('mouseout', function (e) {
-        if (!tipActiveEl) return;
+        // A tap emits a mouseover/mouseout pair around the gesture, and the
+        // trailing mouseout is Chromium restoring the pre-tap hover target even
+        // though the finger never left the control. A touch-activated hint
+        // therefore outlives a hover-leave; a second touch activation hides it.
+        if (!tipActiveEl || tipHintLatched) return;
         const related = tipTargetFromEvent({ target: e.relatedTarget });
         if (related !== tipActiveEl) tipHide();
     });
+    // Touch is the only modality that toggles (C-4 (a)): pointerup arms the
+    // activation for a touch pointer, pointerdown and keydown disarm it, so a
+    // mouse click and a keyboard activation reach toggleHint unarmed and
+    // hover/focus alone own the tooltip. keydown also clears a flag left armed by
+    // a touch pointerup that never produced a click.
+    document.addEventListener('pointerdown', function () { tipTouchActivation = false; });
+    document.addEventListener('keydown', function () { tipTouchActivation = false; });
+    document.addEventListener('pointerup', function (e) { tipTouchActivation = e.pointerType === 'touch'; });
     document.addEventListener('focusin', function (e) {
         const tEl = tipTargetFromEvent(e);
         if (tEl && tEl !== tipActiveEl) tipShow(tEl);
@@ -2893,6 +2928,7 @@ window.closeCleanup = closeCleanup;
 window.confirmCleanup = confirmCleanup;
 window.toggleDrawer = toggleDrawer;
 window.closeDrawer = closeDrawer;
+window.toggleHint = toggleHint;
 window.openSettingsEdit = openSettingsEdit;
 window.closeSettingsEdit = closeSettingsEdit;
 window.saveSettingsEdit = saveSettingsEdit;
