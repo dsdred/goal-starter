@@ -742,7 +742,8 @@ code { font-family: var(--font-mono); font-size: 0.9em; background: var(--bg-inp
     /* ADR 023 D-5: the desktop #model-list gap (10px) outranks the shared 8px
        mobile rule, so the wrapped Models row would grow at <=768px. Restate the
        one declaration the density contract owns; flex-wrap stays from the rule
-       above. Pipelines keep the shared 8px. */
+       above. Pipelines restate their own gap in the #pipeline-list block at the
+       end of this file (UX-PIPELINE-LIST-DENSITY). */
     #model-list .model-row { gap: 6px; }
     .form-row { grid-template-columns: 1fr; }
     .modal-box { max-height: 85vh; }
@@ -788,4 +789,37 @@ code { font-family: var(--font-mono); font-size: 0.9em; background: var(--bg-inp
     #model-list .model-row-name { flex: 1 1 100%; min-width: 0; }
     #model-list .model-row-sub { flex: 1 1 120px; min-width: 0; }
     #model-list .model-row-actions { width: auto; margin: 0 0 0 auto; }
+}
+/* UX-PIPELINE-LIST-DENSITY (2026-10-30) — Pipelines get their own density
+   contract, scoped by the #pipeline-list id. Models (#model-list, ADR 023),
+   Instances and History reuse the same .model-list / .model-row / .icon-btn /
+   .status-badge rules, so no shared selector is edited in place and no
+   #model-list declaration is touched. Density comes from padding, gaps and the
+   title cap; .icon-btn keeps its 44x44 target and every action stays visible.
+   The .pl-name 200px cap was the registered truncation symptom: it truncated a
+   long pipeline name even on a wide desktop row. The title is a flex item with
+   min-width:0 and overflow:hidden, so 100% still ellipsizes, never overflows. */
+#pipeline-list { gap: 4px; }
+#pipeline-list .model-row { padding: 4px 14px; gap: 10px; }
+#pipeline-list .model-row-sub { margin-top: 1px; }
+#pipeline-list .pl-name { max-width: 100%; }
+@media (max-width: 768px) {
+    #pipeline-list .model-row { padding: 2px 10px 2px 12px; gap: 2px 6px; }
+    #pipeline-list .model-row-sub { margin-top: 0; }
+    #pipeline-list .model-row-actions { margin-top: 0; }
+}
+/* Progressive merge at 480-768px: the wrapper produces no box, so the name owns
+   the first line and the chips and the action strip share the second. This
+   removes the full-width action line that made the card tall below 769px.
+   Lower bound measured on four fixture shapes (2/6 entries, 3/4-button strips):
+   at 477px the four-button six-entry strip squeezes the chips to one per line
+   (194.02px row against 128.08px unmerged); at 478px it drops to three lines
+   (111.56px) and every shape shrinks, so 480 is declared with 2px of local
+   slack. No `order` is used and no element moves in the DOM: reading and tab
+   order stay name -> chips -> actions. */
+@media (min-width: 480px) and (max-width: 768px) {
+    #pipeline-list .model-row-main { display: contents; }
+    #pipeline-list .model-row-name { flex: 1 1 100%; min-width: 0; }
+    #pipeline-list .model-row-sub { flex: 1 1 120px; min-width: 0; }
+    #pipeline-list .model-row-actions { width: auto; margin: 0 0 0 auto; }
 }

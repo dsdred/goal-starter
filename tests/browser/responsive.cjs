@@ -61,6 +61,18 @@ async function main() {
     name: 'Resp Isolation Pipeline',
     models: [{ model_id: m2.data.id }, { model_id: m3.data.id }],
   });
+  // UX-PIPELINE-LIST-DENSITY: the registered symptom was `.pl-name{max-width:200px}`
+  // truncating a long pipeline name even on a wide desktop row, so the fixture has
+  // to be wider than 200px at 14px/600 weight yet narrower than the desktop row's
+  // content box — otherwise "untruncated at 1440" could not distinguish the two
+  // contracts. Same two stopped models as the isolation pipeline: same chip count,
+  // same aggregate badge and the same three-button strip, so both rows stay
+  // interchangeable for the shape pins.
+  const LONG_PIPE_NAME = 'Resp Long Pipeline for density measurements — llama.cpp community build 2026-08 stable';
+  const pipeLong = await api('POST', '/api/v1/pipelines', {
+    name: LONG_PIPE_NAME,
+    models: [{ model_id: m2.data.id }, { model_id: m3.data.id }],
+  });
 
   const suite = H.newSuite('RESPONSIVE (monotonic 768px contract)');
   suite.log('Seed: model A created', m1.status === 201, `status=${m1.status}`);
@@ -70,6 +82,7 @@ async function main() {
   suite.log('Seed: instance B stopped (history entry)', bStop.status === 200);
   suite.log('Seed: model C created', m3.status === 201, `status=${m3.status}`);
   suite.log('Seed: isolation pipeline created', pipe.status === 201, `status=${pipe.status} id=${pipe.data && pipe.data.id}`);
+  suite.log('Seed: long-name pipeline created', pipeLong.status === 201, `status=${pipeLong.status} id=${pipeLong.data && pipeLong.data.id}`);
 
   const instList = await api('GET', '/api/v1/instances');
   const live = (instList.data || []).filter(i => i.state === 'running' || i.state === 'starting' || i.state === 'orphan');
@@ -393,19 +406,24 @@ async function main() {
     await page.waitForTimeout(200);
 
     // ═══ ADR 023 — Models density, Pipeline isolation, casing scope (T-5, T-7) ═══
-    // Baseline literals are the shipped declarations at c3002ec: `.model-list`
+    // Models baseline literals are the shipped declarations at c3002ec: `.model-list`
     // gap 6px (style.css:231), `.model-row` gap 12px / padding 9px 14px (:232-236)
-    // and the ≤768px `.model-row{gap:8px}` (:740). Pipelines still reuse them
-    // verbatim, so a Pipeline card that drifts from these values means the
-    // #model-list density block leaked onto the shared pattern (violates Q2/D-4).
+    // and the ≤768px `.model-row{gap:8px}` (:740). ADR 023 scoped its density to
+    // #model-list and UX-PIPELINE-LIST-DENSITY scoped a separate contract to
+    // #pipeline-list, so each row is pinned to ITS OWN block: drift in either
+    // direction means one contract leaked onto the other list.
     const BASELINE_CARD = { padding: '9px 14px', gap: '12px', listGap: '6px' };
-    const BASELINE_CARD_MOBILE = { padding: '9px 14px', gap: '8px', listGap: '6px' };
     const DENSE_CARD = { padding: '4px 14px', gap: '10px', listGap: '4px' };
     // UX V-2.1 A-3: the shipped V-2 density at <=768px, which the A-3 step replaces.
     // Every field is substituted inline for the A/B, including the two margin-top
     // values A-3 zeroes, so the measured delta is the A-3 step alone.
     const V2_CARD_MOBILE = { padding: '4px 14px', gap: '6px', listGap: '4px', subMarginTop: '1px', actionsMarginTop: '4px' };
     const DENSE_CARD_MOBILE = { padding: '2px 10px 2px 12px', gap: '2px 6px', listGap: '4px' };
+    // UX-PIPELINE-LIST-DENSITY contract (the #pipeline-list block at the end of
+    // style.css) and its progressive merge band.
+    const PIPELINE_CARD = { padding: '4px 14px', gap: '10px', listGap: '4px' };
+    const PIPELINE_CARD_MOBILE = { padding: '2px 10px 2px 12px', gap: '2px 6px', listGap: '4px' };
+    const PIPELINE_MERGE = { min: 480, max: 768 };
 
     const measureCard = (id, base) => page.evaluate((a) => {
       window.scrollTo(0, 0);
@@ -477,15 +495,46 @@ async function main() {
     await page.evaluate(() => window.navigate('pipelines'));
     await page.waitForTimeout(600);
     const pipeDesktop = await measureCard('pipeline-list', BASELINE_CARD);
+    const pipeLongTitle = await page.evaluate((longName) => {
+      window.scrollTo(0, 0);
+      const row = [...document.querySelectorAll('#pipeline-list .model-row')]
+        .find(r => { const t = r.querySelector('.model-row-title'); return !!t && t.textContent.trim() === longName; });
+      if (!row) return null;
+      const title = row.querySelector('.model-row-title');
+      const nameWrap = row.querySelector('.model-row-name');
+      const cs = getComputedStyle(title);
+      const tRect = title.getBoundingClientRect(), rRect = row.getBoundingClientRect();
+      const nRect = nameWrap.getBoundingClientRect();
+      return {
+        text: title.textContent.trim(),
+        maxWidth: cs.maxWidth, textOverflow: cs.textOverflow, whiteSpace: cs.whiteSpace,
+        width: Math.round(title.clientWidth * 100) / 100,
+        scrollW: title.scrollWidth,
+        nameWidth: Math.round(nRect.width * 100) / 100,
+        truncated: title.scrollWidth > title.clientWidth + 1,
+        insideNameBox: tRect.left >= nRect.left - 0.5 && tRect.right <= nRect.right + 0.5,
+        insideRow: tRect.left >= rRect.left - 0.5 && tRect.right <= rRect.right + 0.5,
+      };
+    }, LONG_PIPE_NAME);
+    await H.screenshot(page, ws, 'pipelines-density-1440');
     await page.evaluate(() => window.navigate('models'));
     await page.waitForTimeout(600);
     const modelsDesktop = await measureCard('model-list', BASELINE_CARD);
 
-    suite.log('T-5 Pipeline card keeps the baseline density (padding/gap/list gap == c3002ec)',
-      !!pipeDesktop && pipeDesktop.padding === BASELINE_CARD.padding && pipeDesktop.gap === BASELINE_CARD.gap &&
-        pipeDesktop.listGap === BASELINE_CARD.listGap,
+    suite.log('PLD-1 Pipeline card carries the #pipeline-list density block (padding/gap/list gap)',
+      !!pipeDesktop && pipeDesktop.padding === PIPELINE_CARD.padding && pipeDesktop.gap === PIPELINE_CARD.gap &&
+        pipeDesktop.listGap === PIPELINE_CARD.listGap,
       pipeDesktop ? `padding=${pipeDesktop.padding} gap=${pipeDesktop.gap} list_gap=${pipeDesktop.listGap}` : 'pipeline row absent');
-    suite.log('T-5 Pipeline card keeps its baseline icon strip (3 icon buttons at 44x44, stopped pipeline)',
+    suite.log('PLD-1 Pipeline density is a real height reduction on the same card (measured px)',
+      !!pipeDesktop && pipeDesktop.heightWithBaseline > pipeDesktop.height,
+      pipeDesktop ? `baseline=${pipeDesktop.heightWithBaseline}px dense=${pipeDesktop.height}px delta=${(pipeDesktop.heightWithBaseline - pipeDesktop.height).toFixed(2)}px` : 'no measurement');
+    suite.log('PLD-2 The long pipeline name is no longer capped at 200px (untruncated, wider than 200px at 1440)',
+      !!pipeLongTitle && pipeLongTitle.maxWidth !== '200px' && pipeLongTitle.width > 200 &&
+        !pipeLongTitle.truncated && pipeLongTitle.scrollW <= pipeLongTitle.width + 1 &&
+        pipeLongTitle.textOverflow === 'ellipsis' && pipeLongTitle.whiteSpace === 'nowrap' &&
+        pipeLongTitle.insideNameBox && pipeLongTitle.insideRow,
+      pipeLongTitle ? `max_width=${pipeLongTitle.maxWidth} w=${pipeLongTitle.width} scroll=${pipeLongTitle.scrollW} truncated=${pipeLongTitle.truncated} overflow=${pipeLongTitle.textOverflow}/${pipeLongTitle.whiteSpace} inside_row=${pipeLongTitle.insideRow}` : 'long pipeline row absent');
+    suite.log('T-5 Pipeline card keeps its icon strip (3 icon buttons at 44x44, stopped pipeline)',
       !!pipeDesktop && pipeDesktop.iconBoxes.length === 3 && pipeDesktop.iconBoxes.every(b => b.w >= 44 && b.h >= 44),
       pipeDesktop ? `icons=${JSON.stringify(pipeDesktop.iconBoxes.map(b => b.w + 'x' + b.h))}` : 'pipeline row absent');
     suite.log('T-7 Models card carries the density block (padding/gap/list gap)',
@@ -560,13 +609,14 @@ async function main() {
     await page.setViewportSize({ width: 430, height: 932 });
     await page.evaluate(() => window.navigate('pipelines'));
     await page.waitForTimeout(600);
-    const pipeMobile = await measureCard('pipeline-list', BASELINE_CARD_MOBILE);
+    const pipeMobile = await measureCard('pipeline-list', { padding: '9px 14px', gap: '8px' });
     await page.evaluate(() => window.navigate('models'));
     await page.waitForTimeout(600);
     const modelsMobile = await measureCard('model-list', V2_CARD_MOBILE);
-    suite.log('T-5 Pipeline card keeps the baseline mobile density (gap 8px, padding 9px 14px)',
-      !!pipeMobile && pipeMobile.gap === BASELINE_CARD_MOBILE.gap && pipeMobile.padding === BASELINE_CARD_MOBILE.padding,
-      pipeMobile ? `gap=${pipeMobile.gap} padding=${pipeMobile.padding}` : 'pipeline row absent');
+    suite.log('PLD-1 Pipeline card carries the #pipeline-list mobile density block (padding/gap/list gap)',
+      !!pipeMobile && pipeMobile.gap === PIPELINE_CARD_MOBILE.gap && pipeMobile.padding === PIPELINE_CARD_MOBILE.padding &&
+        pipeMobile.listGap === PIPELINE_CARD_MOBILE.listGap,
+      pipeMobile ? `gap=${pipeMobile.gap} padding=${pipeMobile.padding} list_gap=${pipeMobile.listGap}` : 'pipeline row absent');
     suite.log('T-7 @430 (Layout 1): A-3 reduces the row against the shipped V-2 card, on the same element',
       !!modelsMobile && modelsMobile.gap === DENSE_CARD_MOBILE.gap && modelsMobile.padding === DENSE_CARD_MOBILE.padding &&
         modelsMobile.heightWithBaseline > modelsMobile.height,
@@ -584,6 +634,127 @@ async function main() {
     await page.evaluate(() => window.navigate('models'));
     await page.waitForTimeout(400);
     await H.screenshot(page, ws, 'models-density-1440');
+
+    // ═══ UX-PIPELINE-LIST-DENSITY — the measured 480..768 merge band ═══
+    // The pipeline card merges one band lower than Models (480, not 631): the chip
+    // cluster is the second-line content, so the row must already be wide enough to
+    // keep the strip on the chips' line across the 2..6-entry fixtures measured for
+    // this task. Heights are taken twice on the same element — as shipped, then
+    // with the wrapper given a box again and the strip returned to the shared
+    // full-width rule — so "merged" and "unmerged" differ by the merge alone. No
+    // absolute px of the fixture anchor is pinned: the font stack is not portable.
+    console.log('\n═══ UX-PIPELINE-LIST-DENSITY: 480..768 pipeline merge band ═══');
+    const pipeBandProbe = () => {
+      window.scrollTo(0, 0);
+      const round = n => Math.round(n * 100) / 100;
+      const R = el => { const r = el.getBoundingClientRect(); return { left: round(r.left), right: round(r.right), top: round(r.top), bottom: round(r.bottom), w: round(r.width), h: round(r.height) }; };
+      const list = document.getElementById('pipeline-list');
+      const rows = [...list.querySelectorAll('.model-row')];
+      const info = rows.map(row => {
+        const main = row.querySelector('.model-row-main');
+        const name = row.querySelector('.model-row-name');
+        const sub = row.querySelector('.model-row-sub');
+        const title = row.querySelector('.model-row-title');
+        const strip = row.querySelector('.model-row-actions');
+        const mainDisplay = getComputedStyle(main).display;
+        const rowRect = row.getBoundingClientRect();
+        const boxes = [...strip.querySelectorAll('.icon-btn')].map(b => {
+          const r = b.getBoundingClientRect();
+          return { left: round(r.left), right: round(r.right), top: round(r.top), bottom: round(r.bottom), w: round(r.width), h: round(r.height) };
+        });
+        const overlaps = [];
+        for (let i = 0; i < boxes.length; i++) {
+          for (let j = i + 1; j < boxes.length; j++) {
+            const A = boxes[i], B = boxes[j];
+            if (A.left < B.right - 1 && B.left < A.right - 1 && A.top < B.bottom - 1 && B.top < A.bottom - 1) overlaps.push(i + 'x' + j);
+          }
+        }
+        const outsideRow = boxes.filter(b => b.left < rowRect.left - 0.5 || b.right > rowRect.right + 0.5 ||
+          b.top < rowRect.top - 0.5 || b.bottom > rowRect.bottom + 0.5).length;
+        // Cancel any in-flight `transition: all 0.15s` before reading geometry.
+        row.style.transition = 'none';
+        void row.offsetWidth;
+        const height = round(row.getBoundingClientRect().height);
+        main.style.display = 'block';
+        strip.style.width = '100%';
+        strip.style.margin = '0';
+        void row.offsetWidth;
+        const heightUnmerged = round(row.getBoundingClientRect().height);
+        strip.style.width = ''; strip.style.margin = ''; main.style.display = '';
+        row.style.transition = '';
+        const titleCs = title ? getComputedStyle(title) : null;
+        return {
+          mainDisplay,
+          row: { left: round(rowRect.left), right: round(rowRect.right) },
+          name: R(name), sub: R(sub), strip: R(strip), title: title ? R(title) : null,
+          titleText: title ? title.textContent.trim() : '',
+          titleScrollW: title ? title.scrollWidth : -1, titleClientW: title ? title.clientWidth : -1,
+          titleOverflow: titleCs ? titleCs.textOverflow : null, titleWhiteSpace: titleCs ? titleCs.whiteSpace : null,
+          subScrollW: sub.scrollWidth, subClientW: sub.clientWidth,
+          buttons: boxes.length, boxes, overlaps, outsideRow,
+          height, heightUnmerged,
+        };
+      });
+      return { rows: info.length, info, vw: window.innerWidth,
+        docScrollW: document.documentElement.scrollWidth,
+        merged: info.length > 0 && info.every(r => r.mainDisplay === 'contents') };
+    };
+    const pband = {};
+    for (const w of [375, 430, 479, 480, 630, 768, 769]) {
+      await page.setViewportSize({ width: w, height: 900 });
+      await page.evaluate(() => window.navigate('pipelines'));
+      await page.waitForTimeout(350);
+      pband[w] = await page.evaluate(pipeBandProbe);
+    }
+    const prowOf = w => (pband[w] && pband[w].info) || [];
+    const pLong = w => prowOf(w).find(r => r.titleText === LONG_PIPE_NAME) || null;
+    const mergedWs = [480, 630, 768];
+
+    suite.log('PLD-3 The pipeline merge is active exactly at 480..768 and off at 375/430/479/769',
+      [375, 430, 479, 480, 630, 768, 769].every(w => pband[w].rows === 2 &&
+        pband[w].merged === (w >= PIPELINE_MERGE.min && w <= PIPELINE_MERGE.max) &&
+        pband[w].docScrollW === pband[w].vw),
+      [375, 430, 479, 480, 630, 768, 769].map(w =>
+        `${w}:${pband[w].merged ? 'merged' : 'unmerged'}/${pband[w].rows}rows docScrollW=${pband[w].docScrollW}/${pband[w].vw}`).join(' | '));
+    suite.log('PLD-3 @480/@630/@768: the name owns line 1 and the chips and the action strip share line 2',
+      mergedWs.every(w => prowOf(w).length === 2 && prowOf(w).every(r =>
+        r.mainDisplay === 'contents' &&
+        r.strip.top >= r.name.bottom - 0.5 &&
+        r.strip.top < r.sub.bottom && r.strip.bottom > r.sub.top &&
+        r.strip.left >= r.sub.right - 0.5 &&
+        r.outsideRow === 0)),
+      mergedWs.map(w => `${w}: ` + JSON.stringify(prowOf(w).map(r =>
+        `nameB=${r.name.bottom} sub=[${r.sub.left}..${r.sub.right}] strip=[${r.strip.left}..${r.strip.right}]@${r.strip.top}`))).join(' | '));
+    suite.log('PLD-3 @480/@630/@768 (merged branch): the merge itself is the reduction on the same element',
+      mergedWs.every(w => prowOf(w).length === 2 && prowOf(w).every(r => r.heightUnmerged > r.height + 0.5)),
+      mergedWs.map(w => `${w}: merged/unmerged=${JSON.stringify(prowOf(w).map(r => [r.height, r.heightUnmerged]))}`).join(' | '));
+    suite.log('PLD-3 @479 vs @480: the same two rows are shorter once the merge engages (measured delta)',
+      prowOf(479).length === 2 && prowOf(480).length === 2 &&
+        prowOf(479).every((r, i) => prowOf(480)[i].height < r.height - 0.5),
+      `h479=${JSON.stringify(prowOf(479).map(r => r.height))} h480=${JSON.stringify(prowOf(480).map(r => r.height))}`);
+    suite.log('PLD-4 @375/@430/@479/@480/@630/@768/@769: 44x44 targets, no pairwise overlap, inside the row, no page overflow',
+      [375, 430, 479, 480, 630, 768, 769].every(w => {
+        const rows = prowOf(w);
+        return rows.length === 2 &&
+          rows.every(r => r.buttons === 3 && r.boxes.every(b => b.w >= 44 && b.h >= 44) && r.overlaps.length === 0) &&
+          rows.every(r => r.outsideRow === 0) && pband[w].docScrollW === pband[w].vw;
+      }),
+      [375, 430, 479, 480, 630, 768, 769].map(w => `${w}: ` +
+        JSON.stringify(prowOf(w).map(r => `${r.buttons}b/${r.overlaps.length}ov/${r.outsideRow}out/${r.boxes.map(b => b.w + 'x' + b.h).join(',')}`))).join(' | '));
+    suite.log('PLD-2 The long-name title stays readable at every swept width (ellipsis, inside the name box, never overflowing the row)',
+      [375, 430, 479, 480, 630, 768, 769].every(w => {
+        const r = pLong(w);
+        return !!r && r.titleOverflow === 'ellipsis' && r.titleWhiteSpace === 'nowrap' &&
+          r.titleClientW > 0 && r.title.right <= r.name.right + 0.5 && r.title.left >= r.name.left - 0.5 &&
+          r.title.right <= r.row.right + 0.5;
+      }) && !!pipeLongTitle && !pipeLongTitle.truncated,
+      [375, 430, 479, 480, 630, 768, 769].map(w => {
+        const r = pLong(w);
+        return `${w}: ${r ? `${r.titleClientW}/${r.titleScrollW} inside=${r.title.right <= r.name.right + 0.5}` : 'row absent'}`;
+      }).join(' | ') + ` @1440: ${pipeLongTitle ? `${pipeLongTitle.width}/${pipeLongTitle.scrollW} truncated=${pipeLongTitle.truncated}` : 'absent'}`);
+    await page.setViewportSize({ width: 630, height: 900 });
+    await page.waitForTimeout(300);
+    await H.screenshot(page, ws, 'pipelines-density-630');
 
     // ═══ ADR 023 T-6 — touch-target floor at every swept viewport ═══
     // UX V-2.1 amends the clause: below 631 px the strip must not overlap the
@@ -822,13 +993,13 @@ async function main() {
       docWidths.every(d => d.rows > 0 && d.merged === (d.w >= 631 && d.w <= 768)),
       JSON.stringify(docWidths.map(d => `${d.w}:${d.merged ? 'merged' : 'unmerged'}`)));
 
-    // T-14 structural scan of the served stylesheet: exactly one
-    // `display: contents`, naming #model-list .model-row-main, inside the
-    // (min-width: 631px) and (max-width: 768px) media query, and after the <=768
-    // density step — the source-order dependency D-5 records.
+    // T-14 structural scan of the served stylesheet: `display: contents` is a
+    // closed set of two declarations, one per list, each inside its own media
+    // query and after its own <=768 density step — the source-order dependency
+    // D-5 records, doubled by UX-PIPELINE-LIST-DENSITY.
     const mergeDecl = await page.evaluate(() => {
       const hits = [];
-      let order = 0, densityOrder = -1, contentsTotal = 0, contentsSelectors = [];
+      let order = 0, contentsTotal = 0, contentsSelectors = [], densityOrder = {};
       const walk = (rules, media) => {
         for (const r of rules) {
           if (r.media) { walk(r.cssRules, r.conditionText || r.media.mediaText); continue; }
@@ -836,13 +1007,11 @@ async function main() {
           if (r.style && r.style.display === 'contents') {
             contentsTotal++;
             contentsSelectors.push(r.selectorText);
-            if (r.selectorText && r.selectorText.indexOf('#model-list .model-row-main') !== -1) {
-              hits.push({ selector: r.selectorText, media, order });
-            }
+            hits.push({ selector: r.selectorText, media, order });
           }
-          if (r.selectorText === '#model-list .model-row' && r.style &&
-              r.style.paddingTop === '2px' && r.style.paddingLeft === '12px') {
-            densityOrder = order;
+          if (r.selectorText && r.style && r.style.paddingTop === '2px' && r.style.paddingLeft === '12px' &&
+              /^#(model|pipeline)-list \.model-row$/.test(r.selectorText)) {
+            densityOrder[r.selectorText] = order;
           }
         }
       };
@@ -851,17 +1020,23 @@ async function main() {
       }
       return { hits, contentsTotal, contentsSelectors, densityOrder };
     });
-    const mergeHit = mergeDecl.hits[0] || null;
     const normMedia = s => (s || '').replace(/\s+/g, ' ').trim();
-    suite.log('T-14 Stylesheet: exactly one display:contents declaration exists and it names #model-list .model-row-main',
-      mergeDecl.contentsTotal === 1 && mergeDecl.hits.length === 1,
-      `display_contents=${mergeDecl.contentsTotal} selectors=${JSON.stringify(mergeDecl.contentsSelectors)} hits=${JSON.stringify(mergeDecl.hits)}`);
-    suite.log('T-14 Stylesheet: that declaration lives in (min-width: 631px) and (max-width: 768px)',
-      !!mergeHit && normMedia(mergeHit.media) === normMedia('(min-width: 631px) and (max-width: 768px)'),
-      mergeHit ? `media=${JSON.stringify(mergeHit.media)}` : 'declaration absent');
-    suite.log('T-14 Stylesheet: the merge block follows the <=768px density block in source order',
-      !!mergeHit && mergeDecl.densityOrder > 0 && mergeHit.order > mergeDecl.densityOrder,
-      `density_order=${mergeDecl.densityOrder} merge_order=${mergeHit && mergeHit.order}`);
+    const MERGE_DECLS = [
+      { selector: '#model-list .model-row-main', media: '(min-width: 631px) and (max-width: 768px)', density: '#model-list .model-row' },
+      { selector: '#pipeline-list .model-row-main', media: '(min-width: 480px) and (max-width: 768px)', density: '#pipeline-list .model-row' },
+    ];
+    const mergeHitFor = sel => mergeDecl.hits.find(h => h.selector === sel) || null;
+    suite.log('T-14 Stylesheet: display:contents is a closed set of two declarations, one per list',
+      mergeDecl.contentsTotal === MERGE_DECLS.length &&
+        [...mergeDecl.contentsSelectors].sort().join('|') === MERGE_DECLS.map(d => d.selector).sort().join('|'),
+      `display_contents=${mergeDecl.contentsTotal} selectors=${JSON.stringify(mergeDecl.contentsSelectors)}`);
+    suite.log('T-14 Stylesheet: each merge declaration lives in its own documented media query',
+      MERGE_DECLS.every(d => !!mergeHitFor(d.selector) && normMedia(mergeHitFor(d.selector).media) === normMedia(d.media)),
+      MERGE_DECLS.map(d => `${d.selector}: ${JSON.stringify(mergeHitFor(d.selector) && mergeHitFor(d.selector).media)}`).join(' | '));
+    suite.log('T-14 Stylesheet: each merge block follows its own <=768px density block in source order',
+      MERGE_DECLS.every(d => !!mergeHitFor(d.selector) && mergeDecl.densityOrder[d.density] > 0 &&
+        mergeHitFor(d.selector).order > mergeDecl.densityOrder[d.density]),
+      MERGE_DECLS.map(d => `${d.selector}: density_order=${mergeDecl.densityOrder[d.density]} merge_order=${mergeHitFor(d.selector) && mergeHitFor(d.selector).order}`).join(' | '));
 
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.waitForTimeout(200);
