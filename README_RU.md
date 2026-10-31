@@ -1,5 +1,9 @@
 # GoAl
 
+[![XERJ Corpus Hub contributor](https://hub.xerj.org/contributors/dsdred/badge.svg)](https://hub.xerj.org/contributors/dsdred)
+
+Запись в корпусе: [dsdred--goal-starter](https://hub.xerj.org/corpus/dsdred--goal-starter)
+
 GoAl — лёгкий однофайловый менеджер для локальных AI-рантаймов и моделей. Один бинарник для Windows amd64 и Linux amd64.
 
 **Архитектура:** Runtime ← Model → Instance. Runtime — исполнительный движок (executable, workingDir, environment). Model — настроенное определение запуска (runtime + args + environment). Instance — конкретный процесс (PID, state, logs). Физические GGUF/MMProj-файлы — обычные аргументы запуска, не отдельные сущности.
@@ -23,6 +27,17 @@ GoAl — лёгкий однофайловый менеджер для лока�
 
 - [GoAl первый запуск](https://www.youtube.com/watch?v=FtXztKYLU0Y)
 - [Запуск Yue2-3B на локальной видеокарте](https://youtu.be/dwHAaJy7dPw)
+- [Запуск в GoAl одной модели Yue2 на двух портах в два потока при помощи пайплайнов](https://www.youtube.com/watch?v=SnbJbUcMPm4)
+
+## Проверенная ASR-конфигурация (по данным владельца)
+
+- **Движок:** NeMo-Speech.cpp
+- **Модель:** `NVIDIA-Nemotron-3.5-Transcribe-30B-A4B-AD-Q2_0_M.gguf`
+- **Запуск:** через GoAl
+- **Проверенные языки:** русский и английский
+- **Наблюдения владельца:** распознавание речи работает успешно, субъективное качество распознавания очень хорошее, выполнение быстрое
+
+Это практический тест, о котором сообщил владелец, а не стандартизированный бенчмарк. Данные об оборудовании, пропускной способности, задержках, real-time factor, метрики WER/CER и потреблении памяти не заявляются, совместимость не гарантируется.
 
 ## Быстрый старт
 

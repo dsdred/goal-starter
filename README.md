@@ -1,5 +1,9 @@
 # GoAl
 
+[![XERJ Corpus Hub contributor](https://hub.xerj.org/contributors/dsdred/badge.svg)](https://hub.xerj.org/contributors/dsdred)
+
+Corpus entry: [dsdred--goal-starter](https://hub.xerj.org/corpus/dsdred--goal-starter)
+
 GoAl is a lightweight, single-binary manager for local AI runtimes and models. One executable for Windows amd64 and Linux amd64.
 
 **Architecture:** Runtime ← Model → Instance. A Runtime is an execution engine (executable, working directory, environment). A Model is a configured launch definition (runtime + launch arguments + environment). An Instance is a concrete process launch (PID, state, logs). Physical GGUF/MMProj files are ordinary launch arguments, not separate entities.
@@ -25,6 +29,17 @@ GoAl is a lightweight, single-binary manager for local AI runtimes and models. O
 
 - [GoAl первый запуск](https://www.youtube.com/watch?v=FtXztKYLU0Y)
 - [Запуск Yue2-3B на локальной видеокарте](https://youtu.be/dwHAaJy7dPw)
+- [Running One Yue2 Model on Two Ports with Two Parallel Streams Using GoAl Pipelines](https://www.youtube.com/watch?v=SnbJbUcMPm4)
+
+## Verified ASR configuration (Owner-reported)
+
+- **Engine:** NeMo-Speech.cpp
+- **Model:** `NVIDIA-Nemotron-3.5-Transcribe-30B-A4B-AD-Q2_0_M.gguf`
+- **Execution:** launched through GoAl
+- **Languages tested:** Russian and English
+- **Owner observations:** successful speech recognition, very good subjective recognition quality, fast execution
+
+This is an Owner-reported practical test, not a standardized benchmark. No hardware, throughput, latency, real-time factor, WER/CER or memory figures are claimed, and no compatibility guarantee is implied.
 
 ## Quick start
 
