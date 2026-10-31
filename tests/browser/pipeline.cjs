@@ -917,6 +917,153 @@ async function main() {
     await page.evaluate(() => window.setTheme('system'));
     await page.waitForTimeout(200);
 
+    // ═══ SECTION 12e: component-block density (UX-PIPELINE-EDITOR-DENSITY) ═══
+    // The registration's hard boundary: a density contract may change spacing,
+    // not ordering semantics, persistence, keyboard operation of the ordering
+    // controls, or touch-target sizes. These legs pin the density contract and
+    // the preserved obligations on the same DOM the Owner's acceptance covers.
+    const densityProbe = () => page.evaluate(() => {
+      const round = n => Math.round(n * 100) / 100;
+      const cs = el => getComputedStyle(el);
+      const R = el => {
+        if (!el) return null;
+        const r = el.getBoundingClientRect();
+        return { x: round(r.x), y: round(r.y), w: round(r.width), h: round(r.height), bottom: round(r.bottom), right: round(r.right), cy: round(r.y + r.height / 2) };
+      };
+      const block = document.querySelector('#pl-models-container .pl-block');
+      const head = block.querySelector('.pl-block-head');
+      const strip = block.querySelector('.pl-block-actions');
+      const segSpan = block.querySelector('.pl-seg-item span');
+      const ta = block.querySelector('.pl-args-input');
+      const actSizes = [...block.querySelectorAll('.pl-act')].map(a => {
+        const r = a.getBoundingClientRect();
+        return round(r.width) + 'x' + round(r.height);
+      });
+      const bR = block.getBoundingClientRect();
+      return {
+        block: R(block),
+        head: R(head),
+        drag: R(block.querySelector('.pl-drag')),
+        step: R(block.querySelector('.pl-step')),
+        select: R(block.querySelector('.pl-model-select')),
+        strip: R(strip),
+        blockPadY: cs(block).paddingTop + '/' + cs(block).paddingBottom,
+        blockGap: cs(block).rowGap,
+        headRowGap: cs(head).rowGap,
+        contentRight: round(bR.right - parseFloat(cs(block).paddingRight) - parseFloat(cs(block).borderRightWidth)),
+        contentW: round(bR.width - parseFloat(cs(block).paddingLeft) - parseFloat(cs(block).paddingRight) -
+          parseFloat(cs(block).borderLeftWidth) - parseFloat(cs(block).borderRightWidth)),
+        actSizes,
+        segPad: segSpan ? cs(segSpan).padding : null,
+        textarea: ta ? { rows: ta.rows, w: round(ta.getBoundingClientRect().width), h: round(ta.getBoundingClientRect().height), resize: cs(ta).resize, value: ta.value } : null,
+        headOrder: [...head.children].map(el => el.className.split(' ')[0]).join(','),
+        argsLabel: (block.querySelector('.pl-args-label') || {}).textContent || '',
+        docOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth + 1,
+      };
+    });
+
+    // Desktop: the block is one head row plus the args row, with the shipped
+    // control sizes untouched.
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.waitForTimeout(300);
+    await page.click('#view-pipelines .view-header .btn-primary');
+    await page.waitForTimeout(300);
+    const dD = await densityProbe();
+    suite.log('12e.1 Desktop block is dense: <=100px tall, 8px vertical padding, 6px inner gap',
+      dD.block.h <= 100 && dD.blockPadY === '8px/8px' && dD.blockGap === '6px',
+      `h=${dD.block.h} pad=${dD.blockPadY} gap=${dD.blockGap}`);
+    const dCenters = [dD.drag.cy, dD.step.cy, dD.select.cy, dD.strip.cy];
+    suite.log('12e.2 Desktop head keeps drag, order, select and the action strip on one row',
+      Math.max(...dCenters) - Math.min(...dCenters) <= 3, `centers=${JSON.stringify(dCenters)}`);
+    suite.log('12e.3 Desktop touch targets and segmented control unchanged',
+      dD.actSizes.length === 3 && dD.actSizes.every(s => s === '38x38') && dD.segPad === '6px 14px',
+      `acts=${JSON.stringify(dD.actSizes)} segPad=${dD.segPad}`);
+    suite.log('12e.4 Desktop DOM order preserved (drag -> step -> select -> actions)',
+      dD.headOrder === 'pl-drag,pl-step,pl-model-select,pl-block-actions', `order=${dD.headOrder}`);
+
+    // Mobile: the select shares row 1 with the order badge instead of taking a
+    // full line of its own; the action strip wraps to row 2, inside the block.
+    await page.setViewportSize({ width: 430, height: 900 });
+    await page.waitForTimeout(300);
+    const mD = await densityProbe();
+    suite.log('12e.5 Mobile block is dense: <=140px tall, head <=80px, same padding/gap rhythm',
+      mD.block.h <= 140 && mD.head.h <= 80 && mD.blockPadY === '8px/8px' && mD.blockGap === '6px',
+      `h=${mD.block.h} headH=${mD.head.h} pad=${mD.blockPadY} gap=${mD.blockGap}`);
+    suite.log('12e.6 Mobile: select shares row 1 with the order badge and stays usable',
+      Math.abs(mD.select.cy - mD.step.cy) <= 2 && mD.select.x >= mD.step.right && mD.select.w >= 120,
+      `selCY=${mD.select.cy} stepCY=${mD.step.cy} selX=${mD.select.x} stepRight=${mD.step.right} selW=${mD.select.w}`);
+    suite.log('12e.7 Mobile: action strip is on row 2, inside the block, right-aligned',
+      mD.strip.y >= mD.select.bottom - 0.5 && mD.strip.bottom <= mD.block.bottom &&
+      mD.strip.right <= mD.contentRight + 1 && mD.strip.right >= mD.contentRight - 1,
+      `stripTop=${mD.strip.y} selBottom=${mD.select.bottom} stripRight=${mD.strip.right} contentRight=${mD.contentRight}`);
+    suite.log('12e.8 Mobile: no horizontal overflow and no control overlap',
+      mD.docOverflow === false && mD.strip.y >= mD.select.bottom - 0.5,
+      `overflow=${mD.docOverflow} stripTop=${mD.strip.y} selBottom=${mD.select.bottom}`);
+    suite.log('12e.9 Mobile touch targets unchanged', mD.actSizes.every(s => s === '38x38'), `acts=${JSON.stringify(mD.actSizes)}`);
+
+    // Two blocks, so move-up on block 1 is enabled and focusable.
+    await page.selectOption('#pl-models-container .pl-block .pl-model-select', idB);
+    await page.click('#pl-models-container .pl-add');
+    await page.waitForTimeout(200);
+    await page.selectOption('#pl-models-container .pl-block:nth-child(2) .pl-model-select', idA);
+    await page.waitForTimeout(100);
+
+    // Keyboard operation of the ordering controls: the reflow keeps the shipped
+    // select/actions order (2/3), so visual order still matches DOM order and Tab
+    // still reaches up/down/remove. Block 1's move-up is disabled at the bound,
+    // so probe block 2.
+    await page.focus('#pl-models-container .pl-block:nth-child(2) .pl-model-select');
+    await page.keyboard.press('Tab');
+    const tabTarget = await page.evaluate(() => {
+      const el = document.activeElement;
+      return el ? (el.className || el.tagName) : 'none';
+    });
+    suite.log('12e.10 Tab from the model select lands on the move-up control',
+      String(tabTarget).includes('pl-act-up'), `active=${tabTarget}`);
+
+    // The ordering controls still operate after the reflow.
+    const beforeMove = await page.evaluate(() => [...document.querySelectorAll('#pl-models-container .pl-block')].map(b => ({
+      sel: b.querySelector('.pl-model-select').value,
+      step: b.querySelector('.pl-step').textContent.trim(),
+    })));
+    await page.locator('#pl-models-container .pl-block').first().locator('.pl-act-down').click();
+    await page.waitForTimeout(200);
+    const afterMove = await page.evaluate(() => [...document.querySelectorAll('#pl-models-container .pl-block')].map(b => ({
+      sel: b.querySelector('.pl-model-select').value,
+      step: b.querySelector('.pl-step').textContent.trim(),
+    })));
+    suite.log('12e.11 Move-down still swaps entries and renumbers the blocks',
+      afterMove[0].sel === beforeMove[1].sel && afterMove[1].sel === beforeMove[0].sel &&
+      afterMove[0].step === '1' && afterMove[1].step === '2',
+      `before=${JSON.stringify(beforeMove)} after=${JSON.stringify(afterMove)}`);
+
+    // The custom-args editor keeps its shipped size and resizability.
+    await segClick(page.locator('#pl-models-container .pl-block').first(), 'custom');
+    await page.waitForTimeout(200);
+    await page.locator('#pl-models-container .pl-args-input').first().fill('--density 1');
+    const mTa = await densityProbe();
+    suite.log('12e.12 Custom-args editor unchanged: 4 rows, resizable, full content width',
+      mTa.textarea && mTa.textarea.rows === 4 && mTa.textarea.resize === 'vertical' &&
+      Math.abs(mTa.textarea.w - mTa.contentW) < 1.5 && mTa.textarea.value === '--density 1',
+      mTa.textarea ? `rows=${mTa.textarea.rows} w=${mTa.textarea.w} contentW=${mTa.contentW} resize=${mTa.textarea.resize}` : 'no textarea');
+
+    // RU/EN: the density contract is language-independent.
+    const ruH = mTa.block.h, ruLabel = mTa.argsLabel;
+    await page.evaluate(async () => { await window.setLanguage('en'); });
+    await page.waitForTimeout(300);
+    const enD = await densityProbe();
+    suite.log('12e.13 RU/EN density parity (same block/head height, translated label)',
+      Math.abs(enD.block.h - ruH) <= 0.5 && Math.abs(enD.head.h - mTa.head.h) <= 0.5 &&
+      enD.argsLabel !== ruLabel && enD.argsLabel.trim().length > 0,
+      `ruH=${ruH} enH=${enD.block.h} ruLabel=${JSON.stringify(ruLabel)} enLabel=${JSON.stringify(enD.argsLabel)}`);
+    await H.screenshot(page, ws, '11-builder-density-430');
+    await page.evaluate(async () => { await window.setLanguage('ru'); });
+    await page.waitForTimeout(200);
+    await page.click('#pipeline-modal .modal-actions .btn-ghost');
+    await page.waitForTimeout(200);
+    await page.setViewportSize({ width: 1920, height: 1080 });
+    await page.waitForTimeout(300);
+
     // ═══ SECTION 12d: Args round-trip to process argv (regression) ═══
     // Proves the full production path end-to-end: UI parseArgs → request DTO →
     // persistence → launch → the exact argv token the CHILD process receives.

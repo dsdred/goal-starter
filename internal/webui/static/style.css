@@ -823,3 +823,22 @@ code { font-family: var(--font-mono); font-size: 0.9em; background: var(--bg-inp
     #pipeline-list .model-row-sub { flex: 1 1 120px; min-width: 0; }
     #pipeline-list .model-row-actions { width: auto; margin: 0 0 0 auto; }
 }
+/* UX-PIPELINE-EDITOR-DENSITY (2026-11-01) - the pipeline editor's component
+   blocks get their own density contract, scoped by the #pipeline-form id. The
+   editor is the only surface that renders .pl-block today, but scoping it keeps
+   a future shared use from inheriting the change and leaves every shared
+   selector unedited. Only spacing moves: block padding 12px 14px -> 8px 14px
+   (8px 12px at <=768px), the head-to-args gap 10px -> 6px, and a 6px row gap
+   inside the head. .pl-act keeps its 38x38 box, the segmented control keeps
+   its padding, and the DOM/tab order (drag -> step -> select -> up/down/remove)
+   is unchanged. Below 769px the select only loses its flex-basis:100% and takes
+   a 0 basis instead, so its intrinsic option width cannot push it onto a line
+   of its own; it shares row 1 with the order badge and the action strip wraps
+   to row 2. Source order: appended after every responsive rule, and the id
+   gives it precedence over them. */
+#pipeline-form .pl-block { padding: 8px 14px; gap: 6px; }
+#pipeline-form .pl-block-head { row-gap: 6px; }
+@media (max-width: 768px) {
+    #pipeline-form .pl-block { padding: 8px 12px; }
+    #pipeline-form .pl-block-head .pl-model-select { order: 2; flex: 1 1 0; }
+}
