@@ -91,6 +91,8 @@ F-7's evidence is deliberately bound per criterion, and the F-7 baseline has **n
 
 **No single F-7 baseline SHA is implied.** The Owner-procedure SHA fixed by D-1 remains `3b22b8f` for A1/A2 and the browser legs; F-7.13 stays bound there. F-7.14 is bound to the later published SHA that first contains and executed the test. The acceptance contract's OPEN state, the F-7 leg's INCONCLUSIVE disposition and MA-06's OPEN state are unaffected by having two bound `[A]` rows at two SHAs.
 
+*(2026-11-03, **D-9** — dated supersession of two sentences above, not a rewrite. "The F-7 baseline has **not** moved to a single new SHA" is superseded: the Owner fixed the acceptance baseline at **`f886b5238ad4bc4a18cd56569fb03fb9835a6f03`** (D-9), superseding **only the SHA value** of D-1. The transfer rule of **C-9** had already fired — `3b22b8f..f886b52` contains four non-`.md` paths (`152a4e4`, `f886b52`), so the `3b22b8f` binding could not be carried forward by assumption. "F-7.13 stays bound there" is therefore superseded in value: **F-7.13 was re-observed PASS** `[A]` at `f886b52`, CI run `41501723581` attempt 1, and now carries a re-observation beside its historical `3b22b8f` observation. The second sentence's point still stands where it does not name a SHA: **F-7.10's `[C]` half is unaffected** — both ADR 016/017 suite blobs are identical at `3b22b8f` and `f886b52` — and F-7.14's binding at `f886b52` is unchanged. Full record: [contract §18.11](ADR021-LIFECYCLE-VISIBILITY-MA-06-BROWSER-ACCEPTANCE.md).)*
+
 ## 8 What this record does not change
 
 - **F-7.13** keeps its PASS at `3b22b8f` / `41244385432` attempt 1, exactly as written; it is not rebound.
@@ -99,6 +101,8 @@ F-7's evidence is deliberately bound per criterion, and the F-7 baseline has **n
 - **The F-7 leg** remains **INCONCLUSIVE**; **MA-06** remains **OPEN**; the acceptance contract remains **OPEN**; Manual Owner Acceptance remains **OPEN / BLOCKED**; ADR 015 remains **FROZEN**.
 - **ADR 021** keeps its status (**Accepted**) and its obligations (T-1 … T-9); this record closes a correction, not a design decision.
 - **No product, test or fixture byte changes**, no acceptance execution, no commit, publication, tag or release is performed by the documentation gate that writes this file.
+
+*(2026-11-03, **D-9** — the two bullets above that name a SHA are superseded in value only. **F-7.13** keeps its PASS at `3b22b8f` / `41244385432` attempt 1 exactly as written, and additionally carries a **re-observation PASS** `[A]` at the new fixed baseline `f886b52` / run `41501723581` attempt 1; "it is not rebound" therefore describes this record's own date. **F-7.1 … F-7.12 and F-7.14** keeps its substance subject to one dated fact: **F-7.14 is PASS** `[A]` at `f886b52` per the acceptance gate recorded above, so it is no longer among the unexecuted criteria; the unexecuted set (F-7.10 among them, `[C]`-only) is enumerated in the [acceptance contract](ADR021-LIFECYCLE-VISIBILITY-MA-06-BROWSER-ACCEPTANCE.md), which is the authoritative row set. Everything else in this section stands unchanged: the F-7 leg remains **INCONCLUSIVE**, **MA-06** remains **OPEN**, the contract remains **OPEN**, Manual Owner Acceptance remains **OPEN / BLOCKED**, ADR 015 remains **FROZEN**, ADR 021 keeps **Accepted** and T-1 … T-9, and this documentation gate changes no product, test or fixture byte.)*
 
 ## 9 Provenance
 
