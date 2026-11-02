@@ -5,11 +5,11 @@ package process_test
 import (
 	"context"
 	"os"
-	"syscall"
 	"testing"
 	"time"
 
 	"github.com/dsdred/goal/internal/process"
+	"golang.org/x/sys/windows"
 )
 
 // TestWindowsJobObject_cleanup verifies that child processes are cleaned up
@@ -63,18 +63,43 @@ verify_cleaned:
 		t.Fatalf("expected exited, got %s", status.State)
 	}
 
-	// Verify the process is actually gone.
-	proc, err := os.FindProcess(pid)
-	if err != nil {
-		t.Fatalf("find process %d: %v", pid, err)
+	// Verify the process is actually gone. os.FindProcess opens a real handle on
+	// Windows, so it fails once the process object has been deleted — that error
+	// is the success path for this assertion. If a handle still opens, the exit
+	// code decides: os.Process.Signal cannot probe liveness on Windows, it only
+	// implements Kill, so a zero-signal probe would fail vacuously.
+	if proc, err := os.FindProcess(pid); err != nil {
+		t.Logf("os.FindProcess(%d) reports the process object is gone: %v", pid, err)
+		return
+	} else {
+		_ = proc.Release()
 	}
-	_ = proc.Signal(os.Interrupt) // Try to signal
-	_ = proc.Signal(nil)          // No-op on nil signal
-	// On Windows, FindProcess always succeeds. Check by sending 0 signal.
-	if err := proc.Signal(syscall.Signal(0)); err == nil {
-		proc.Kill()
+	alive, err := processStillRunning(pid)
+	if err != nil {
+		t.Fatalf("inspect process %d: %v", pid, err)
+	}
+	if alive {
 		t.Fatalf("process %d should not exist", pid)
 	}
+}
+
+// processStillRunning reports whether pid names a live process. A reaped
+// process object cannot be opened at all; one that opens reports STILL_ACTIVE
+// only while it is running.
+func processStillRunning(pid int) (bool, error) {
+	h, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, uint32(pid))
+	if err != nil {
+		if err == windows.ERROR_INVALID_PARAMETER {
+			return false, nil
+		}
+		return false, err
+	}
+	defer windows.CloseHandle(h)
+	var code uint32
+	if err := windows.GetExitCodeProcess(h, &code); err != nil {
+		return false, err
+	}
+	return code == 259, nil // STILL_ACTIVE
 }
 
 // TestWindowsJobObject_nestedChildren verifies that child processes

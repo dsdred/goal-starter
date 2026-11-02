@@ -78,10 +78,14 @@ func (w *windowsControl) AfterStart(pid int) error {
 		return fmt.Errorf("open process %d: %w", pid, err)
 	}
 
-	// Assign process to the job.
-	if err := windows.AssignProcessToJobObject(w.job, h); err != nil {
-		windows.CloseHandle(h)
-		return fmt.Errorf("assign process %d to job: %w", pid, err)
+	// Assign process to the job. The job keeps its own reference, so the
+	// assignment handle must be closed on both paths: leaving it open leaks one
+	// handle per launch and keeps the process object alive after exit, which
+	// makes IsProcessAlive report a terminated PID as alive until GoAl exits.
+	assignErr := windows.AssignProcessToJobObject(w.job, h)
+	windows.CloseHandle(h)
+	if assignErr != nil {
+		return fmt.Errorf("assign process %d to job: %w", pid, assignErr)
 	}
 	w.proc = proc
 	w.procGroup = append(w.procGroup, uint32(pid))
