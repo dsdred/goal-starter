@@ -36,6 +36,13 @@ import (
 //                     Write ready.json after signal registration, then on the
 //                     real OS stop signal write signal.json atomically, sleep
 //                     exit-delay-ms (default 4000) and exit 0
+//   - signal-hold <marker-dir> [safety-ms]
+//                     Write ready.json after signal registration, then on the
+//                     real OS stop signal write signal.json atomically and stay
+//                     alive until release.json appears, then write released.json
+//                     atomically and exit 0. safety-ms (default 120000) bounds a
+//                     stale manual run only; it is not a synchronization
+//                     mechanism, and its expiry exits 1.
 
 func main() {
 	// Check for -sleep <duration> flag (used by supervisor tests).
@@ -87,6 +94,8 @@ func main() {
 		doEnvFile()
 	case "signal-delay":
 		doSignalDelay()
+	case "signal-hold":
+		doSignalHold()
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown mode: %s\n", mode)
 		os.Exit(1)
@@ -166,6 +175,8 @@ func writeFileAtomic(path string, data []byte) error {
 
 const signalDelayDefaultMS = 4000
 
+// signalDelayMarker is the JSON marker shared by the two lifecycle fixtures,
+// signal-delay and signal-hold. ExitDelayMS is empty for the hold mode.
 type signalDelayMarker struct {
 	Event       string `json:"event"`
 	PID         int    `json:"pid"`
@@ -241,6 +252,106 @@ func writeSignalDelayMarker(path string, marker signalDelayMarker) error {
 		return err
 	}
 	return writeFileAtomic(path, append(data, '\n'))
+}
+
+const signalHoldDefaultSafetyMS = 120000
+
+// doSignalHold provides a release-held graceful-shutdown window for lifecycle
+// tests. Unlike signal-delay it does not end on a clock: after the real OS stop
+// signal it records receipt and then stays alive until the test writes
+// release.json, so the interval between "stopping" being published and the
+// process exiting is a barrier rather than a race.
+//
+// Marker protocol, each written atomically:
+//
+//	ready.json     signal handlers registered, process alive
+//	signal.json    real OS stop signal received
+//	released.json  release.json observed, process exiting 0
+//
+// The optional third argument is a safety bound for a stale manual run
+// (default 120000 ms). It is NOT a synchronization mechanism: the test holds
+// the process through release.json, and an expired bound exits 1 so the stop
+// and the test fail loudly instead of observing a truncated window.
+func doSignalHold() {
+	if len(os.Args) < 3 {
+		fmt.Fprintln(os.Stderr, "signal-hold mode: need a marker directory")
+		os.Exit(1)
+	}
+	markerDir := os.Args[2]
+	safetyMS := signalHoldDefaultSafetyMS
+	if len(os.Args) > 3 {
+		n, err := strconv.Atoi(os.Args[3])
+		if err != nil || n <= 0 {
+			fmt.Fprintln(os.Stderr, "signal-hold mode: safety bound must be a positive integer of milliseconds")
+			os.Exit(1)
+		}
+		safetyMS = n
+	}
+	if err := os.MkdirAll(markerDir, 0o755); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
+
+	executable, err := os.Executable()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	timestamp := func() string { return time.Now().UTC().Format(time.RFC3339Nano) }
+
+	ready := signalDelayMarker{
+		Event:      "ready",
+		PID:        os.Getpid(),
+		Executable: executable,
+		Timestamp:  timestamp(),
+	}
+	if err := writeSignalDelayMarker(filepath.Join(markerDir, "ready.json"), ready); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+
+	sig := <-sigCh
+	received := signalDelayMarker{
+		Event:      "signal",
+		PID:        os.Getpid(),
+		Executable: executable,
+		Signal:     sig.String(),
+		Timestamp:  timestamp(),
+	}
+	if err := writeSignalDelayMarker(filepath.Join(markerDir, "signal.json"), received); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+
+	releasePath := filepath.Join(markerDir, "release.json")
+	deadline := time.Now().Add(time.Duration(safetyMS) * time.Millisecond)
+	for {
+		if _, statErr := os.Stat(releasePath); statErr == nil {
+			break
+		} else if !os.IsNotExist(statErr) {
+			fmt.Fprintln(os.Stderr, statErr)
+			os.Exit(1)
+		}
+		if !time.Now().Before(deadline) {
+			fmt.Fprintf(os.Stderr, "signal-hold mode: no release.json within %d ms\n", safetyMS)
+			os.Exit(1)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	released := signalDelayMarker{
+		Event:      "released",
+		PID:        os.Getpid(),
+		Executable: executable,
+		Timestamp:  timestamp(),
+	}
+	if err := writeSignalDelayMarker(filepath.Join(markerDir, "released.json"), released); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
 }
 
 func doStdout() {
