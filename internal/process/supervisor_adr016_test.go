@@ -645,12 +645,38 @@ func TestStart_RunningPersistRetryCancelledByShutdown(t *testing.T) {
 	if inst == nil {
 		t.Fatal("Outcome C keeps the instance in the registry, got nil")
 	}
+	// sup.Status reads the in-memory published view, not the durable store
+	// projection (the cancelled lifecycle context short-circuits the terminal
+	// persist, so the stored record stays starting/0). Both in-memory
+	// observations are contract-valid ADR 016 Outcome C outcomes:
+	//   - starting: the residual state before the wait() goroutine publishes;
+	//   - exited: the terminal state wait() publishes once the real kill
+	//     confirms the process exit (release of residual ownership).
+	// wait() is started before start() returns, so this read has no
+	// happens-before with its terminal publication. The Outcome C proof is
+	// carried by the error sentinels and the retained instance above; the
+	// exactly-once slot release below requires wait() to have confirmed exit.
 	snap, serr := sup.Status(inst.ID)
 	if serr != nil {
 		t.Fatalf("status: %v", serr)
 	}
-	if snap.State != domain.InstanceStateStarting {
-		t.Fatalf("state = %q, want starting (residual)", snap.State)
+	switch snap.State {
+	case domain.InstanceStateStarting:
+		// Pre-wait() residual observation.
+	case domain.InstanceStateExited:
+		// Post-wait() confirmed-exit observation.
+	default:
+		t.Fatalf("state = %q, want starting (pre-wait residual) or exited (post-wait confirmation)", snap.State)
+	}
+	// The durable projection is the stable reference: the cancelled lifecycle
+	// context short-circuits wait()'s terminal persist, so the store still holds
+	// the pre-wait() starting record whichever in-memory view was observed.
+	stored, gerr := store.Get(string(inst.ID))
+	if gerr != nil {
+		t.Fatalf("store.Get: %v", gerr)
+	}
+	if stored.State != string(domain.InstanceStateStarting) || stored.PID != 0 {
+		t.Fatalf("durable record = %s/pid %d, want starting/0 (terminal persist must be cancelled)", stored.State, stored.PID)
 	}
 	// The real kill did terminate the process; wait() confirms exit and
 	// releases the held slot exactly once.
