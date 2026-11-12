@@ -77,6 +77,9 @@ func ValidateEnvPatch(ops []domain.EnvPatchOp) error {
 }
 
 func (s *ModelService) DeleteModel(ctx context.Context, id string) error {
+	if _, err := s.repo.GetModel(id); err != nil {
+		return apierrors.NewAPIError(apierrors.CodeNotFound, "model not found: "+id)
+	}
 	if s.pipelineRef != nil {
 		if names := s.pipelineRef(id); len(names) > 0 {
 			details := make([]string, 0, len(names))
