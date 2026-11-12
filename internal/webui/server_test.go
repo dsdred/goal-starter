@@ -91,6 +91,53 @@ func TestI18nDictionariesParity(t *testing.T) {
 	}
 }
 
+// TestEnvVariableInputsAreLocalized closes the UI-I18N-01 blind spot: a raw
+// placeholder literal in JS-assembled markup matches neither data-i18n nor
+// t('...'), so TestI18nDictionariesParity cannot see it.
+func TestEnvVariableInputsAreLocalized(t *testing.T) {
+	jsSrc, err := fs.ReadFile(staticFS, "static/app.js")
+	if err != nil {
+		t.Fatalf("read embedded app.js: %v", err)
+	}
+	js := string(jsSrc)
+
+	rawAttrRe := regexp.MustCompile(`placeholder="[^"']*"`)
+	for _, m := range rawAttrRe.FindAllString(js, -1) {
+		t.Errorf("app.js has an untranslated placeholder attribute %q", m)
+	}
+	rawAssignRe := regexp.MustCompile(`\.placeholder\s*=\s*['"]`)
+	for _, m := range rawAssignRe.FindAllString(js, -1) {
+		t.Errorf("app.js assigns a raw placeholder literal %q", m)
+	}
+
+	htmlSrc, err := fs.ReadFile(templateFS, "templates/index.html")
+	if err != nil {
+		t.Fatalf("read embedded index.html: %v", err)
+	}
+	addBtnRe := regexp.MustCompile(`<button[^>]*onclick="add(?:Wiz)?EnvRow\([^"]*\)"[^>]*>`)
+	buttons := addBtnRe.FindAllString(string(htmlSrc), -1)
+	if len(buttons) != 3 {
+		t.Fatalf("env add buttons = %d, want 3 (wizard, runtime create, runtime edit)", len(buttons))
+	}
+	for _, b := range buttons {
+		if !strings.Contains(b, `data-i18n="wizard.env.add"`) {
+			t.Errorf("env add button is not localized: %s", b)
+		}
+	}
+
+	ru := loadI18nDict(t, "ru")
+	for _, k := range []string{
+		"wizard.env.key_placeholder",
+		"wizard.env.value_placeholder",
+		"wizard.env.write_only_placeholder",
+		"wizard.env.value_write_only_placeholder",
+	} {
+		if !strings.ContainsFunc(ru[k], func(r rune) bool { return r >= 0x0400 && r <= 0x04FF }) {
+			t.Errorf("ru.json %q = %q, want Russian text", k, ru[k])
+		}
+	}
+}
+
 func TestEmbeddedJavaScriptParses(t *testing.T) {
 	node, err := exec.LookPath("node")
 	if err != nil {

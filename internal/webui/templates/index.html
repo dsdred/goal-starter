@@ -525,7 +525,7 @@
                 <div class="form-group"><label data-i18n="runtimes.field.workdir">Рабочая папка</label><input type="text" name="working_directory" placeholder="E:\tools\llama10444"></div>
                 <div class="form-group"><label data-i18n="runtimes.field.executable">Исполняемый файл *</label><input type="text" name="executable" required placeholder="llama-server.exe"></div>
                 <div class="form-group"><label data-i18n="runtimes.field.env">Окружение</label><div id="rt-create-env-container"></div>
-                <button type="button" class="btn btn-ghost btn-sm" onclick="addEnvRow('rt-create-env-container')">+ Переменная</button></div>
+                <button type="button" class="btn btn-ghost btn-sm" onclick="addEnvRow('rt-create-env-container')" data-i18n="wizard.env.add">+ Переменная</button></div>
                 <div class="modal-actions"><button type="submit" class="btn btn-primary" data-i18n="runtimes.btn.create">Создать</button><button type="button" class="btn btn-ghost" onclick="closeModal('create-runtime-modal')" data-i18n="common.cancel">Отмена</button></div>
             </form>
         </div>
@@ -541,7 +541,7 @@
                 <div class="form-group"><label data-i18n="runtimes.field.workdir">Рабочая папка</label><input type="text" name="working_directory" placeholder="E:\tools\llama10444"></div>
                 <div class="form-group"><label data-i18n="runtimes.field.executable">Исполняемый файл *</label><input type="text" name="executable" required placeholder="llama-server.exe"></div>
                 <div class="form-group"><label data-i18n="runtimes.field.env">Окружение</label><div id="rt-edit-env-container"></div>
-                <button type="button" class="btn btn-ghost btn-sm" onclick="addEnvRow('rt-edit-env-container')">+ Переменная</button></div>
+                <button type="button" class="btn btn-ghost btn-sm" onclick="addEnvRow('rt-edit-env-container')" data-i18n="wizard.env.add">+ Переменная</button></div>
                 <div class="modal-actions"><button type="submit" class="btn btn-primary" data-i18n="runtimes.btn.save">Сохранить</button><button type="button" class="btn btn-ghost" onclick="closeModal('edit-runtime-modal')" data-i18n="common.cancel">Отмена</button></div>
             </form>
         </div>

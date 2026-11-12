@@ -1285,7 +1285,7 @@ function openWizard(modelId) {
                     div.style.marginBottom = '6px';
                     div.setAttribute('data-existing', 'true');
                     div.innerHTML = '<input type="text" value="' + esc(key) + '" readonly style="flex:1;padding:6px;border:1px solid var(--border);border-radius:4px;background:var(--bg-input);color:var(--text-primary);opacity:0.7;">' +
-                        '<input type="text" placeholder="write-only" style="flex:2;padding:6px;border:1px solid var(--border);border-radius:4px;background:var(--bg-input);color:var(--text-primary);">' +
+                        '<input type="text" placeholder="' + esc(t('wizard.env.write_only_placeholder')) + '" style="flex:2;padding:6px;border:1px solid var(--border);border-radius:4px;background:var(--bg-input);color:var(--text-primary);">' +
                         '<button type="button" class="btn btn-danger btn-sm" onclick="this.parentElement.remove()">&times;</button>';
                     envContainer.appendChild(div);
                 });
@@ -1520,8 +1520,8 @@ function addEnvRow(containerId) {
     div.style.display = 'flex';
     div.style.gap = '6px';
     div.style.marginBottom = '6px';
-    div.innerHTML = '<input type="text" placeholder="KEY" style="flex:1;padding:6px;border:1px solid var(--border);border-radius:4px;background:var(--bg-input);color:var(--text-primary);">' +
-        '<input type="text" placeholder="value" style="flex:2;padding:6px;border:1px solid var(--border);border-radius:4px;background:var(--bg-input);color:var(--text-primary);">' +
+    div.innerHTML = '<input type="text" placeholder="' + esc(t('wizard.env.key_placeholder')) + '" style="flex:1;padding:6px;border:1px solid var(--border);border-radius:4px;background:var(--bg-input);color:var(--text-primary);">' +
+        '<input type="text" placeholder="' + esc(t('wizard.env.value_placeholder')) + '" style="flex:2;padding:6px;border:1px solid var(--border);border-radius:4px;background:var(--bg-input);color:var(--text-primary);">' +
         '<button type="button" class="btn btn-danger btn-sm" onclick="this.parentElement.remove()">&times;</button>';
     document.getElementById(containerId).appendChild(div);
 }
@@ -1666,7 +1666,7 @@ function editRuntime(id) {
             i1.style.cssText = 'flex:1;padding:6px;border:1px solid var(--border);border-radius:4px;background:var(--bg-input);color:var(--text-primary);';
             const i2 = document.createElement('input');
             i2.type = 'text';
-            i2.placeholder = 'value (write-only)';
+            i2.placeholder = t('wizard.env.value_write_only_placeholder');
             i2.style.cssText = 'flex:2;padding:6px;border:1px solid var(--border);border-radius:4px;background:var(--bg-input);color:var(--text-primary);';
             const btn = document.createElement('button');
             btn.type = 'button';
