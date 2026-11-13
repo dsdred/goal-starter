@@ -185,3 +185,35 @@ func TestUnauthWarning_NeverCarriesKeyMaterial(t *testing.T) {
 		t.Errorf("warning names key material: %q", stderr)
 	}
 }
+
+// TestUnauthDiagnostic_DoesNotClaimRefusal pins CFG-WARN-01: ValidateFull discards
+// this diagnostic and keeps starting, so its text must state the exposure and the
+// continuing startup, identically in both branches, never a refusal.
+func TestUnauthDiagnostic_DoesNotClaimRefusal(t *testing.T) {
+	for _, host := range []string{"127.0.0.1", "::1", "localhost"} {
+		if err := validateLocalhostOnly(host); err != nil {
+			t.Errorf("loopback %q must stay accepted, got %v", host, err)
+		}
+	}
+
+	var phrasings []string
+	for _, host := range []string{"0.0.0.0", "192.168.1.10", "example.invalid"} {
+		err := validateLocalhostOnly(host)
+		if err == nil {
+			t.Fatalf("non-loopback %q must still be detected", host)
+		}
+		msg := err.Error()
+		if strings.Contains(msg, "refus") {
+			t.Errorf("%q: diagnostic claims a refusal startup never performs: %q", host, msg)
+		}
+		if !strings.Contains(msg, "not a loopback address") || !strings.Contains(msg, "startup continues") {
+			t.Errorf("%q: diagnostic must state the exposure and the continuing startup: %q", host, msg)
+		}
+		phrasings = append(phrasings, strings.ReplaceAll(msg, host, "<host>"))
+	}
+	for _, p := range phrasings[1:] {
+		if p != phrasings[0] {
+			t.Errorf("both branches must phrase the diagnostic identically: %q vs %q", phrasings[0], p)
+		}
+	}
+}

@@ -325,9 +325,9 @@ func validateLocalhostOnly(host string) error {
 		if ip.IsLoopback() {
 			return nil
 		}
-		return fmt.Errorf("listen address %s is not a loopback address; refusing to start without authentication", host)
+		return fmt.Errorf("listen address %s is not a loopback address; startup continues with an unauthenticated-exposure warning", host)
 	}
-	return fmt.Errorf("listen address %s is not a loopback address; refusing to start without authentication", host)
+	return fmt.Errorf("listen address %s is not a loopback address; startup continues with an unauthenticated-exposure warning", host)
 }
 
 // unauthenticatedExposureWarning phrases the non-loopback-without-auth warning
