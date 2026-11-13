@@ -135,7 +135,6 @@
   "wizard.args.hint": "Токены разделяются пробелами. Кавычки \"...\" сохраняют пробелы внутри токена. Внутри кавычек \\\" → \", \\\\ → \\. Вне кавычек обратный слеш — литеральный (Windows-пути). JSON-аргументы: --flag \"{\\\"key\\\":\\\"value\\\"}\".",
   "wizard.args.placeholder": "-m E:\\models\\model.gguf --mmproj E:\\models\\mmproj.gguf -ngl 99 -c 131072",
   "wizard.env": "Переменные окружения",
-  "wizard.env.hint": "Дополнительные env-переменные процесса. Значения write-only: после сохранения не отображаются.",
   "wizard.env.add": "+ Переменная",
   "wizard.env.key_placeholder": "КЛЮЧ",
   "wizard.env.value_placeholder": "значение",

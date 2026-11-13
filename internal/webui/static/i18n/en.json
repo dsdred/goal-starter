@@ -135,7 +135,6 @@
   "wizard.args.hint": "Tokens separated by whitespace. Double quotes \"...\" keep spaces inside a token. Inside quotes: \\\" → \", \\\\ → \\. Outside quotes: backslash is literal (Windows paths). JSON: --flag \"{\\\"key\\\":\\\"value\\\"}\".",
   "wizard.args.placeholder": "-m E:\\models\\model.gguf --mmproj E:\\models\\mmproj.gguf -ngl 99 -c 131072",
   "wizard.env": "Environment Variables",
-  "wizard.env.hint": "Additional env vars for the process. Values are write-only: never displayed after saving.",
   "wizard.env.add": "+ Add Variable",
   "wizard.env.key_placeholder": "KEY",
   "wizard.env.value_placeholder": "value",
