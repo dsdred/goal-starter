@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -22,22 +23,36 @@ import (
 
 func newMockInstanceStoreForTest() *mockInstanceStore {
 	entries := make(map[string]*domain.LaunchInstanceEntry)
+	// The Supervisor reaches these callbacks from multiple goroutines (an
+	// in-flight start writes via Create while a stop/restart persists via
+	// Update), so every map access below is serialized by mu. This mock is the
+	// only test-only persistence boundary the new command tests drive
+	// concurrently; the real store.InstanceStoreJSON already synchronizes.
+	var mu sync.RWMutex
 	m := &mockInstanceStore{}
 	m.CreateFunc = func(e *domain.LaunchInstanceEntry) error {
+		mu.Lock()
+		defer mu.Unlock()
 		entries[e.ID] = e
 		return nil
 	}
 	m.GetFunc = func(id string) (*domain.LaunchInstanceEntry, error) {
+		mu.RLock()
+		defer mu.RUnlock()
 		if e, ok := entries[id]; ok {
 			return e, nil
 		}
 		return nil, errors.New("not found")
 	}
 	m.UpdateFunc = func(e *domain.LaunchInstanceEntry) error {
+		mu.Lock()
+		defer mu.Unlock()
 		entries[e.ID] = e
 		return nil
 	}
 	m.ListFunc = func() ([]*domain.LaunchInstanceEntry, error) {
+		mu.RLock()
+		defer mu.RUnlock()
 		result := make([]*domain.LaunchInstanceEntry, 0, len(entries))
 		for _, e := range entries {
 			result = append(result, e)
@@ -45,6 +60,8 @@ func newMockInstanceStoreForTest() *mockInstanceStore {
 		return result, nil
 	}
 	m.ListByModelIDFunc = func(modelID string) ([]*domain.LaunchInstanceEntry, error) {
+		mu.RLock()
+		defer mu.RUnlock()
 		var result []*domain.LaunchInstanceEntry
 		for _, e := range entries {
 			if e.ModelID == modelID {
