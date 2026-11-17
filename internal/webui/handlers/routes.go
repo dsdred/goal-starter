@@ -92,8 +92,10 @@ func WithLiveConfig(cfg *config.Config) RouteRegistryOption {
 }
 
 // WithAuditLogger wires the durable audit logger (ADR 007) into the auth,
-// system, instance, model, runtime, and pipeline handlers and the login
-// rate-limit wrapper.
+// system, instance, model, runtime, pipeline, and command handlers and the login
+// rate-limit wrapper. The command handler is wired so pipeline commands emit the
+// same control-action audit events as their per-object routes (ADR 024 D-7 parity);
+// model commands stay unaudited to match their unaudited per-object routes.
 func WithAuditLogger(logger *audit.AuditLogger) RouteRegistryOption {
 	return func(r *RouteRegistry) {
 		r.audit = logger
@@ -105,6 +107,7 @@ func WithAuditLogger(logger *audit.AuditLogger) RouteRegistryOption {
 		if r.pipelineHandler != nil {
 			r.pipelineHandler.WithAudit(logger).WithSessionStore(r.sessionStore)
 		}
+		r.commandHandler.WithAudit(logger).WithSessionStore(r.sessionStore)
 		r.auditHandler = NewAuditHandler(logger)
 	}
 }
@@ -126,7 +129,7 @@ func NewRouteRegistry(
 		runtimeHandler:  NewRuntimesHandler(runtimeSvc, instanceSvc, supervisor, csrf),
 		modelHandler:    NewModelsHandler(modelSvc, instanceSvc, supervisor, repo, csrf),
 		instanceHandler: NewInstancesHandler(instanceSvc, csrf),
-		commandHandler:  NewCommandsHandler(instanceSvc, repo),
+		commandHandler:  NewCommandsHandler(instanceSvc, pipelineSvc, repo),
 		pipelineHandler: NewPipelineHandler(pipelineSvc, repo, instanceSvc, csrf),
 		systemHandler:   NewSystemHandler(supervisor, sessionStore, csrf, instanceSvc),
 		portableHandler: NewPortableHandler(repo),

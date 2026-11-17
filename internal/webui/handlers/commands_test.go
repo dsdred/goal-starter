@@ -13,6 +13,7 @@ import (
 	"github.com/dsdred/goal/internal/domain"
 	"github.com/dsdred/goal/internal/process"
 	"github.com/dsdred/goal/internal/storage"
+	"github.com/dsdred/goal/internal/webui/audit"
 	"github.com/dsdred/goal/internal/webui/security"
 	fakeruntime "github.com/dsdred/goal/testdata/fake-runtime/testutil"
 )
@@ -42,7 +43,7 @@ func newCommandsTestEnv(t *testing.T) (*CommandsHandler, *ModelsHandler, *proces
 
 	insSvc := application.NewInstanceService(sup, repo)
 	csrf := security.NewCSRF()
-	hCommands := NewCommandsHandler(insSvc, repo)
+	hCommands := NewCommandsHandler(insSvc, application.NewPipelineService(sup, repo), repo)
 	hModels := NewModelsHandler(application.NewModelService(repo), insSvc, sup, repo, csrf)
 	return hCommands, hModels, sup, repo
 }
@@ -76,7 +77,9 @@ func TestCommandsHandler_ModelStart_Success(t *testing.T) {
 func TestCommandsHandler_UnknownCommand_Returns400(t *testing.T) {
 	h, _, _, _ := newCommandsTestEnv(t)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/commands/execute", commandBody("model.stop", "mC"))
+	// A value outside the closed Stage 1 vocabulary (all six model.* / pipeline.*
+	// commands are now known) is a bounded 400 unknown_command, never a 404.
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/commands/execute", commandBody("model.frobnicate", "mC"))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	h.Execute(w, req)
@@ -224,7 +227,7 @@ func newPendingTargetFixture(t *testing.T) *CommandsHandler {
 		t.Fatal("timeout waiting for mB to reach pending")
 	}
 
-	return NewCommandsHandler(application.NewInstanceService(sup, repo), repo)
+	return NewCommandsHandler(application.NewInstanceService(sup, repo), application.NewPipelineService(sup, repo), repo)
 }
 
 func TestCommandsHandler_InFlight_Returns409(t *testing.T) {
@@ -314,5 +317,241 @@ func TestExistingModelRoute_StartRegression(t *testing.T) {
 	hModels.Start(ghostW, ghostReq)
 	if ghostW.Code != http.StatusInternalServerError {
 		t.Fatalf("existing route unknown-model status = %d, want 500 (unchanged); body=%s", ghostW.Code, ghostW.Body.String())
+	}
+}
+
+// TestCommandsHandler_ModelStop_Success exercises the model.stop command against a
+// model whose instance is deterministically running (mA in the slot-limited
+// fixture), so the stop path actually reaches InstanceService.StopInstance → the
+// single ADR 017 Supervisor.Stop boundary. The command returns the same 200 body the
+// per-object route returns (ADR 024 D-10).
+func TestCommandsHandler_ModelStop_Success(t *testing.T) {
+	h := newPendingTargetFixture(t)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/commands/execute", commandBody("model.stop", "mA"))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.Execute(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("model.stop status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	var body map[string]string
+	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if body["status"] != "stopped" {
+		t.Errorf("status = %q, want stopped", body["status"])
+	}
+}
+
+// TestCommandsHandler_ModelStop_PendingReturns409 mirrors the model route's
+// launch_in_flight guard: a model with a pending (not-yet-spawned) launch is a
+// bounded 409, never a stop attempt on an instance that has no process yet.
+func TestCommandsHandler_ModelStop_PendingReturns409(t *testing.T) {
+	h := newPendingTargetFixture(t)
+
+	// mB is pending in the fixture (blocked behind mA on the only slot).
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/commands/execute", commandBody("model.stop", "mB"))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.Execute(w, req)
+
+	if w.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d: %s", w.Code, w.Body.String())
+	}
+	var body map[string]string
+	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if body["error"] != "launch_in_flight" {
+		t.Errorf("error = %q, want launch_in_flight", body["error"])
+	}
+}
+
+// TestCommandsHandler_ModelRestart_Success exercises the model.restart command
+// against a running model (mA), covering the D1 pre-flight-then-restart order: the
+// whole in-flight target set is preflighted before any instance is mutated, then
+// each is restarted through the single ADR 017 Supervisor.RestartWithLaunch
+// boundary. The command returns the same 200 body as the per-object route.
+func TestCommandsHandler_ModelRestart_Success(t *testing.T) {
+	h := newPendingTargetFixture(t)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/commands/execute", commandBody("model.restart", "mA"))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.Execute(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("model.restart status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	var body map[string]string
+	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if body["status"] != "restarted" {
+		t.Errorf("status = %q, want restarted", body["status"])
+	}
+}
+
+// TestCommandsHandler_PipelineUnknownTarget_Returns404 pins ADR 024 D-6 on the
+// pipeline half of the command surface: a pipeline command whose targetId is not a
+// known pipeline is a bounded 404 (the same deliberate improvement over the model
+// routes the D-6 404 gives model.* commands).
+func TestCommandsHandler_PipelineUnknownTarget_Returns404(t *testing.T) {
+	h, _, _, _ := newCommandsTestEnv(t)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/commands/execute", commandBody("pipeline.start", "no-such-pipeline"))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.Execute(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d: %s", w.Code, w.Body.String())
+	}
+	var body map[string]string
+	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if body["code"] != "not_found" {
+		t.Errorf("code = %q, want not_found", body["code"])
+	}
+}
+
+// TestCommandsHandler_PipelineLifecycleAndAudit exercises the three pipeline.*
+// commands through the full router (auth + CSRF + audit wired, ADR 024 D-2/D-7) and
+// asserts: (1) each command returns the same body its per-object route returns (D-10);
+// (2) a second start of an already-running owned entry is `already_running`, not an
+// error or 409 (D1.4 ownership is preserved, not duplicated); and (3) each command
+// emits exactly one control-action audit event with bounded counters and the
+// authenticated user — the same events as the per-object routes (D-7 parity).
+func TestCommandsHandler_PipelineLifecycleAndAudit(t *testing.T) {
+	e := newAuditEnv(t, 0)
+	addr := "10.9.8.7:4444"
+	sess, csrf := e.loggedIn(t, addr)
+	e.seedGracefulModel(t, "pcm-lifecycle")
+
+	if status, body := createPipelineAPI(t, e, addr, sess, csrf, `{"name":"cmdpipe","models":[{"model_id":"pcm-lifecycle"}]}`); status != http.StatusCreated {
+		t.Fatalf("create: %d %s", status, body)
+	}
+	pipelines, err := e.repo.ListPipelines()
+	if err != nil {
+		t.Fatalf("ListPipelines: %v", err)
+	}
+	pipeID := pipelines[0].ID
+	cmd := func(command string) *httptest.ResponseRecorder {
+		return e.do(t, http.MethodPost, "/api/v1/commands/execute", addr, sess, csrf,
+			`{"command":"`+command+`","targetId":"`+pipeID+`"}`)
+	}
+
+	// pipeline.start → 200, entry started.
+	var startOut struct {
+		PipelineID string `json:"pipeline_id"`
+		Results    []struct {
+			Status     string `json:"status"`
+			InstanceID string `json:"instance_id"`
+		} `json:"results"`
+	}
+	rec := cmd("pipeline.start")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("pipeline.start status = %d; body=%s", rec.Code, rec.Body.String())
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &startOut); err != nil {
+		t.Fatalf("decode start: %v", err)
+	}
+	if startOut.PipelineID != pipeID || len(startOut.Results) != 1 || startOut.Results[0].Status != "started" || startOut.Results[0].InstanceID == "" {
+		t.Fatalf("start = %+v", startOut)
+	}
+
+	// A second pipeline.start of the already-running owned entry reports the
+	// `already-running` outcome (ADR 010 D3 wire vocabulary), not a conflict and not
+	// an error (D1.4 ownership is preserved through the command, never duplicated).
+	var again struct {
+		Results []struct {
+			Status string `json:"status"`
+		} `json:"results"`
+	}
+	rec = cmd("pipeline.start")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("pipeline.start (again) status = %d; body=%s", rec.Code, rec.Body.String())
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &again); err != nil || len(again.Results) != 1 || again.Results[0].Status != "already-running" {
+		t.Fatalf("expected already-running outcome, got %s", rec.Body.String())
+	}
+
+	// pipeline.stop → 200, entry stopped.
+	var stopOut struct {
+		Results []struct {
+			Status string `json:"status"`
+		} `json:"results"`
+	}
+	rec = cmd("pipeline.stop")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("pipeline.stop status = %d; body=%s", rec.Code, rec.Body.String())
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &stopOut); err != nil || len(stopOut.Results) != 1 || stopOut.Results[0].Status != "stopped" {
+		t.Fatalf("stop = %s", rec.Body.String())
+	}
+
+	// pipeline.restart → 200, one stop row + one start row, start succeeded.
+	var restartOut struct {
+		PipelineID   string `json:"pipeline_id"`
+		StopResults  []any  `json:"stop_results"`
+		StartResults []struct {
+			Status string `json:"status"`
+		} `json:"start_results"`
+	}
+	rec = cmd("pipeline.restart")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("pipeline.restart status = %d; body=%s", rec.Code, rec.Body.String())
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &restartOut); err != nil {
+		t.Fatalf("decode restart: %v", err)
+	}
+	if restartOut.PipelineID != pipeID || len(restartOut.StopResults) != 1 || len(restartOut.StartResults) != 1 || restartOut.StartResults[0].Status != "started" {
+		t.Fatalf("restart = %+v", restartOut)
+	}
+	t.Cleanup(func() {
+		e.do(t, http.MethodPost, "/api/v1/pipelines/"+pipeID+"/stop", addr, sess, csrf, "")
+	})
+
+	// Audit parity (D-7): exactly one event per distinct command, bounded counters,
+	// authenticated user. pipeline.start was sent twice (the already-running re-start
+	// emits an event too) → two pipeline.start events. Query is newest-first, so
+	// starts[0] is the re-start (already_running) and starts[1] is the first (started).
+	starts := e.query(t, 100, 0, audit.EventPipelineStart)
+	if len(starts) != 2 {
+		t.Fatalf("pipeline.start events = %d, want 2: %+v", len(starts), starts)
+	}
+	if starts[1].Detail["pipeline_id"] != pipeID || starts[1].Detail["started"] != "1" || starts[1].User != "admin" {
+		t.Fatalf("first start audit detail = %v user=%q", starts[1].Detail, starts[1].User)
+	}
+	if starts[0].Detail["pipeline_id"] != pipeID || starts[0].Detail["already_running"] != "1" {
+		t.Fatalf("re-start audit detail = %v, want already_running=1", starts[0].Detail)
+	}
+
+	stops := e.query(t, 100, 0, audit.EventPipelineStop)
+	if len(stops) != 1 {
+		t.Fatalf("pipeline.stop events = %d, want 1: %+v", len(stops), stops)
+	}
+	if stops[0].Detail["stopped"] != "1" || stops[0].Detail["pipeline_id"] != pipeID {
+		t.Fatalf("stop audit detail = %v", stops[0].Detail)
+	}
+
+	restarts := e.query(t, 100, 0, audit.EventPipelineRestart)
+	if len(restarts) != 1 {
+		t.Fatalf("pipeline.restart events = %d, want 1: %+v", len(restarts), restarts)
+	}
+	if restarts[0].Detail["pipeline_id"] != pipeID || restarts[0].Detail["stopped"] != "1" || restarts[0].Detail["started"] != "1" {
+		t.Fatalf("restart audit detail = %v, want combined counters", restarts[0].Detail)
+	}
+
+	// No instance/model identity leaks into the counters-only detail (ADR 007).
+	for _, ev := range append(append(starts, stops...), restarts...) {
+		for _, v := range ev.Detail {
+			if v == startOut.Results[0].InstanceID || v == "pcm-lifecycle-model" {
+				t.Fatalf("audit detail leaked instance/model identity: %v", ev.Detail)
+			}
+		}
 	}
 }
