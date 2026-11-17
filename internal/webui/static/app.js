@@ -668,13 +668,16 @@ function plNewEntry(modelId, mode, argsText, autoStart, entryId) {
     return { id: entryId || '', model_id: modelId || '', argsMode: mode || 'model', argsText: argsText || '', autoStart: !!autoStart };
 }
 
-// pipelineEntryStatus is the client-side mirror of the detail endpoint
-// (ADR 013 D5): an entry's state is resolved by (pipeline_id, pipeline_entry_id)
-// with the D4 legacy fallback (an owned instance without entry attribution
-// resolves to the first entry of its model in list order).
-function pipelineEntryStatus(p, entry, idx) {
+// pipelineEntryInstances resolves the instance(s) owned by one entry and whether
+// the attribution is precise. Mirrors the entry resolution the detail endpoint
+// and pipelineEntryStatus rely on: exact (pipeline_id, pipeline_entry_id) first,
+// then the D4 legacy fallback (an owned instance with no entry attribution
+// resolves to the first entry of its model in list order). `precise` is true
+// only when the match is by pipeline_entry_id.
+function pipelineEntryInstances(p, entry, idx) {
     const owned = instancesData.filter(function (i) { return i.pipeline_id === p.id; });
     let list = owned.filter(function (i) { return i.pipeline_entry_id && i.pipeline_entry_id === entry.id; });
+    let precise = true;
     if (list.length === 0) {
         const firstOfModel = p.models.findIndex(function (m) { return m.model_id === entry.model_id; });
         if (firstOfModel === idx) {
@@ -682,9 +685,16 @@ function pipelineEntryStatus(p, entry, idx) {
             for (let k = 0; k < idx; k++) consumed[p.models[k].model_id] = true;
             if (!consumed[entry.model_id]) {
                 list = owned.filter(function (i) { return !i.pipeline_entry_id && i.model_id === entry.model_id; });
+                precise = false;
             }
         }
     }
+    return { list: list, precise: precise };
+}
+
+// pipelineEntryStatus is a pure projection of pipelineEntryInstances (ADR 013 D5).
+function pipelineEntryStatus(p, entry, idx) {
+    const list = pipelineEntryInstances(p, entry, idx).list;
     const active = list.filter(function (i) { return isActive(i.state); });
     let st = 'stopped';
     if (active.length > 0) {
@@ -703,16 +713,44 @@ function pipelineEntryStatus(p, entry, idx) {
     return st;
 }
 
+// resolveComponent reports a component's state, its owning InstanceID, and
+// whether the entry -> instance attribution is precise (by pipeline_entry_id).
+// Per-component control (G3-RES-01) is offered ONLY for a precisely-attributed,
+// running instance: a fallback model_id match could address a sibling copy of a
+// repeatable model, so instanceId is null unless precise && state === 'running'.
+function resolveComponent(p, entry, idx) {
+    const r = pipelineEntryInstances(p, entry, idx);
+    const state = pipelineEntryStatus(p, entry, idx);
+    let instanceId = null;
+    if (r.precise && state === 'running' && r.list.length > 0) {
+        instanceId = r.list[0].id;
+    }
+    return { state: state, instanceId: instanceId, precise: r.precise };
+}
+
 // pipelineChips renders one chip per entry (ADR 013 D7): a repeated model
 // appears once per entry (each chip carries the model name and its own
 // per-entry status); chips beyond a display budget collapse to +N with a tooltip.
+// Each chip also carries per-component controls (G3-RES-01): Stop/Restart for a
+// precisely-attributed running component, or a hint when it is stopped (there is
+// no per-component Start — recovery is the pipeline-level Start).
 function pipelineChips(p) {
     const shown = p.models.slice(0, 6);
     const rest = p.models.slice(6);
     let html = shown.map(function (m, i) {
-        const st = pipelineEntryStatus(p, m, i);
+        const rc = resolveComponent(p, m, i);
         const name = getModelName(m.model_id);
-        return '<span class="status-badge ' + st + '" title="' + esc(name) + '">' + esc(name) + '</span>';
+        let actions = '';
+        if (rc.instanceId) {
+            actions = '<span class="pl-chip-actions">' +
+                iconBtn(ICONS.stop, t('pipelines.chip.stop'), 'danger', 'stopComponent', rc.instanceId) +
+                iconBtn(ICONS.restart, t('pipelines.chip.restart'), 'warning', 'restartComponent', rc.instanceId) +
+                '</span>';
+        } else if (rc.state === 'stopped') {
+            const hint = t('pipelines.chip.stopped_hint');
+            actions = '<span class="pl-chip-hint" title="' + esc(hint) + '" aria-label="' + esc(hint) + '">' + ICONS.info + '</span>';
+        }
+        return '<span class="pl-chip status-badge ' + rc.state + '" title="' + esc(name) + '"><span class="pl-chip-name">' + esc(name) + '</span>' + actions + '</span>';
     }).join(' ');
     if (rest.length > 0) {
         const names = rest.map(function (m) { return getModelName(m.model_id); }).join(', ');
@@ -831,6 +869,24 @@ async function pipelineAction(action, id, successKey) {
 function startPipeline(id) { pipelineAction('start', id, 'common.started'); }
 function stopPipeline(id) { pipelineAction('stop', id, 'common.stopped'); }
 function restartPipeline(id) { pipelineAction('restart', id, 'common.restarted'); }
+
+// Per-component control (G3-RES-01, ADR 024 D-11): dispatch a single-instance
+// command on the unified Commands surface, targeting the entry's InstanceID.
+// The server is the source of truth, so always re-render from a fresh reload.
+async function componentCommand(command, instanceId, successKey) {
+    try {
+        await api('/commands/execute', { method: 'POST', body: JSON.stringify({ command: command, targetId: instanceId }) });
+        showToast(t(successKey), 'success');
+    } catch (e) {
+        showToast(friendlyError(e), 'error');
+    }
+    try {
+        await reloadAllData(); renderAll();
+    } catch (e) { showToast(friendlyError(e), 'error'); }
+}
+
+function stopComponent(instanceId) { componentCommand('instance.stop', instanceId, 'common.stopped'); }
+function restartComponent(instanceId) { componentCommand('instance.restart', instanceId, 'common.restarted'); }
 
 async function togglePipelineActive(id, active) {
     const p = pipelinesData.find(function (x) { return x.id === id; });
@@ -2889,6 +2945,8 @@ window.stopInstance = stopInstance;
 window.restartInstance = restartInstance;
 window.dismissInstance = dismissInstance;
 window.killInstance = killInstance;
+window.stopComponent = stopComponent;
+window.restartComponent = restartComponent;
 window.showCreateRuntimeModal = showCreateRuntimeModal;
 window.handleCreateRuntime = handleCreateRuntime;
 window.editRuntime = editRuntime;

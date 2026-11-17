@@ -345,7 +345,7 @@ async function main() {
     suite.log('3.12 Name cell carries the full name in its title', nameTitle === 'Cluster A', `title=${JSON.stringify(nameTitle)}`);
     // (list layout, Models pattern) an inline icon strip: stopped → Start + Edit +
     // Delete (3 icon buttons); no overflow "…" menu.
-    const stripIcons = await page.locator('#pipeline-list .model-row .icon-btn').count();
+    const stripIcons = await page.locator('#pipeline-list .model-row .model-row-actions .icon-btn').count();
     const overflowCount = await page.locator('#pipeline-list .pl-overflow').count();
     const startIconPresent = (await page.locator('#pipeline-list .icon-btn[onclick*="startPipeline"]').count()) === 1;
     suite.log('3.13 List shows the inline icon strip (Start+Edit+Delete), no overflow',
@@ -368,11 +368,147 @@ async function main() {
     const runningChips = await page.locator('#pipeline-list .pl-chips-wrap .status-badge.running').count();
     suite.log('5.3 Per-model status chips show running (2)', runningChips === 2, `running=${runningChips}`);
     // Running: the icon strip flips to Restart + Stop (plus Edit + Delete).
-    const runningStrip = await page.locator('#pipeline-list .model-row .icon-btn').count();
+    const runningStrip = await page.locator('#pipeline-list .model-row .model-row-actions .icon-btn').count();
     const stopIcon = (await page.locator('#pipeline-list .icon-btn[onclick*="stopPipeline"]').count()) === 1;
     const restartIcon = (await page.locator('#pipeline-list .icon-btn[onclick*="restartPipeline"]').count()) === 1;
     suite.log('5.4 Icon strip shows Restart+Stop while running (4 icons)', runningStrip === 4 && stopIcon && restartIcon, `icons=${runningStrip} stop=${stopIcon} restart=${restartIcon}`);
     await H.screenshot(page, ws, '03-pipeline-running');
+
+    // ═══ SECTION 5b: Per-component controls (G3-RES-01) ═══
+    // Both A and B are running (Section 5). A precisely-attributed, running
+    // component exposes inline Stop + Restart on its chip; a stopped component
+    // shows a hint (there is NO per-component Start); an ambiguous (fallback
+    // model_id) attribution never yields a control.
+    const runByModel = async () => {
+      const r = await runningFor(pipeId);
+      const map = {};
+      r.forEach(i => { map[i.model_id] = i; });
+      return map;
+    };
+    const stopChipBtn = (title) => page.locator('#pipeline-list .pl-chip[title="' + title + '"] .icon-btn[onclick*="stopComponent"]').first();
+    const restartChipBtn = (title) => page.locator('#pipeline-list .pl-chip[title="' + title + '"] .icon-btn[onclick*="restartComponent"]').first();
+
+    const compActionBtns = await page.locator('#pipeline-list .pl-chip .pl-chip-actions .icon-btn').count();
+    const compStartBtns = await page.locator('#pipeline-list .pl-chip .icon-btn[onclick^="startComponent"]').count();
+    suite.log('5b.1 Running components expose inline Stop + Restart (2 chips x 2), no Start',
+      compActionBtns === 4 && compStartBtns === 0, `action=${compActionBtns} start=${compStartBtns}`);
+
+    // 5b.2 Restarting component A preserves its InstanceID (same-ID in-place
+    // refresh, new PID) and leaves sibling B untouched.
+    const beforeRestart = await runByModel();
+    const aIdBefore = beforeRestart[idA] ? beforeRestart[idA].id : null;
+    if (aIdBefore) {
+      await restartChipBtn('Pipe Model A').click();
+      const restartedA = await poll(async () => {
+        const m = await runByModel();
+        return (m[idA] && m[idA].id === aIdBefore) ? m[idA] : null;
+      }, 25000);
+      suite.log('5b.2 Per-component Restart preserves the InstanceID (same id, new PID)',
+        !!restartedA && restartedA.id === aIdBefore, `id=${aIdBefore}`);
+    } else {
+      suite.log('5b.2 Per-component Restart preserves the InstanceID', false, 'component A not running');
+    }
+    const afterRestart = await runByModel();
+    suite.log('5b.2b Restarting A leaves sibling B running (untouched)',
+      !!(afterRestart[idB] && afterRestart[idB].id), `B=${afterRestart[idB] ? afterRestart[idB].id : 'none'}`);
+
+    // 5b.3 Single-instance Stop: only A stops (it is exited), B stays running.
+    const beforeStop = await runByModel();
+    const aIdBeforeStop = beforeStop[idA] ? beforeStop[idA].id : null;
+    if (aIdBeforeStop) {
+      await stopChipBtn('Pipe Model A').click();
+      await poll(async () => {
+        const a = await api('GET', '/api/v1/instances/' + aIdBeforeStop);
+        const m = await runByModel();
+        return (a.status === 200 && a.data && a.data.state === 'exited') && !m[idA] ? true : null;
+      }, 25000);
+    }
+    const aStateAfter = aIdBeforeStop ? (await api('GET', '/api/v1/instances/' + aIdBeforeStop)).data : null;
+    const afterStopA = await runByModel();
+    suite.log('5b.3 Per-component Stop stops ONLY component A (it is exited)',
+      aStateAfter && aStateAfter.state === 'exited', `A.state=${aStateAfter ? aStateAfter.state : 'gone'}`);
+    suite.log('5b.3b Sibling B is still running after A stopped',
+      !!(afterStopA[idB] && afterStopA[idB].id), `B=${afterStopA[idB] ? afterStopA[idB].id : 'none'}`);
+
+    // 5b.4 The stopped chip A shows the hint icon and no control buttons; a
+    // per-component Start does not exist anywhere (recovery = pipeline Start).
+    await poll(async () => (await page.locator('#pipeline-list .pl-chip[title="Pipe Model A"].stopped .pl-chip-hint').count()) === 1, 8000);
+    const aChipHint = await page.locator('#pipeline-list .pl-chip[title="Pipe Model A"].stopped .pl-chip-hint').count();
+    const aChipActions = await page.locator('#pipeline-list .pl-chip[title="Pipe Model A"] .pl-chip-actions .icon-btn').count();
+    suite.log('5b.4 Stopped component A shows the hint and no control buttons',
+      aChipHint === 1 && aChipActions === 0, `hint=${aChipHint} actions=${aChipActions}`);
+    const anyStartNow = await page.locator('#pipeline-list .pl-chip .icon-btn[onclick^="startComponent"]').count();
+    suite.log('5b.4b No per-component Start exists anywhere (recovery = pipeline Start)', anyStartNow === 0, `start=${anyStartNow}`);
+    await H.screenshot(page, ws, '03b-per-component-stopped');
+
+    // 5b.5 Guard (reachable projection): a per-component control is rendered
+    // only when resolveComponent returns an instanceId, which happens ONLY for a
+    // precisely-attributed RUNNING component. app.js is wrapped in an IIFE, so
+    // the resolver and its instance cache are not reachable from here; the DOM
+    // consequence is the testable projection — a control-bearing chip must be a
+    // `running` chip, and a non-running chip (stopped / transitional) never
+    // carries one. (The legacy fallback-attribution branch — a pre-upgrade
+    // instance with no pipeline_entry_id — is not creatable in a fresh browser
+    // session and is enforced by the resolveComponent contract, not a browser
+    // leg; see the report.)
+    const guardChips = await page.evaluate(() => [...document.querySelectorAll('#pipeline-list .pl-chip')].map(c => ({
+      running: c.className.split(' ').includes('running'),
+      hasControls: !!c.querySelector('.pl-chip-actions .icon-btn'),
+    })));
+    const nonRunningWithControls = guardChips.filter(c => c.hasControls && !c.running).length;
+    const runningWithControls = guardChips.filter(c => c.hasControls && c.running).length;
+    suite.log('5b.5 Per-component controls appear ONLY on running, precisely-attributed chips (guard)',
+      nonRunningWithControls === 0 && runningWithControls >= 1,
+      `running=${runningWithControls} nonRunning=${nonRunningWithControls} total=${guardChips.length}`);
+
+    // 5b.6 Repeatable-model isolation: two entries of the SAME model in one
+    // pipeline. Stopping the first entry stops only that entry; the sibling
+    // stays running (precise per-entry attribution).
+    const isoM = await api('POST', '/api/v1/models', { name: 'Iso Model', runtime_id: 'rt-fake', args: ['infinite'] });
+    const isoP = await api('POST', '/api/v1/pipelines', { name: 'Iso Dup', models: [{ model_id: isoM.data.id }, { model_id: isoM.data.id }] });
+    suite.log('5b.6 Seed: same-model ×2 pipeline created', isoP.status === 201, `status=${isoP.status}`);
+    await api('POST', '/api/v1/pipelines/' + isoP.data.id + '/start');
+    const isoBoth = await poll(async () => {
+      const r = (await api('GET', '/api/v1/instances')).data.filter(i => i.pipeline_id === isoP.data.id && i.state === 'running');
+      return r.length === 2 ? r : null;
+    }, 25000);
+    suite.log('5b.6b Both same-model entries are running', !!isoBoth && isoBoth.length === 2, `running=${isoBoth ? isoBoth.length : 0}`);
+    await poll(async () => (await page.locator('#pipeline-list .pl-chip[title="Iso Model"].running').count()) === 2, 8000);
+    const isoChipCount = await page.locator('#pipeline-list .pl-chip[title="Iso Model"].running').count();
+    const isoChipActionBtns = await page.locator('#pipeline-list .pl-chip[title="Iso Model"].running .pl-chip-actions .icon-btn').count();
+    suite.log('5b.6c Each same-model entry chip shows its own Stop + Restart',
+      isoChipCount === 2 && isoChipActionBtns === 4, `chips=${isoChipCount} action=${isoChipActionBtns}`);
+    const firstIsoChip = page.locator('#pipeline-list .pl-chip[title="Iso Model"].running').first();
+    const firstIsoInst = (await firstIsoChip.locator('.icon-btn[onclick*="stopComponent"]').first().getAttribute('onclick')) || '';
+    const firstIsoTarget = (firstIsoInst.match(/'([^']+)'/) || [])[1] || null;
+    if (firstIsoTarget) {
+      await firstIsoChip.locator('.icon-btn[onclick*="stopComponent"]').first().click();
+      await poll(async () => {
+        const a = await api('GET', '/api/v1/instances/' + firstIsoTarget);
+        return (a.status === 200 && a.data && a.data.state === 'exited') ? true : null;
+      }, 25000);
+    }
+    const isoRunning = (await api('GET', '/api/v1/instances')).data.filter(i => i.pipeline_id === isoP.data.id && i.state === 'running');
+    const stoppedOne = firstIsoTarget ? (await api('GET', '/api/v1/instances/' + firstIsoTarget)).data : null;
+    suite.log('5b.6d Stopping one entry stops only it (sibling still running)',
+      isoRunning.length === 1 && !!stoppedOne && stoppedOne.state === 'exited' && isoRunning[0].id !== firstIsoTarget,
+      `running=${isoRunning.map(i => i.id).join(',')} stopped=${stoppedOne ? stoppedOne.id + ':' + stoppedOne.state : 'n/a'}`);
+    await poll(async () => (await page.locator('#pipeline-list .pl-chip[title="Iso Model"].stopped .pl-chip-hint').count()) === 1, 8000);
+    const isoStoppedChips = await page.locator('#pipeline-list .pl-chip[title="Iso Model"].stopped .pl-chip-hint').count();
+    const isoRunningChips = await page.locator('#pipeline-list .pl-chip[title="Iso Model"].running').count();
+    suite.log('5b.6e The stopped entry shows the hint; the sibling chip stays running with its controls',
+      isoStoppedChips === 1 && isoRunningChips === 1, `stopped=${isoStoppedChips} running=${isoRunningChips}`);
+    // Cleanup: stop the surviving entry, then delete the pipeline.
+    for (const i of isoRunning) {
+      await api('POST', '/api/v1/commands/execute', { command: 'instance.stop', targetId: i.id });
+    }
+    await poll(async () => {
+      const r = (await api('GET', '/api/v1/instances')).data.filter(x => x.pipeline_id === isoP.data.id && ['running', 'starting', 'stopping'].indexOf(x.state) !== -1);
+      return r.length === 0 ? true : null;
+    }, 20000);
+    const delIso = await api('DELETE', `/api/v1/pipelines/${isoP.data.id}`);
+    const delIsoM = await api('DELETE', `/api/v1/models/${isoM.data.id}`);
+    suite.log('5b.6f Cleanup: isolation pipeline + model removed', delIso.status === 200 && delIsoM.status === 200, `pipe=${delIso.status} model=${delIsoM.status}`);
 
     // ═══ SECTION 6: Restart pipeline (icon strip) ═══
     const oldIds = (await runningFor(pipeId)).map(i => i.id).sort();
@@ -724,13 +860,17 @@ async function main() {
         (r.querySelector('.pl-name') || {}).title === name || (r.textContent || '').includes(name));
       const chip = row ? row.querySelector('.pl-chips-wrap .status-badge') : null;
       if (!chip) return null;
+      // The chip is a flex row; the truncating element is the model-name span
+      // (.pl-chip-name), which carries the ellipsis. A flex container cannot
+      // show text-overflow on itself, so measure the name span, not the chip.
+      const truncEl = chip.querySelector('.pl-chip-name') || chip;
       return {
         vw,
         docOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
         chipRight: Math.round(chip.getBoundingClientRect().right * 10) / 10,
         chipW: Math.round(chip.getBoundingClientRect().width * 10) / 10,
         chipMaxW: getComputedStyle(chip).maxWidth,
-        ellipsis: chip.scrollWidth > chip.clientWidth,
+        ellipsis: truncEl.scrollWidth > truncEl.clientWidth,
         title: chip.getAttribute('title') || '',
         actionsVisible: [...row.querySelectorAll('.model-row-actions .icon-btn')].some(b => { const r = b.getBoundingClientRect(); return r.width > 0 && r.right <= vw + 1; }),
         overVw,

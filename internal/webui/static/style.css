@@ -489,6 +489,16 @@ code { font-family: var(--font-mono); font-size: 0.9em; background: var(--bg-inp
    (clipped by .model-row-sub overflow:hidden). inline-block + ellipsis keeps
    the full name reachable in the title tooltip and shows a truncation marker. */
 .pl-chips-wrap .status-badge { display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; margin: 0 4px 2px 0; }
+/* Per-component chip (G3-RES-01): a flex row so the truncating model name and
+   the inline Stop/Restart controls (or the stopped hint) share one badge.
+   Scoped to .pl-chips-wrap .pl-chip to override the .status-badge rule above. */
+.pl-chips-wrap .pl-chip { display: inline-flex; align-items: center; gap: 2px; overflow: visible; text-overflow: clip; vertical-align: middle; }
+.pl-chip-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.pl-chip-actions { display: inline-flex; flex-shrink: 0; align-items: center; }
+.pl-chip-actions .icon-btn { width: 24px; height: 24px; border-radius: 5px; }
+.pl-chip-actions .icon-btn svg { width: 14px; height: 14px; }
+.pl-chip-hint { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; color: var(--text-muted); font-size: 13px; line-height: 1; }
+.pl-chip-hint svg { width: 15px; height: 15px; fill: currentColor; }
 /* Pipeline linear builder (ADR 013 Owner UI): each block is one model entry;
    blocks stack top-to-bottom in launch order (no DAG, no drag&drop, no
    decorative connectors). Each block carries explicit move up / move down /
