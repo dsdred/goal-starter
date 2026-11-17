@@ -306,7 +306,7 @@ Formalized as the D2 owner contract in [ADR 010](docs/adr/010-pipeline.md) (Acce
 
 ### Product direction: on-demand local AI infrastructure (owner direction agreed 2026-09-16 — direction only, NOT an implementation contract)
 
-GoAl evolves from a launcher/runtime manager toward a **manager/orchestrator of local AI infrastructure**: an application requests a model through a standard API; GoAl can start and wait for the required runtime, proxy inference, and release resources (RAM/VRAM) when the model becomes idle. **RUNNING is not READY** — the current documented contract (USER_GUIDE, state semantics) is process liveness only; waiting for actual model readiness is new. This is a **product direction**, not an approved implementation contract; every item below is open and **NOT started**, and each requires its own design gate (ADR + owner contract) before implementation per the `ROADMAP → ADR → contract → implementation` rule. Deliberately NOT decided here (future design gates): endpoint schema, exact routes, queue semantics, concurrent-start semantics, eviction policy, VRAM scheduling, model-switching policy, streaming protocol implementation, retry policy, timeout defaults, authentication design, load balancing.
+GoAl evolves from a launcher/runtime manager toward a **manager/orchestrator of local AI infrastructure**: an application requests a model through a standard API; GoAl can start and wait for the required runtime, proxy inference, and release resources (RAM/VRAM) when the model becomes idle. **RUNNING is not READY** — the current documented contract (USER_GUIDE, state semantics) is process liveness only; waiting for actual model readiness is new. This is a **product direction**, not an approved implementation contract; every item below is open and **NOT started**, and each requires its own design gate (ADR + owner contract) before implementation per the `ROADMAP → ADR → contract → implementation` rule. Deliberately NOT decided here (future design gates): endpoint schema, exact routes, queue semantics, concurrent-start semantics, eviction policy, VRAM scheduling, model-switching policy, streaming protocol implementation, retry policy, timeout defaults, authentication design, load balancing. **GoAl 3 (2026-11-16)** — the development program registered in the section below — is the cadence that advances these tracks in small slices and adds three new ones (Commands, Instructions + Visual Editor, Scoped API Tokens); it reconciles onto this direction rather than replacing it.
 
 **Core product track** (dependency chain: Readiness → On-demand Gateway → standard inference compatibility → resource lifecycle / auto-unload):
 
@@ -328,6 +328,57 @@ GoAl evolves from a launcher/runtime manager toward a **manager/orchestrator of 
 
 - [ ] **B — Per-launch Metrics / Benchmarking:** capture per-instance launch latency, time-to-ready, tokens/s (where the runtime exposes it), and peak RSS, surfaced in the Instances/History view and optionally as a per-Pipeline aggregate. Gives the owner the "how fast / how heavy is each launch" signal the current UI lacks. Additive telemetry with no new launch semantics; needs a design note on capture points, bounded storage, and display.
 - Prometheus-compatible monitoring: separate design track — the open P1 item above (forensic 2026-09-16: dead v0.8 prototype removed; live `GET /api/v1/metrics` is the existing JSON system-state contract; requires a separate design/ADR + Owner decisions on exposure policy and implementation approach). Dependency insight only, **not** a contract: once the gateway (items 2–3) exists, inference-level metrics (request latency, request/error counts, TTFT and tokens/s where technically available) become naturally measurable; VRAM/system metrics remain a separate collector concern.
+
+### GoAl 3 — product-development program (directions agreed with the Owner, 2026-11-16)
+
+GoAl 3 is the **cadence for the next phase**: move to regular product development in small slices, without a heavy per-task approval/acceptance loop. It is **one development direction that reconciles onto the product direction above** (and its ADRs) — not a competing roadmap. The product-direction items remain the tracks; GoAl 3 gives them an agreed priority order and a small-slice delivery rhythm. Nothing here authorizes implementation: every row is registration, and each still follows its own `ROADMAP → (ADR when the decision is significant) → contract → implementation → tests → acceptance → documentation reconciliation`.
+
+**Governance rule applied (from AGENTS.md):** an ADR is required for a *significant* decision — a new domain entity, persistence, an auth/security model, a public API, lifecycle semantics, orchestration, or cross-cutting architecture. ADR 015 (Readiness) stays **FROZEN**. No direction is declared blocked for lack of an ADR by default: only the rows that are genuinely significant carry an ADR-first gate, and smaller slices proceed under their own scope.
+
+**Priorities (Owner order):** 1 Commands · 2 Resource Management · 3 Instructions + Visual Editor · 4 Scoped API Tokens · 5 MCP · 6 Integration & Stabilization. **Deferred, not in the current plan** (recorded as the Owner's ruling; they become rows only if re-elected): WebSocket transport, a mobile application, and a new logo.
+
+#### 1 — Commands (new)
+
+- **Goal.** A single, unified system that describes and **initiates** GoAl actions; the actual execution is delegated to the existing services — no second supervisor, and no duplication of launch arbitration (ADR 017), lifecycle (ADR 016 / 021), or process management.
+- **Stages.** **Stage 1 — Control Commands (MVP):** Start / Stop / Restart of a Model and of a Pipeline. **Stage 2 — User Commands:** saved user commands, parameters, action sequences, reuse. **Stage 3 — Agent Commands:** execution of authorized commands by external AI agents via API and MCP, authorized by scoped API tokens, with audit.
+- **Current state.** Every Stage 1 action **already exists** as per-object routes and services — Model (`POST /api/v1/models/{id}/{start,stop,restart}`, `models.go`), Instance (`POST /api/v1/instances/{id}/{stop,restart}`, `routes.go`), Pipeline (`POST /api/v1/pipelines/{id}/{start,stop,restart}`) — all mutating routes already pass `requireAuthCSRF`, and all launches already funnel through the single ADR 017 boundary `Supervisor.AdmitAndStart`. What is **absent** is a *unified, extensible command abstraction*: today the only user-facing "actions" are the individual buttons and per-object routes. The internal `CommandSpec` / `LaunchResolver` (`internal/domain/command.go`) is launch **resolution**, not a user-facing command, and is not reused as one.
+- **Real dependencies.** Stage 1: the existing `InstanceService` / `PipelineService` and the ADR 017 arbitration boundary (no new ADR required to *reuse* them). Stage 2: a new persisted entity (a saved command) → **ADR-first**. Stage 3: **Scoped API Tokens** (#4) for authorization and **MCP** (#5) for the agent surface; audit rides the existing ADR 007 journal.
+- **Nearest result.** A thin **command-dispatch** primitive that maps one command type (e.g. `model.start`) to the existing service through the existing auth + CSRF boundary — proving the "describe + delegate, do not duplicate" pattern with no lifecycle/arbitration change. The full Commands contract (command model, vocabulary, idempotency, result/audit semantics) is a **class E** ADR, scoped minimally, opened only when the first slice is approved for implementation.
+
+#### 2 — Resource Management (reconciled onto the product-direction resource track)
+
+- **Goal.** Operate and release the resources of the managed components: stop / restart an individual component, release VRAM, and (later) resource limits, idle / auto-unload and scheduling.
+- **Current state.** Per-instance control exists (stop / restart / kill / dismiss, `routes.go`); the resource-lifecycle track is the product-direction item **4** (Idle timeout / automatic unload) and the Later line "Advanced Pipeline … resource scheduling". **ADR 015 (Readiness) is FROZEN** and gates the *readiness* track (item 1), not this one.
+- **Real dependencies.** The existing lifecycle (ADR 016 / 021) and the ADR 017 boundary for stop / restart of a component. **Resource Management is NOT wholesale blocked by ADR 015:** the readiness-gated piece is *idle detection / auto-unload* (a model is unloadable on idle only once "ready" is defined); per-component stop / restart and explicit VRAM release do not require ADR 015. VRAM accounting has no current source and would need its own design.
+- **Nearest result.** A per-component stop / restart operation reusing the existing lifecycle paths, and the explicit VRAM-release question scoped as its own small design note (distinct from the FROZEN readiness track).
+
+#### 3 — Instructions + Visual Editor (new)
+
+- **Goal.** A new user-facing entity — *instructions* — with storage and a visual editor, and a defined runtime semantic for how an instruction is used by a model / runtime.
+- **Current state.** No instruction concept exists anywhere (verified: no `instruction` entity, field or route). This is a **new domain entity + persistence** → **class E, ADR-first**; the semantic ("what an instruction does at launch") must be defined before any UI or editor.
+- **Real dependencies.** A small storage / persistence contract (the ADR), then the editor (building on the existing model / pipeline builders and the maintained browser suite). Independent of Commands for Stage 1.
+- **Nearest result.** The ADR that defines the instruction entity and its semantic; nothing is implemented until it is agreed.
+
+#### 4 — Scoped API Tokens (new; security / auth)
+
+- **Goal.** Revocable, scope-limited tokens as the common authorization for future API / MCP clients (as opposed to the current cookie-session + CSRF model).
+- **Current state.** Auth is cookie-session only (`internal/webui/security/session.go`: `goal_session`, per-session CSRF, 24 h TTL); there is **no bearer / API-token path**. This is a new **auth/security model** → **class E, ADR-first**, and it must coexist with (not replace) the existing session + CSRF boundary for the web UI.
+- **Real dependencies.** None hard for design; it is the **prerequisite for Commands Stage 3** (Agent Commands) and a natural MCP authentication. Not part of G3-0.
+- **Nearest result.** The ADR for a revocable, scope-limited token model and its coexistence with session auth.
+
+#### 5 — MCP (reconciled onto the product-direction control plane)
+
+- **Goal.** An external interface so AI agents / assistants can operate GoAl through MCP, reusing the common business layer, with auth and audit accounted for.
+- **Current state.** Already registered as the product-direction **control plane** ("MCP is the control plane and is NOT the inference proxy"); the exact tool / resource surface is **not decided**. No MCP code exists.
+- **Real dependencies.** **Scoped API Tokens** (#4) for client authorization, the **Commands** vocabulary (#1) as the natural action surface, and the existing ADR 007 audit for accountability.
+- **Nearest result.** A design gate for the MCP tool / resource surface and its auth / audit / API-boundary contract.
+
+#### 6 — Integration & Stabilization (ongoing)
+
+- **Goal.** Integration checks, product-defect fixes, stability of new features, and readiness for regular releases.
+- **Current state.** The maintained Playwright browser suite (`tests/browser/`, 15 suites) + exact-SHA CI (7/7 jobs) is the standing integration substrate; this direction organizes that work as a recurring release cadence rather than a one-off program.
+- **Real dependencies.** The existing CI and acceptance infrastructure.
+- **Nearest result.** A standing definition of the per-release integration / stability checklist that the regular cadence reuses.
 
 ## Future
 
