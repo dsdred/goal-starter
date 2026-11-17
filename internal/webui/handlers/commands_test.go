@@ -555,3 +555,275 @@ func TestCommandsHandler_PipelineLifecycleAndAudit(t *testing.T) {
 		}
 	}
 }
+
+// startPipelineComponent brings up a single-entry pipeline over modelID and starts
+// it through the command surface, waiting for the component to reach running. It
+// returns the component's instance ID. This is the deterministic source of a live,
+// owned instance for the instance.* command legs (ADR 024 D-11).
+func startPipelineComponent(t *testing.T, e *auditEnv, addr, sess, csrf, modelID string) string {
+	t.Helper()
+	body := `{"name":"cmdcomp","models":[{"model_id":"` + modelID + `"}]}`
+	if status, raw := createPipelineAPI(t, e, addr, sess, csrf, body); status != http.StatusCreated {
+		t.Fatalf("create pipeline: %d %s", status, raw)
+	}
+	pipelines, err := e.repo.ListPipelines()
+	if err != nil || len(pipelines) == 0 {
+		t.Fatalf("ListPipelines: %v (n=%d)", err, len(pipelines))
+	}
+	pipeID := pipelines[0].ID
+	rec := e.do(t, http.MethodPost, "/api/v1/commands/execute", addr, sess, csrf,
+		`{"command":"pipeline.start","targetId":"`+pipeID+`"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("pipeline.start: %d %s", rec.Code, rec.Body.String())
+	}
+	var startOut struct {
+		Results []struct {
+			Status     string `json:"status"`
+			InstanceID string `json:"instance_id"`
+		} `json:"results"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &startOut); err != nil || len(startOut.Results) != 1 {
+		t.Fatalf("pipeline.start results = %s", rec.Body.String())
+	}
+	if startOut.Results[0].Status != "started" || startOut.Results[0].InstanceID == "" {
+		t.Fatalf("pipeline.start result = %+v, want started with instance_id", startOut.Results[0])
+	}
+	id := startOut.Results[0].InstanceID
+	if err := waitForSupervisorState(t, e.sup, domain.InstanceID(id), domain.InstanceStateRunning, 5*time.Second); err != nil {
+		t.Fatalf("wait component %s running: %v", id, err)
+	}
+	t.Cleanup(func() {
+		e.do(t, http.MethodPost, "/api/v1/pipelines/"+pipeID+"/stop", addr, sess, csrf, "")
+	})
+	return id
+}
+
+// TestCommandsHandler_InstanceStop_Success pins ADR 024 D-11 on the success leg:
+// instance.stop over the command surface stops exactly the targeted instance and
+// returns the same 200 body the per-object /instances/{id}/stop route returns
+// (D-10 parity).
+func TestCommandsHandler_InstanceStop_Success(t *testing.T) {
+	e := newAuditEnv(t, 0)
+	addr := "10.9.8.7:4444"
+	sess, csrf := e.loggedIn(t, addr)
+	e.seedGracefulModel(t, "pcomp-stop")
+	id := startPipelineComponent(t, e, addr, sess, csrf, "pcomp-stop")
+
+	rec := e.do(t, http.MethodPost, "/api/v1/commands/execute", addr, sess, csrf,
+		`{"command":"instance.stop","targetId":"`+id+`"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("instance.stop status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	var body map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if body["status"] != "stopped" {
+		t.Errorf("status = %q, want stopped", body["status"])
+	}
+}
+
+// TestCommandsHandler_InstanceRestart_Success pins ADR 024 D-11 on the restart leg:
+// instance.restart restarts exactly the targeted instance and returns the same 200
+// instance-entry body (environment nulled) the per-object /instances/{id}/restart
+// route returns (D-10 parity). The restarted instance keeps its identity.
+func TestCommandsHandler_InstanceRestart_Success(t *testing.T) {
+	e := newAuditEnv(t, 0)
+	addr := "10.9.8.7:4444"
+	sess, csrf := e.loggedIn(t, addr)
+	e.seedGracefulModel(t, "pcomp-restart")
+	id := startPipelineComponent(t, e, addr, sess, csrf, "pcomp-restart")
+
+	rec := e.do(t, http.MethodPost, "/api/v1/commands/execute", addr, sess, csrf,
+		`{"command":"instance.restart","targetId":"`+id+`"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("instance.restart status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if body["id"] != id {
+		t.Errorf("restarted id = %v, want %s (identity preserved)", body["id"], id)
+	}
+	if body["model_id"] != "pcomp-restart" {
+		t.Errorf("model_id = %v, want pcomp-restart", body["model_id"])
+	}
+}
+
+// TestCommandsHandler_InstanceUnknownTarget_Returns404 pins ADR 024 D-6 on the
+// instance half of the command surface: an instance command whose targetId is not a
+// resolvable instance (live or a retained terminal one) is a bounded 404 not_found,
+// the deliberate command-surface improvement over the per-object route.
+func TestCommandsHandler_InstanceUnknownTarget_Returns404(t *testing.T) {
+	h, _, _, _ := newCommandsTestEnv(t)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/commands/execute", commandBody("instance.stop", "no-such-instance"))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.Execute(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d: %s", w.Code, w.Body.String())
+	}
+	var body map[string]string
+	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if body["code"] != "not_found" {
+		t.Errorf("code = %q, want not_found", body["code"])
+	}
+}
+
+// TestCommandsHandler_InstanceStop_IsSingleInstanceNotModelFanout is the D-11
+// justification leg: a model MAY be present in a pipeline as two entries (ADR 013
+// repeatable models), so two live instances of the SAME model coexist as two
+// components. instance.stop names ONE component's InstanceID and must stop exactly
+// that instance — never fan out over the model's other instance the way model.stop
+// does. It proves the command is instance-scoped, not model-scoped.
+func TestCommandsHandler_InstanceStop_IsSingleInstanceNotModelFanout(t *testing.T) {
+	e := newAuditEnv(t, 0)
+	addr := "10.9.8.7:4444"
+	sess, csrf := e.loggedIn(t, addr)
+	e.seedGracefulModel(t, "fanout-model")
+
+	// One pipeline, the same model in two entries → two live components of one model.
+	if status, raw := createPipelineAPI(t, e, addr, sess, csrf,
+		`{"name":"fanout","models":[{"model_id":"fanout-model"},{"model_id":"fanout-model"}]}`); status != http.StatusCreated {
+		t.Fatalf("create pipeline: %d %s", status, raw)
+	}
+	pipelines, err := e.repo.ListPipelines()
+	if err != nil || len(pipelines) == 0 {
+		t.Fatalf("ListPipelines: %v (n=%d)", err, len(pipelines))
+	}
+	pipeID := pipelines[0].ID
+
+	var startOut struct {
+		Results []struct {
+			Status     string `json:"status"`
+			InstanceID string `json:"instance_id"`
+		} `json:"results"`
+	}
+	rec := e.do(t, http.MethodPost, "/api/v1/commands/execute", addr, sess, csrf,
+		`{"command":"pipeline.start","targetId":"`+pipeID+`"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("pipeline.start: %d %s", rec.Code, rec.Body.String())
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &startOut); err != nil || len(startOut.Results) != 2 {
+		t.Fatalf("pipeline.start results = %s, want 2 components", rec.Body.String())
+	}
+	idA, idB := startOut.Results[0].InstanceID, startOut.Results[1].InstanceID
+	if idA == "" || idB == "" || idA == idB {
+		t.Fatalf("want two distinct component ids, got %q and %q", idA, idB)
+	}
+	if err := waitForSupervisorState(t, e.sup, domain.InstanceID(idA), domain.InstanceStateRunning, 5*time.Second); err != nil {
+		t.Fatalf("wait A running: %v", err)
+	}
+	if err := waitForSupervisorState(t, e.sup, domain.InstanceID(idB), domain.InstanceStateRunning, 5*time.Second); err != nil {
+		t.Fatalf("wait B running: %v", err)
+	}
+	t.Cleanup(func() {
+		e.do(t, http.MethodPost, "/api/v1/pipelines/"+pipeID+"/stop", addr, sess, csrf, "")
+	})
+
+	// Stop exactly component A by its InstanceID.
+	rec = e.do(t, http.MethodPost, "/api/v1/commands/execute", addr, sess, csrf,
+		`{"command":"instance.stop","targetId":"`+idA+`"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("instance.stop status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	var stopBody map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &stopBody); err != nil || stopBody["status"] != "stopped" {
+		t.Fatalf("instance.stop body = %s, want status=stopped", rec.Body.String())
+	}
+
+	// Component A is now terminal (no longer live/in-flight).
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		a, err := e.sup.Status(domain.InstanceID(idA))
+		if err == nil && a != nil && !a.State.IsInFlight() {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("component A did not reach a terminal state after instance.stop: %+v", a)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	// Component B — the OTHER instance of the SAME model — is untouched and still
+	// running. A model-scoped fan-out (model.stop) would have stopped B too.
+	b, err := e.sup.Status(domain.InstanceID(idB))
+	if err != nil || b == nil {
+		t.Fatalf("sup.Status(B): %v", err)
+	}
+	if !b.State.IsRunningOrStarting() {
+		t.Fatalf("component B state = %q, want still running — instance.stop must not fan out to the model's other instance", b.State)
+	}
+
+	// Audit parity (D-7/D-10): exactly one instance.stop event, naming only the
+	// targeted component, never the sibling.
+	stops := e.query(t, 100, 0, audit.EventInstanceStop)
+	if len(stops) != 1 {
+		t.Fatalf("instance.stop events = %d, want 1: %+v", len(stops), stops)
+	}
+	if stops[0].Detail["instance_id"] != idA {
+		t.Fatalf("instance.stop audit detail = %v, want instance_id=%s", stops[0].Detail, idA)
+	}
+}
+
+// TestCommandsHandler_InstanceLifecycleAndAudit pins ADR 024 D-11 audit parity on
+// the command surface: instance.stop and instance.restart each emit exactly one
+// control-action audit event (instance.stop / instance.restart) carrying the
+// targeted instance_id — the same events and detail the per-object routes emit
+// (D-7/D-10 parity). Unlike the pipeline commands, the instance events carry the
+// instance_id (the command's target IS a single instance, so there is no group
+// counter to protect); no model-name or sibling identity is added.
+func TestCommandsHandler_InstanceLifecycleAndAudit(t *testing.T) {
+	e := newAuditEnv(t, 0)
+	addr := "10.9.8.7:4444"
+	sess, csrf := e.loggedIn(t, addr)
+	e.seedGracefulModel(t, "pcomp-audit")
+	id := startPipelineComponent(t, e, addr, sess, csrf, "pcomp-audit")
+
+	// instance.restart → 200 (restarts the running component in place).
+	rec := e.do(t, http.MethodPost, "/api/v1/commands/execute", addr, sess, csrf,
+		`{"command":"instance.restart","targetId":"`+id+`"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("instance.restart status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	if err := waitForSupervisorState(t, e.sup, domain.InstanceID(id), domain.InstanceStateRunning, 5*time.Second); err != nil {
+		t.Fatalf("wait component running after restart: %v", err)
+	}
+
+	// instance.stop → 200 (stops the restarted component).
+	rec = e.do(t, http.MethodPost, "/api/v1/commands/execute", addr, sess, csrf,
+		`{"command":"instance.stop","targetId":"`+id+`"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("instance.stop status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+
+	restarts := e.query(t, 100, 0, audit.EventInstanceRestart)
+	if len(restarts) != 1 {
+		t.Fatalf("instance.restart events = %d, want 1: %+v", len(restarts), restarts)
+	}
+	if restarts[0].Detail["instance_id"] != id || restarts[0].User != "admin" {
+		t.Fatalf("instance.restart audit detail = %v user=%q", restarts[0].Detail, restarts[0].User)
+	}
+
+	stops := e.query(t, 100, 0, audit.EventInstanceStop)
+	if len(stops) != 1 {
+		t.Fatalf("instance.stop events = %d, want 1: %+v", len(stops), stops)
+	}
+	if stops[0].Detail["instance_id"] != id {
+		t.Fatalf("instance.stop audit detail = %v, want instance_id=%s", stops[0].Detail, id)
+	}
+
+	// No model name leaks into the detail.
+	for _, ev := range append(stops, restarts...) {
+		for _, v := range ev.Detail {
+			if v == "pcomp-audit-model" {
+				t.Fatalf("audit detail leaked model identity: %v", ev.Detail)
+			}
+		}
+	}
+}

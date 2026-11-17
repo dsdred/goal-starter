@@ -370,7 +370,7 @@ A thin command-dispatch point that **names** an action and **delegates** it to t
 
 | Method | Path | Auth | CSRF | Description |
 |--------|------|------|------|-------------|
-| `POST` | `/api/v1/commands/execute` | Yes | Yes | Dispatch one Stage 1 command. The closed Stage 1 vocabulary is exactly `{ model.start, model.stop, model.restart, pipeline.start, pipeline.stop, pipeline.restart }`. |
+| `POST` | `/api/v1/commands/execute` | Yes | Yes | Dispatch one Stage 1 command. The closed Stage 1 vocabulary is exactly `{ model.start, model.stop, model.restart, instance.stop, instance.restart, pipeline.start, pipeline.stop, pipeline.restart }`. |
 
 **Request body** (`application/json`):
 
@@ -379,7 +379,7 @@ A thin command-dispatch point that **names** an action and **delegates** it to t
 ```
 
 - `command` — the command name (exact, case-sensitive match against the Stage 1 vocabulary).
-- `targetId` — the **object ID**: the **model ID** for `model.*` commands (the same identifier the existing `POST /api/v1/models/{id}/…` route carries in its path) and the **pipeline ID** for `pipeline.*` commands (the same identifier the existing `POST /api/v1/pipelines/{id}/…` route carries in its path).
+- `targetId` — the **object ID**: the **model ID** for `model.*` commands (the same identifier the existing `POST /api/v1/models/{id}/…` route carries in its path), the **instance ID** for `instance.*` commands (the same identifier the existing `POST /api/v1/instances/{id}/…` route carries in its path, and the one `pipeline.start` exposes per component), and the **pipeline ID** for `pipeline.*` commands (the same identifier the existing `POST /api/v1/pipelines/{id}/…` route carries in its path).
 
 **Result — per command.** Every command returns the **same** success body and the **same** status + `code` as its per-object route, because it is the same delegated service call with the same classifier applied (ADR 024 D-10):
 
@@ -388,6 +388,8 @@ A thin command-dispatch point that **names** an action and **delegates** it to t
 | `model.start` | The started **instance-entry** body (environment nulled) — identical to `POST /api/v1/models/{id}/start`. | Shared [Lifecycle error mapping](#lifecycle-error-mapping): `409 launch_in_flight`, `503 shutting_down` / `launch_aborted`, `500 launch_persist_failed` / `termination_unconfirmed` / `rollback_failed`. |
 | `model.stop` | `{ "status": "stopped" }` — identical to `POST /api/v1/models/{id}/stop`. A `pending` launch of the model returns `409 launch_in_flight`; every live instance is stopped. | Same shared [Lifecycle error mapping](#lifecycle-error-mapping). |
 | `model.restart` | `{ "status": "restarted" }` — identical to `POST /api/v1/models/{id}/restart`. The whole in-flight target set is preflighted first (ADR 017 D1) then each target restarted. | Same shared [Lifecycle error mapping](#lifecycle-error-mapping). |
+| `instance.stop` | `{ "status": "stopped" }` — identical to `POST /api/v1/instances/{id}/stop`. Stops **exactly** the named instance (one component), never its siblings. | Same shared [Lifecycle error mapping](#lifecycle-error-mapping). |
+| `instance.restart` | The restarted **instance-entry** body (environment nulled) — identical to `POST /api/v1/instances/{id}/restart`. The restarted instance preserves its **InstanceID** (same identity) with a new PID, through the ADR 017 boundary. | Same shared [Lifecycle error mapping](#lifecycle-error-mapping). |
 | `pipeline.start` | The **same** `PipelineStartResult` aggregate body as `POST /api/v1/pipelines/{id}/start` (per-entry `status`: `started`, `already-running`, `orphan-skipped`, …). | Same group-failure status + `code` as the route (the `pipeline_*` tokens; 500/503/409 by precedence), with the aggregate body + shadowing `code`/`error` on an incomplete group. |
 | `pipeline.stop` | The **same** `PipelineStopResult` aggregate body as `POST /api/v1/pipelines/{id}/stop` (reverse-order). | Same group-failure status + `code` as the route. |
 | `pipeline.restart` | The **same** `PipelineRestartResult` aggregate body (stop phase then start phase) as `POST /api/v1/pipelines/{id}/restart`. | Same group-failure status + `code` as the route. |
@@ -398,11 +400,11 @@ A thin command-dispatch point that **names** an action and **delegates** it to t
 |--------|--------|---------|------|
 | `400` | `bad_request` | — | Malformed JSON body, or an empty `command` or `targetId`. |
 | `400` | `unknown_command` | the rejected value | A `command` outside the Stage 1 vocabulary (e.g. `model.frobnicate`). The message names the rejected value; no stack trace. |
-| `404` | `not_found` | `model not found` / `pipeline not found` | The `targetId` does not resolve to a model (for `model.*`) or a pipeline (for `pipeline.*`). |
+| `404` | `not_found` | `model not found` / `instance not found` / `pipeline not found` | The `targetId` does not resolve to a model (for `model.*`), an instance (for `instance.*`), or a pipeline (for `pipeline.*`). |
 
 The `404 not_found` reclassification is the **one** deliberate place this surface differs from the existing per-object routes: the command layer re-runs the resolution and reports an unresolvable target as a bounded `404` before delegating, whereas the existing routes (unchanged) fall through to their previous behavior. The existing model/pipeline routes and their services are **not** modified (ADR 024 C-6).
 
-**Audit (ADR 024 D-7, command-by-command parity).** No command emits a `command.execute` record. A command carries exactly the same audit behavior as its per-object route: `model.*` commands emit **no** audit event (the model routes are unaudited), and `pipeline.*` commands emit the **same** ADR 007 `pipeline.start` / `pipeline.stop` / `pipeline.restart` control-action event (same bounded counters, same user attribution, identifier-only) that the corresponding `POST /api/v1/pipelines/{id}/…` route emits — on success and on an incomplete group. No existing `instance.*` / `pipeline.*` audit is disabled or bypassed. A unified, entry-point-independent control-action audit is a separate non-blocking follow-up (BACKLOG `G3-AUDIT-01`).
+**Audit (ADR 024 D-7, command-by-command parity).** No command emits a `command.execute` record. A command carries exactly the same audit behavior as its per-object route: `model.*` commands emit **no** audit event (the model routes are unaudited), `instance.*` commands emit the **same** ADR 007 `instance.stop` / `instance.restart` control-action event (same bounded detail — `instance_id`, identifier-only, no model-name or sibling identity) that the corresponding `POST /api/v1/instances/{id}/…` route emits, and `pipeline.*` commands emit the **same** ADR 007 `pipeline.start` / `pipeline.stop` / `pipeline.restart` control-action event (same bounded counters, same user attribution, identifier-only) that the corresponding `POST /api/v1/pipelines/{id}/…` route emits — on success and on an incomplete group. No existing `instance.*` / `pipeline.*` audit is disabled or bypassed. A unified, entry-point-independent control-action audit is a separate non-blocking follow-up (BACKLOG `G3-AUDIT-01`).
 
 ## Pipelines
 

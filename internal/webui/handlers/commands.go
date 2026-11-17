@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -49,20 +50,26 @@ func (h *CommandsHandler) WithSessionStore(sess *security.SessionStore) *Command
 }
 
 // commandRequest is the Stage 1 command body (ADR 024 D-4): a command name and the
-// target identifier. For model.* commands, targetId is the model ID; for pipeline.*
-// commands it is the pipeline ID — the same identifier the corresponding per-object
-// route carries in its path (ADR 024 D-9).
+// target identifier. For model.* commands, targetId is the model ID; for instance.*
+// commands it is the instance ID; for pipeline.* commands it is the pipeline ID — the
+// same identifier the corresponding per-object route carries in its path (ADR 024 D-9,
+// extended by D-11 for the instance.* per-component commands).
 type commandRequest struct {
 	Command  string `json:"command"`
 	TargetID string `json:"targetId"`
 }
 
-// The closed Stage 1 command vocabulary (ADR 024 D-3, extended by D-8), exact-match,
-// case-sensitive. Any other command value is an unknown command (D-6).
+// The closed Stage 1 command vocabulary (ADR 024 D-3, extended by D-8 and by D-11),
+// exact-match, case-sensitive. Any other command value is an unknown command (D-6).
+// The set is a clean three-tier by target scope: model.* acts on every live/in-flight
+// instance of a model, instance.* acts on one instance (a pipeline component is one
+// such instance), and pipeline.* acts on the whole pipeline group (ADR 024 D-11).
 const (
 	cmdModelStart      = "model.start"
 	cmdModelStop       = "model.stop"
 	cmdModelRestart    = "model.restart"
+	cmdInstanceStop    = "instance.stop"
+	cmdInstanceRestart = "instance.restart"
 	cmdPipelineStart   = "pipeline.start"
 	cmdPipelineStop    = "pipeline.stop"
 	cmdPipelineRestart = "pipeline.restart"
@@ -80,7 +87,7 @@ func (h *CommandsHandler) Execute(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusBadRequest, apierrors.NewAPIError(apierrors.CodeBadRequest, "command and targetId are required"))
 		return
 	}
-	if ok, err := h.targetExists(req.Command, req.TargetID); !ok {
+	if ok, err := h.targetExists(r.Context(), req.Command, req.TargetID); !ok {
 		writeAPIError(w, http.StatusNotFound, apierrors.NewAPIError(apierrors.CodeNotFound, err.Error()))
 		return
 	}
@@ -91,6 +98,10 @@ func (h *CommandsHandler) Execute(w http.ResponseWriter, r *http.Request) {
 		h.executeModelStop(w, r, req.TargetID)
 	case cmdModelRestart:
 		h.executeModelRestart(w, r, req.TargetID)
+	case cmdInstanceStop:
+		h.executeInstanceStop(w, r, req.TargetID)
+	case cmdInstanceRestart:
+		h.executeInstanceRestart(w, r, req.TargetID)
 	case cmdPipelineStart:
 		h.executePipelineStart(w, r, req.TargetID)
 	case cmdPipelineStop:
@@ -106,18 +117,26 @@ func (h *CommandsHandler) Execute(w http.ResponseWriter, r *http.Request) {
 }
 
 // targetExists reports whether the command's target is resolvable (ADR 024 D-6): a
-// model command must reference a known model, a pipeline command a known pipeline.
-// An unresolvable target is a bounded 404 on the command surface — the deliberate
-// improvement over the per-object routes (model.start falls through to 500, and
-// model.stop/restart answer 200 on a ghost model today). The existing routes and
+// model command must reference a known model, an instance command a resolvable
+// instance (live or a retained terminal one, ADR 024 D-11), a pipeline command a known
+// pipeline. An unresolvable target is a bounded 404 on the command surface — the
+// deliberate improvement over the per-object routes (model.start falls through to 500,
+// and model.stop/restart answer 200 on a ghost model today). The existing routes and
 // services are unchanged (ADR 024 C-6); this check is command-surface only. A command
 // outside the closed vocabulary is not a resolvable target here: Execute reports it as
 // unknown_command (400), not not_found (404).
-func (h *CommandsHandler) targetExists(command, id string) (bool, error) {
+func (h *CommandsHandler) targetExists(ctx context.Context, command, id string) (bool, error) {
 	switch command {
 	case cmdModelStart, cmdModelStop, cmdModelRestart:
 		if _, err := h.repo.GetModel(id); err != nil {
 			return false, errors.New("model not found")
+		}
+	case cmdInstanceStop, cmdInstanceRestart:
+		// A component is one instance; a live or retained-terminal instance is a
+		// valid stop/restart target (the same resolvable set the per-object
+		// /instances/{id} routes operate on, ADR 024 D-11).
+		if _, err := h.instanceSvc.GetInstanceStatus(ctx, domain.InstanceID(id)); err != nil {
+			return false, errors.New("instance not found")
 		}
 	case cmdPipelineStart, cmdPipelineStop, cmdPipelineRestart:
 		if _, err := h.repo.GetPipeline(id); err != nil {
@@ -213,6 +232,46 @@ func (h *CommandsHandler) executeModelRestart(w http.ResponseWriter, r *http.Req
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "restarted"})
+}
+
+// executeInstanceStop is the instance.stop dispatch (ADR 024 D-11). It is the
+// command-surface twin of POST /api/v1/instances/{id}/stop: it stops exactly ONE
+// instance — the single ADR 017 boundary, InstanceService.StopInstance → Supervisor.Stop
+// — so a pipeline component (one owned instance) can be stopped without touching its
+// siblings or any other copy of the same model. It returns the same 200 body and emits
+// the same control-action audit event the per-object route does (D-10 parity); the only
+// command-surface difference is the bounded 404 not_found for an unresolvable instance
+// (D-6), handled in targetExists. The existing route and InstanceService.StopInstance
+// are unchanged (C-6).
+func (h *CommandsHandler) executeInstanceStop(w http.ResponseWriter, r *http.Request, id string) {
+	if err := h.instanceSvc.StopInstance(r.Context(), domain.InstanceID(id)); err != nil {
+		writeLifecycleError(w, err)
+		return
+	}
+	logAudit(h.audit, h.sess, r, audit.EventInstanceStop, map[string]string{"instance_id": id})
+	writeJSON(w, http.StatusOK, map[string]string{"status": "stopped"})
+}
+
+// executeInstanceRestart is the instance.restart dispatch (ADR 024 D-11). It is the
+// command-surface twin of POST /api/v1/instances/{id}/restart: it restarts exactly ONE
+// instance through the ownership-aware InstanceService.RestartInstance → Supervisor.
+// RestartWithLaunch boundary — the same InstanceID, the preserved
+// PipelineID/PipelineEntryID attribution and any entry Args are kept, a new PID is
+// minted — so a stopped component relaunches with its own pipeline identity, never
+// merged into or replaced by Model.Args. It returns the same 200 instance-entry body
+// (environment nulled) and emits the same control-action audit event the per-object
+// route does (D-10 parity); the only command-surface difference is the bounded 404
+// not_found for an unresolvable instance (D-6), handled in targetExists. The existing
+// route and InstanceService.RestartInstance are unchanged (C-6).
+func (h *CommandsHandler) executeInstanceRestart(w http.ResponseWriter, r *http.Request, id string) {
+	inst, err := h.instanceSvc.RestartInstance(r.Context(), domain.InstanceID(id))
+	if err != nil {
+		writeLifecycleError(w, err)
+		return
+	}
+	logAudit(h.audit, h.sess, r, audit.EventInstanceRestart, map[string]string{"instance_id": id})
+	inst.Environment = nil
+	writeJSON(w, http.StatusOK, domain.ToStorageEntry(inst))
 }
 
 // executePipelineStart is the pipeline.start dispatch (ADR 024 D-5/D-8). It delegates
