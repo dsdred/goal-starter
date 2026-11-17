@@ -17,6 +17,7 @@ const (
 	CodeInvalidAddress     Code = "invalid_address"
 	CodeInvalidRuntime     Code = "invalid_runtime"
 	CodeInvalidModel       Code = "invalid_model"
+	CodeUnknownCommand     Code = "unknown_command"
 	CodeInternalServer     Code = "internal_server_error"
 )
 

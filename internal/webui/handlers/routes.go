@@ -29,6 +29,7 @@ type RouteRegistry struct {
 	runtimeHandler    *RuntimesHandler
 	modelHandler      *ModelsHandler
 	instanceHandler   *InstancesHandler
+	commandHandler    *CommandsHandler
 	pipelineHandler   *PipelineHandler
 	systemHandler     *SystemHandler
 	auditHandler      *AuditHandler
@@ -125,6 +126,7 @@ func NewRouteRegistry(
 		runtimeHandler:  NewRuntimesHandler(runtimeSvc, instanceSvc, supervisor, csrf),
 		modelHandler:    NewModelsHandler(modelSvc, instanceSvc, supervisor, repo, csrf),
 		instanceHandler: NewInstancesHandler(instanceSvc, csrf),
+		commandHandler:  NewCommandsHandler(instanceSvc, repo),
 		pipelineHandler: NewPipelineHandler(pipelineSvc, repo, instanceSvc, csrf),
 		systemHandler:   NewSystemHandler(supervisor, sessionStore, csrf, instanceSvc),
 		portableHandler: NewPortableHandler(repo),
@@ -197,6 +199,9 @@ func (r *RouteRegistry) Build() http.Handler {
 	mux.HandleFunc("POST /api/v1/models/{id}/activate", r.requireAuthCSRF(r.modelHandler.Activate))
 	mux.HandleFunc("POST /api/v1/models/{id}/deactivate", r.requireAuthCSRF(r.modelHandler.Deactivate))
 	mux.HandleFunc("POST /api/v1/models/{id}/resolve", r.requireAuthCSRF(r.modelHandler.Resolve))
+
+	// Commands (ADR 024 Stage 1): one dispatch point that delegates to the services.
+	mux.HandleFunc("POST /api/v1/commands/execute", r.requireAuthCSRF(r.commandHandler.Execute))
 
 	// Runtimes CRUD.
 	mux.HandleFunc("GET /api/v1/runtimes", r.requireAuth(r.runtimeHandler.List))

@@ -44,7 +44,7 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 func statusForAPICode(code apierrors.Code) int {
 	switch code {
 	case apierrors.CodeBadRequest, apierrors.CodeInvalidPort, apierrors.CodeInvalidHost,
-		apierrors.CodeInvalidAddress:
+		apierrors.CodeInvalidAddress, apierrors.CodeUnknownCommand:
 		return http.StatusBadRequest
 	case apierrors.CodeUnauthorized:
 		return http.StatusUnauthorized
