@@ -90,7 +90,7 @@ sudo ./goal          # Linux
 
 Файл `goal.json` лежит в той же директории, что и бинарник. Он **исключён из git** (содержит секреты и пользовательские пути).
 
-> **Legacy-формат:** `goal.json` использует схему v5 для обратной совместимости. Записи `profiles` при старте становятся **Model** (определениями запуска) GoAl 2.0. Legacy-записи `models` (с `path`) складываются в launch args соответствующей модели. Новые модели, созданные через API или Web UI, используют упрощённый формат GoAl 2.0.
+> **Схема конфигурации:** `goal.json` использует схему конфигурации версии **2** (миграция v5 → v8 относится к репозиторию `goal_repo.json`, а не к `goal.json`). Записи `profiles` при старте становятся **Model** (определениями запуска) GoAl 2.0. Legacy-записи `models` (с `path`) **не** сеются напрямую — они складываются в launch args модели, созданной из профиля, который ссылается на них через `modelId`. Новые модели, созданные через API или Web UI, используют упрощённый формат GoAl 2.0.
 
 ### Полная конфигурация
 
@@ -120,10 +120,11 @@ sudo ./goal          # Linux
 | `adminUser` | Имя администратора | `admin` | Нет |
 | `adminPasswordHash` | Bcrypt-хеш пароля администратора (обязателен при `authEnabled=true`; обычно задаётся через настройки Web UI — plaintext не сохраняется) | `""` | Условное |
 | `authEnabled` | Включить авторизацию | `false` | Нет |
+| `logLevel` | Уровень логирования: `debug`, `info`, `warn`, `error` (отсутствует = `info`); hot-поле, применяется перезагрузкой | `info` | Нет |
 | `tls` | Необязательный блок нативного HTTPS (`enabled`, `port`, абсолютные `certFile` / `keyFile`) — см. [HTTPS-доступ и защищённый адрес](#https-доступ-и-защищённый-адрес) | отсутствует (= выключено) | Нет |
-| `runtimes` | Список AI-рантайнов | `[]` | Нет |
-| `models` | Список моделей | `[]` | Нет |
-| `profiles` | Список профилей запуска | `[]` | Нет |
+| `runtimes` | Список AI-рантайнов (сеются один раз, напрямую) | `[]` | Нет |
+| `models` | Legacy-определения физических моделей — не сеются напрямую; складываются в модель из профиля через `modelId` | `[]` | Нет |
+| `profiles` | Legacy-шаблоны запуска — каждый становится Model GoAl 2.0 при старте | `[]` | Нет |
 
 ### Настройка Runtime
 
@@ -133,16 +134,19 @@ sudo ./goal          # Linux
     {
       "id": "ollama",
       "name": "Ollama",
-      "type": "ollama",
       "executable": "ollama",
-      "workingDir": "C:\\Program Files\\Ollama",
-      "args": ["serve"],
+      "workingDirectory": "C:\\Program Files\\Ollama",
+      "defaultArgs": ["serve"],
       "environment": {},
       "healthCheck": {
         "type": "http",
-        "url": "http://127.0.0.1:11434"
-      },
-      "active": true
+        "enabled": true,
+        "interval": 30,
+        "timeout": 3,
+        "host": "127.0.0.1",
+        "port": 11434,
+        "httpPath": "/"
+      }
     }
   ]
 }
@@ -154,18 +158,18 @@ sudo ./goal          # Linux
 |------|----------|
 | `id` | Уникальный идентификатор (латиница, цифры, дефис) |
 | `name` | Отображаемое имя |
-| `type` | Тип рантайна: `ollama`, `vllm`, `llama.cpp`, `custom` |
 | `executable` | Путь к исполняемому файлу |
-| `workingDir` | Рабочая директория процесса |
-| `args` | Аргументы командной строки |
+| `workingDirectory` | Рабочая директория процесса |
+| `defaultArgs` | Legacy-аргументы по умолчанию (складываются в model args при старте) |
 | `environment` | Переменные окружения процесса |
-| `healthCheck` | Настройка проверки здоровья |
-| `active` | Активен ли Runtime |
+| `healthCheck` | Настройка проверки здоровья (`type`, `enabled`, `interval`, `timeout`, `host`, `port`, `httpPath`) |
 
 ### Настройка модели (legacy-формат `goal.json`)
 
-В `goal.json` модели используют legacy-формат v5. При старте `SeedFromConfig` складывает
-`path` и `arguments` в launch args GoAl 2.0 Model, созданной из `profiles`.
+В `goal.json` legacy-записи `models` несут старый формат физической модели (`path`, `arguments`).
+Они **не** сеются как отдельные модели: при старте `SeedFromConfig` складывает `path` и
+`arguments` в launch args GoAl 2.0 Model, **созданной из записи `profiles`**, которая ссылается
+на них через `modelId`. Запись `models` без ссылающегося профиля не создаёт модель.
 
 **Пример: llama.cpp с GGUF-моделью:**
 
@@ -182,13 +186,19 @@ sudo ./goal          # Linux
         "--jinja",
         "-c", "200000",
         "--port", "8085",
-        "--host", "0.0.0.0"
+        "--host", "127.0.0.1"
       ],
       "environment": {}
     }
   ]
 }
 ```
+
+> **Безопасность — `--host 0.0.0.0`:** привязка inference-сервера к `0.0.0.0` заставляет его
+> слушать **все** сетевые интерфейсы, открывая доступ из LAN/интернета без авторизации GoAl.
+> Используйте `--host 127.0.0.1` (loopback), если вам осознанно не нужен удалённый доступ и
+> вы не защитили рантайм отдельно. Привязка собственного Web UI GoAl управляется отдельно
+> полем `listenAddress`.
 
 **Вариант B: через path (простой GGUF-файл, складывается в args при старте):**
 
@@ -233,8 +243,7 @@ sudo ./goal          # Linux
       "runtimeId": "ollama",
       "modelId": "llama3",
       "args": ["--port", "8080"],
-      "environment": {"OMP_NUM_THREADS": "4"},
-      "active": true
+      "environment": {"OMP_NUM_THREADS": "4"}
     }
   ]
 }
@@ -250,7 +259,6 @@ sudo ./goal          # Linux
 | `modelId` | ID модели (опционально) |
 | `args` | Дополнительные аргументы командной строки |
 | `environment` | Переменные окружения процесса |
-| `active` | Активен ли профиль |
 
 ### Горячая перезагрузка конфигурации (ADR 009)
 
@@ -661,11 +669,9 @@ curl -X POST http://127.0.0.1:8088/api/v1/models/my-model/resolve \
 2. Нажмите **Create Runtime**
 3. Заполните поля:
    - Имя рантайна
-   - Тип: `ollama`, `vllm`, `llama.cpp`, `custom`
    - Путь к исполняемому файлу
-   - Рабочая директория
-   - Аргументы командной строки
-   - Health Check (HTTP или TCP)
+   - Рабочая директория (опционально)
+   - Переменные окружения (опционально)
 4. Нажмите **Save**
 
 **Через API:**
@@ -676,37 +682,24 @@ curl -X POST http://127.0.0.1:8088/api/v1/runtimes \
   -d '{
     "id": "my-ollama",
     "name": "Ollama",
-    "type": "ollama",
     "executable": "C:\\Program Files\\Ollama\\ollama.exe",
-    "args": ["serve"],
-    "healthCheck": {
-      "type": "http",
-      "url": "http://127.0.0.1:11434"
-    }
+    "working_directory": "C:\\Program Files\\Ollama",
+    "environment": {}
   }'
 ```
 
+Аргументы запуска относятся к **Model**, а не к рантайму; API рантайма принимает только
+`id`, `name`, `executable`, `working_directory` и `environment`.
+
 ### Health Check
 
-GoAl автоматически проверяет здоровье рантайнов каждые 30 секунд. Поддерживаются два типа:
-
-**HTTP Health Check:**
-
-```json
-{
-  "type": "http",
-  "url": "http://127.0.0.1:11434"
-}
-```
-
-**TCP Health Check:**
-
-```json
-{
-  "type": "tcp",
-  "address": "127.0.0.1:11434"
-}
-```
+GoAl автоматически проверяет здоровье рантайнов каждые 30 секунд через **TCP-подключение**
+(таймаут 3 секунды). Проверки **привязаны к экземплярам**: целевой `host:port` берётся из
+launch args каждой модели (`--host` / `--port`; host по умолчанию `127.0.0.1`, модель без
+`--port` пропускается), с группировкой по рантайму. Настраиваемого объекта `healthCheck` у
+рантайма через API или Web UI нет, как нет и проверки HTTP-пути — только TCP-доступность.
+Результаты доступны через `GET /api/v1/runtimes/health` (все рантайны) и
+`GET /api/v1/runtimes/health/{id}` (один рантайм).
 
 ### Проверка здоровья
 

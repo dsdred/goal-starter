@@ -90,7 +90,7 @@ After starting, GoAl is available at: **http://127.0.0.1:8088**
 
 The `goal.json` file is located in the same directory as the binary. It is **excluded from git** (contains secrets and custom paths).
 
-> **Legacy format:** `goal.json` uses the v5 config schema for backward compatibility. The `profiles` entries become GoAl 2.0 **Models** (launch definitions) at startup. Legacy `models` entries (with `path`) are folded into the corresponding model's launch args. New models created via the API or Web UI use the simplified GoAl 2.0 format.
+> **Config schema:** `goal.json` uses config schema version **2** (the v5 → v8 migration applies to the repository `goal_repo.json`, not to `goal.json`). The `profiles` entries become GoAl 2.0 **Models** (launch definitions) at startup. Legacy `models` entries (with `path`) are **not** seeded directly — they are folded into the launch args of the profile-derived Model that references them via `modelId`. New models created via the API or Web UI use the simplified GoAl 2.0 format.
 
 ### Full Configuration
 
@@ -120,10 +120,11 @@ The `goal.json` file is located in the same directory as the binary. It is **exc
 | `adminUser` | Administrator username | `admin` | No |
 | `adminPasswordHash` | Bcrypt hash of the administrator password (required when `authEnabled=true`; normally set via Web UI Settings — plaintext is never persisted) | `""` | Conditional |
 | `authEnabled` | Enable authentication | `false` | No |
+| `logLevel` | Application log level: `debug`, `info`, `warn`, `error` (absent = `info`); hot field, applied by reload | `info` | No |
 | `tls` | Optional native HTTPS block (`enabled`, `port`, absolute `certFile` / `keyFile`) — see [HTTPS access and secure origin](#https-access-and-secure-origin) | absent (= disabled) | No |
-| `runtimes` | List of AI runtimes | `[]` | No |
-| `models` | List of models | `[]` | No |
-| `profiles` | List of launch profiles | `[]` | No |
+| `runtimes` | List of AI runtimes (seeded once, directly) | `[]` | No |
+| `models` | Legacy physical-model definitions — not seeded directly; folded into a profile-derived Model via `modelId` | `[]` | No |
+| `profiles` | Legacy launch templates — each becomes a GoAl 2.0 Model at startup | `[]` | No |
 
 ### Runtime Configuration
 
@@ -133,16 +134,19 @@ The `goal.json` file is located in the same directory as the binary. It is **exc
     {
       "id": "ollama",
       "name": "Ollama",
-      "type": "ollama",
       "executable": "ollama",
-      "workingDir": "C:\\Program Files\\Ollama",
-      "args": ["serve"],
+      "workingDirectory": "C:\\Program Files\\Ollama",
+      "defaultArgs": ["serve"],
       "environment": {},
       "healthCheck": {
         "type": "http",
-        "url": "http://127.0.0.1:11434"
-      },
-      "active": true
+        "enabled": true,
+        "interval": 30,
+        "timeout": 3,
+        "host": "127.0.0.1",
+        "port": 11434,
+        "httpPath": "/"
+      }
     }
   ]
 }
@@ -154,18 +158,18 @@ The `goal.json` file is located in the same directory as the binary. It is **exc
 |-------|-------------|
 | `id` | Unique identifier (lowercase letters, digits, hyphens) |
 | `name` | Display name |
-| `type` | Runtime type: `ollama`, `vllm`, `llama.cpp`, `custom` |
 | `executable` | Path to the executable file |
-| `workingDir` | Working directory for the process |
-| `args` | Command-line arguments |
+| `workingDirectory` | Working directory for the process |
+| `defaultArgs` | Legacy default arguments (folded into model args at startup) |
 | `environment` | Process environment variables |
-| `healthCheck` | Health check configuration |
-| `active` | Whether the runtime is enabled |
+| `healthCheck` | Health check configuration (`type`, `enabled`, `interval`, `timeout`, `host`, `port`, `httpPath`) |
 
 ### Model Configuration (legacy `goal.json` format)
 
-In `goal.json`, models use the legacy v5 format. At startup, `SeedFromConfig` folds
-`path` and `arguments` into the launch args of the GoAl 2.0 Model derived from `profiles`.
+In `goal.json`, legacy `models` entries carry the old physical-model format (`path`, `arguments`).
+They are **not** seeded as standalone models: at startup `SeedFromConfig` folds `path` and
+`arguments` into the launch args of the GoAl 2.0 Model **derived from a `profiles` entry** that
+references them via `modelId`. A `models` entry with no referencing profile produces no model.
 
 **Example: llama.cpp with GGUF model:**
 
@@ -182,13 +186,19 @@ In `goal.json`, models use the legacy v5 format. At startup, `SeedFromConfig` fo
         "--jinja",
         "-c", "200000",
         "--port", "8085",
-        "--host", "0.0.0.0"
+        "--host", "127.0.0.1"
       ],
       "environment": {}
     }
   ]
 }
 ```
+
+> **Security — `--host 0.0.0.0`:** binding the inference server to `0.0.0.0` makes it
+> listen on **all** network interfaces, exposing it to the LAN/internet without GoAl's
+> authentication. Use `--host 127.0.0.1` (loopback) unless you deliberately need remote
+> access and have secured the runtime independently. GoAl's own Web UI bind is controlled
+> separately by `listenAddress`.
 
 **Option B: via path (simple GGUF file, folded into args at startup):**
 
@@ -233,8 +243,7 @@ model's launch args.
       "runtimeId": "ollama",
       "modelId": "llama3",
       "args": ["--port", "8080"],
-      "environment": {"OMP_NUM_THREADS": "4"},
-      "active": true
+      "environment": {"OMP_NUM_THREADS": "4"}
     }
   ]
 }
@@ -250,7 +259,6 @@ model's launch args.
 | `modelId` | Model ID (optional) |
 | `args` | Additional command-line arguments |
 | `environment` | Process environment variables |
-| `active` | Whether the profile is enabled |
 
 ### Hot Configuration Reload (ADR 009)
 
@@ -683,11 +691,9 @@ Runtime names must be unique (case-insensitive). Creating or renaming a runtime 
 2. Click **Create Runtime**
 3. Fill in the fields:
    - Runtime name
-   - Type: `ollama`, `vllm`, `llama.cpp`, `custom`
    - Executable path
-   - Working directory
-   - Command-line arguments
-   - Health Check (HTTP or TCP)
+   - Working directory (optional)
+   - Environment variables (optional)
 4. Click **Save**
 
 **Via API:**
@@ -698,37 +704,24 @@ curl -X POST http://127.0.0.1:8088/api/v1/runtimes \
   -d '{
     "id": "my-ollama",
     "name": "Ollama",
-    "type": "ollama",
     "executable": "C:\\Program Files\\Ollama\\ollama.exe",
-    "args": ["serve"],
-    "healthCheck": {
-      "type": "http",
-      "url": "http://127.0.0.1:11434"
-    }
+    "working_directory": "C:\\Program Files\\Ollama",
+    "environment": {}
   }'
 ```
 
+Launch arguments belong to the **Model**, not the runtime; the runtime API accepts only
+`id`, `name`, `executable`, `working_directory`, and `environment`.
+
 ### Health Check
 
-GoAl automatically checks runtime health every 30 seconds. Two types are supported:
-
-**HTTP Health Check:**
-
-```json
-{
-  "type": "http",
-  "url": "http://127.0.0.1:11434"
-}
-```
-
-**TCP Health Check:**
-
-```json
-{
-  "type": "tcp",
-  "address": "127.0.0.1:11434"
-}
-```
+GoAl automatically checks runtime health every 30 seconds with a **TCP connect**
+(3-second timeout). Checks are **instance-based**: the target `host:port` is derived from
+each model's launch args (`--host` / `--port`; host defaults to `127.0.0.1`, and a model
+without `--port` is skipped), grouped per runtime. There is no `healthCheck` object to
+configure on a runtime via the API or Web UI, and no HTTP-path check — only TCP
+reachability. Results are exposed at `GET /api/v1/runtimes/health` (all runtimes) and
+`GET /api/v1/runtimes/health/{id}` (one runtime).
 
 ### Checking Health
 

@@ -17,9 +17,9 @@ Configuration is loaded from a JSON file (default: `goal.json`) at application s
 | `authEnabled` | bool | No | `false` | Enable session-based authentication and CSRF. |
 | `logLevel` | string | No | `info` | Application log level: `debug`, `info`, `warn`, `error`. Absent means `info`. Hot field (applied by reload, no restart). |
 | `tls` | object | No | absent | Optional native HTTPS settings ([TLS configuration](#tls-configuration-adr-019)). Absent means disabled. Restart field. |
-| `runtimes` | array | No | `[]` | Initial runtime definitions (seeded once). |
-| `models` | array | No | `[]` | Initial model definitions (seeded once). |
-| `profiles` | array | No | `[]` | Initial profile definitions (seeded once). |
+| `runtimes` | array | No | `[]` | Initial runtime definitions (seeded once, directly). |
+| `models` | array | No | `[]` | Legacy physical-model definitions. **Not seeded directly**: folded into the args of a profile-derived Model when a `profiles` entry references them via `modelId`. A `models` entry with no referencing profile produces no model. |
+| `profiles` | array | No | `[]` | Legacy launch templates (seeded once). Each profile becomes a GoAl 2.0 **Model** at startup. |
 
 ### Configuration migration
 
@@ -65,7 +65,6 @@ Each runtime entry defines an external inference server or service.
 | `defaultArgs` | array of string | No | `[]` | Legacy; migrated to model args. Retained for backward compatibility only. |
 | `environment` | map[string]string | No | `{}` | Process environment variables. |
 | `healthCheck` | object | No | — | Health check configuration (see below). |
-| `active` | bool | No | `true` | Whether the runtime is enabled. |
 
 Runtime environment values may contain sensitive process configuration. The
 HTTP API accepts them as write-only input and returns sorted
@@ -87,10 +86,13 @@ operations. Omitting `environment_patch` preserves the stored map.
 
 ## Model configuration
 
-Each model entry in `goal.json` uses the legacy v5 format. At startup, `SeedFromConfig`
-folds old model data (`path`, `arguments`) into the launch args of the corresponding
-GoAl 2.0 Model (derived from `profiles`). New models created via the API/UI use the
-simplified format: `id`, `name`, `runtime_id`, `args`, `environment`.
+`goal.json` uses config schema version **2**. (The v5 → v8 migration applies to the
+repository `goal_repo.json`, not to `goal.json` — see [Storage migration](#storage-migration).)
+Legacy `models` entries carry the old physical-model format (`path`, `arguments`). At startup,
+`SeedFromConfig` folds that data into the launch args of the corresponding GoAl 2.0 Model
+**derived from a `profiles` entry** (via `modelId`); a `models` entry is **not** seeded as a
+standalone model. New models created via the API/UI use the simplified format:
+`id`, `name`, `runtime_id`, `args`, `environment`.
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
@@ -198,7 +200,6 @@ in the GoAl 2.0 domain.
 | `args` | array of string | No | `[]` | Additional command-line arguments (accepts legacy `arguments` key). |
 | `environment` | map[string]string | No | `{}` | Process environment variables. |
 | `healthCheck` | object | No | — | Profile-specific health check (see below). |
-| `active` | bool | No | `true` | Whether the profile is enabled. |
 
 ### Profile healthCheck
 
