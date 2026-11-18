@@ -715,15 +715,22 @@ function pipelineEntryStatus(p, entry, idx) {
 
 // resolveComponent reports a component's state, its owning InstanceID, and
 // whether the entry -> instance attribution is precise (by pipeline_entry_id).
-// Per-component control (G3-RES-01) is offered ONLY for a precisely-attributed,
-// running instance: a fallback model_id match could address a sibling copy of a
-// repeatable model, so instanceId is null unless precise && state === 'running'.
+// Per-component control (G3-RES-01, ADR 024 D-11/D-12) is offered ONLY for a
+// precisely-attributed instance: a fallback model_id match could address a
+// sibling copy of a repeatable model, so instanceId is null unless the
+// attribution is precise and the single attributed instance is in a state the
+// server allows its actions for — 'running' (Stop/Restart) or 'exited' /
+// 'failed' (Start). An entry without a resolvable instance keeps the
+// pipeline-wide Start (hint), never a per-component button.
 function resolveComponent(p, entry, idx) {
     const r = pipelineEntryInstances(p, entry, idx);
     const state = pipelineEntryStatus(p, entry, idx);
     let instanceId = null;
-    if (r.precise && state === 'running' && r.list.length > 0) {
-        instanceId = r.list[0].id;
+    if (r.precise && r.list.length === 1) {
+        const st = r.list[0].state;
+        if (st === 'running' || st === 'exited' || st === 'failed') {
+            instanceId = r.list[0].id;
+        }
     }
     return { state: state, instanceId: instanceId, precise: r.precise };
 }
@@ -731,9 +738,11 @@ function resolveComponent(p, entry, idx) {
 // pipelineChips renders one chip per entry (ADR 013 D7): a repeated model
 // appears once per entry (each chip carries the model name and its own
 // per-entry status); chips beyond a display budget collapse to +N with a tooltip.
-// Each chip also carries per-component controls (G3-RES-01): Stop/Restart for a
-// precisely-attributed running component, or a hint when it is stopped (there is
-// no per-component Start — recovery is the pipeline-level Start).
+// Each chip also carries per-component controls (G3-RES-01, ADR 024
+// D-11/D-12): Stop/Restart for a precisely-attributed running component, Start
+// for a precisely-attributed exited/failed component (instance.start, same
+// InstanceID), or a hint when the entry has no resolvable instance (recovery
+// is the pipeline-wide Start).
 function pipelineChips(p) {
     const shown = p.models.slice(0, 6);
     const rest = p.models.slice(6);
@@ -742,9 +751,17 @@ function pipelineChips(p) {
         const name = getModelName(m.model_id);
         let actions = '';
         if (rc.instanceId) {
+            // A precisely-attributed RUNNING component offers Stop + Restart
+            // (D-11); a precisely-attributed TERMINAL (exited/failed) one offers
+            // Start (D-12, instance.start on the same InstanceID). Stop/Restart
+            // on a terminal component would be refused by the server anyway, so
+            // the chip offers only the action the state allows.
+            const running = rc.state === 'running';
             actions = '<span class="pl-chip-actions">' +
-                iconBtn(ICONS.stop, t('pipelines.chip.stop'), 'danger', 'stopComponent', rc.instanceId) +
-                iconBtn(ICONS.restart, t('pipelines.chip.restart'), 'warning', 'restartComponent', rc.instanceId) +
+                (running
+                    ? iconBtn(ICONS.stop, t('pipelines.chip.stop'), 'danger', 'stopComponent', rc.instanceId) +
+                      iconBtn(ICONS.restart, t('pipelines.chip.restart'), 'warning', 'restartComponent', rc.instanceId)
+                    : iconBtn(ICONS.start, t('pipelines.chip.start'), 'success', 'startComponent', rc.instanceId)) +
                 '</span>';
         } else if (rc.state === 'stopped') {
             const hint = t('pipelines.chip.stopped_hint');
@@ -885,6 +902,7 @@ async function componentCommand(command, instanceId, successKey) {
     } catch (e) { showToast(friendlyError(e), 'error'); }
 }
 
+function startComponent(instanceId) { componentCommand('instance.start', instanceId, 'common.started'); }
 function stopComponent(instanceId) { componentCommand('instance.stop', instanceId, 'common.stopped'); }
 function restartComponent(instanceId) { componentCommand('instance.restart', instanceId, 'common.restarted'); }
 
@@ -2945,6 +2963,7 @@ window.stopInstance = stopInstance;
 window.restartInstance = restartInstance;
 window.dismissInstance = dismissInstance;
 window.killInstance = killInstance;
+window.startComponent = startComponent;
 window.stopComponent = stopComponent;
 window.restartComponent = restartComponent;
 window.showCreateRuntimeModal = showCreateRuntimeModal;

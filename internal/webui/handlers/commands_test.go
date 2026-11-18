@@ -827,3 +827,319 @@ func TestCommandsHandler_InstanceLifecycleAndAudit(t *testing.T) {
 		}
 	}
 }
+
+// waitComponentTerminal polls the supervisor until the component is no longer
+// live/in-flight (terminal: exited or failed).
+func waitComponentTerminal(t *testing.T, e *auditEnv, id string) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		inst, err := e.sup.Status(domain.InstanceID(id))
+		if err == nil && inst != nil && !inst.State.IsInFlight() {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("component %s did not reach a terminal state", id)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// TestCommandsHandler_InstanceStart_Success pins ADR 024 D-12 on the success
+// leg: instance.start over the command surface starts exactly the targeted
+// TERMINAL component on its SAME InstanceID and returns the same 200
+// instance-entry body the per-object routes return.
+func TestCommandsHandler_InstanceStart_Success(t *testing.T) {
+	e := newAuditEnv(t, 0)
+	addr := "10.9.8.7:4444"
+	sess, csrf := e.loggedIn(t, addr)
+	e.seedGracefulModel(t, "pcomp-start")
+	id := startPipelineComponent(t, e, addr, sess, csrf, "pcomp-start")
+
+	// To terminal via the command surface.
+	rec := e.do(t, http.MethodPost, "/api/v1/commands/execute", addr, sess, csrf,
+		`{"command":"instance.stop","targetId":"`+id+`"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("instance.stop status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	waitComponentTerminal(t, e, id)
+
+	rec = e.do(t, http.MethodPost, "/api/v1/commands/execute", addr, sess, csrf,
+		`{"command":"instance.start","targetId":"`+id+`"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("instance.start status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if body["id"] != id {
+		t.Errorf("started id = %v, want %s (identity preserved)", body["id"], id)
+	}
+	if body["model_id"] != "pcomp-start" {
+		t.Errorf("model_id = %v, want pcomp-start", body["model_id"])
+	}
+	if err := waitForSupervisorState(t, e.sup, domain.InstanceID(id), domain.InstanceStateRunning, 10*time.Second); err != nil {
+		t.Fatalf("wait component running after instance.start: %v", err)
+	}
+}
+
+// TestCommandsHandler_InstanceStart_Running_Returns409 pins the D-12 refusal
+// leg with the side-effect absence asserted: a start of a RUNNING component is
+// 409 already_running, and the live generation is NOT stopped, restarted or
+// mutated (same PID, still running).
+func TestCommandsHandler_InstanceStart_Running_Returns409(t *testing.T) {
+	e := newAuditEnv(t, 0)
+	addr := "10.9.8.7:4444"
+	sess, csrf := e.loggedIn(t, addr)
+	e.seedGracefulModel(t, "pcomp-start409")
+	id := startPipelineComponent(t, e, addr, sess, csrf, "pcomp-start409")
+
+	live, err := e.sup.Status(domain.InstanceID(id))
+	if err != nil || live == nil {
+		t.Fatalf("status: %v", err)
+	}
+	firstPID := live.PID
+
+	rec := e.do(t, http.MethodPost, "/api/v1/commands/execute", addr, sess, csrf,
+		`{"command":"instance.start","targetId":"`+id+`"}`)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("instance.start status = %d, want 409; body=%s", rec.Code, rec.Body.String())
+	}
+	var body map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if body["error"] != "already_running" {
+		t.Errorf("error = %q, want already_running", body["error"])
+	}
+	if body["code"] != "conflict" {
+		t.Errorf("code = %q, want conflict", body["code"])
+	}
+
+	// No unwanted lifecycle side effect on the live generation.
+	after, err := e.sup.Status(domain.InstanceID(id))
+	if err != nil || after == nil {
+		t.Fatalf("status after refused start: %v", err)
+	}
+	if after.PID != firstPID {
+		t.Fatalf("PID changed by a refused start: %d -> %d", firstPID, after.PID)
+	}
+	if after.State != domain.InstanceStateRunning {
+		t.Fatalf("state = %q, want still running", after.State)
+	}
+}
+
+// TestCommandsHandler_InstanceStart_VsPipelineStart pins the D-12 coexistence
+// with the group command: on a running component, instance.start is refused
+// 409 already_running and pipeline.start reports the `already-running`
+// outcome — pipeline.start semantics are unchanged by the new command, and
+// the component's generation is untouched by both.
+func TestCommandsHandler_InstanceStart_VsPipelineStart(t *testing.T) {
+	e := newAuditEnv(t, 0)
+	addr := "10.9.8.7:4444"
+	sess, csrf := e.loggedIn(t, addr)
+	e.seedGracefulModel(t, "pcomp-start-pipe")
+	id := startPipelineComponent(t, e, addr, sess, csrf, "pcomp-start-pipe")
+	pipelines, err := e.repo.ListPipelines()
+	if err != nil || len(pipelines) == 0 {
+		t.Fatalf("ListPipelines: %v", err)
+	}
+	pipeID := pipelines[0].ID
+	live, err := e.sup.Status(domain.InstanceID(id))
+	if err != nil || live == nil {
+		t.Fatalf("status: %v", err)
+	}
+	firstPID := live.PID
+
+	rec := e.do(t, http.MethodPost, "/api/v1/commands/execute", addr, sess, csrf,
+		`{"command":"instance.start","targetId":"`+id+`"}`)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("instance.start status = %d, want 409; body=%s", rec.Code, rec.Body.String())
+	}
+	rec = e.do(t, http.MethodPost, "/api/v1/commands/execute", addr, sess, csrf,
+		`{"command":"pipeline.start","targetId":"`+pipeID+`"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("pipeline.start status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	var pipeBody struct {
+		Results []struct {
+			Status string `json:"status"`
+		} `json:"results"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &pipeBody); err != nil || len(pipeBody.Results) != 1 || pipeBody.Results[0].Status != "already-running" {
+		t.Fatalf("pipeline.start = %s, want already-running", rec.Body.String())
+	}
+
+	after, err := e.sup.Status(domain.InstanceID(id))
+	if err != nil || after == nil {
+		t.Fatalf("status after both commands: %v", err)
+	}
+	if after.PID != firstPID || after.State != domain.InstanceStateRunning {
+		t.Fatalf("generation mutated: pid=%d state=%q (want %d running)", after.PID, after.State, firstPID)
+	}
+}
+
+// TestCommandsHandler_InstanceStart_DuplicateModelIsolation pins the
+// repeatable-model leg on the command surface: two live components of ONE
+// model; instance.start names ONE InstanceID. It starts exactly the targeted
+// terminal component; the sibling of the SAME model is untouched (same PID,
+// still running).
+func TestCommandsHandler_InstanceStart_DuplicateModelIsolation(t *testing.T) {
+	e := newAuditEnv(t, 0)
+	addr := "10.9.8.7:4444"
+	sess, csrf := e.loggedIn(t, addr)
+	e.seedGracefulModel(t, "pcomp-start-fanout")
+
+	if status, raw := createPipelineAPI(t, e, addr, sess, csrf,
+		`{"name":"startfanout","models":[{"model_id":"pcomp-start-fanout"},{"model_id":"pcomp-start-fanout"}]}`); status != http.StatusCreated {
+		t.Fatalf("create pipeline: %d %s", status, raw)
+	}
+	pipelines, err := e.repo.ListPipelines()
+	if err != nil || len(pipelines) == 0 {
+		t.Fatalf("ListPipelines: %v (n=%d)", err, len(pipelines))
+	}
+	pipeID := pipelines[0].ID
+	rec := e.do(t, http.MethodPost, "/api/v1/commands/execute", addr, sess, csrf,
+		`{"command":"pipeline.start","targetId":"`+pipeID+`"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("pipeline.start: %d %s", rec.Code, rec.Body.String())
+	}
+	var startOut struct {
+		Results []struct {
+			Status     string `json:"status"`
+			InstanceID string `json:"instance_id"`
+		} `json:"results"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &startOut); err != nil || len(startOut.Results) != 2 {
+		t.Fatalf("pipeline.start results = %s, want 2 components", rec.Body.String())
+	}
+	idA, idB := startOut.Results[0].InstanceID, startOut.Results[1].InstanceID
+	if idA == "" || idB == "" || idA == idB {
+		t.Fatalf("want two distinct component ids, got %q and %q", idA, idB)
+	}
+	if err := waitForSupervisorState(t, e.sup, domain.InstanceID(idA), domain.InstanceStateRunning, 5*time.Second); err != nil {
+		t.Fatalf("wait A running: %v", err)
+	}
+	if err := waitForSupervisorState(t, e.sup, domain.InstanceID(idB), domain.InstanceStateRunning, 5*time.Second); err != nil {
+		t.Fatalf("wait B running: %v", err)
+	}
+	bLive, err := e.sup.Status(domain.InstanceID(idB))
+	if err != nil || bLive == nil {
+		t.Fatalf("status B: %v", err)
+	}
+	bPID := bLive.PID
+	t.Cleanup(func() {
+		e.do(t, http.MethodPost, "/api/v1/pipelines/"+pipeID+"/stop", addr, sess, csrf, "")
+	})
+
+	// Stop A, then instance.start A by its InstanceID.
+	rec = e.do(t, http.MethodPost, "/api/v1/commands/execute", addr, sess, csrf,
+		`{"command":"instance.stop","targetId":"`+idA+`"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("instance.stop status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	waitComponentTerminal(t, e, idA)
+	rec = e.do(t, http.MethodPost, "/api/v1/commands/execute", addr, sess, csrf,
+		`{"command":"instance.start","targetId":"`+idA+`"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("instance.start status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil || body["id"] != idA {
+		t.Fatalf("instance.start body = %s, want id=%s", rec.Body.String(), idA)
+	}
+	if err := waitForSupervisorState(t, e.sup, domain.InstanceID(idA), domain.InstanceStateRunning, 10*time.Second); err != nil {
+		t.Fatalf("wait A running after instance.start: %v", err)
+	}
+
+	// Sibling B of the SAME model is untouched.
+	bAfter, err := e.sup.Status(domain.InstanceID(idB))
+	if err != nil || bAfter == nil {
+		t.Fatalf("status B after: %v", err)
+	}
+	if bAfter.PID != bPID {
+		t.Fatalf("sibling B PID changed by instance.start of A: %d -> %d", bPID, bAfter.PID)
+	}
+	if bAfter.State != domain.InstanceStateRunning {
+		t.Fatalf("sibling B state = %q, want still running", bAfter.State)
+	}
+}
+
+// TestCommandsHandler_InstanceStart_UnknownTarget_Returns404 pins D-6 on the
+// instance.start half of the command surface: an unresolvable InstanceID is a
+// bounded 404 not_found.
+func TestCommandsHandler_InstanceStart_UnknownTarget_Returns404(t *testing.T) {
+	h, _, _, _ := newCommandsTestEnv(t)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/commands/execute", commandBody("instance.start", "no-such-instance"))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.Execute(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d: %s", w.Code, w.Body.String())
+	}
+	var body map[string]string
+	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if body["code"] != "not_found" {
+		t.Errorf("code = %q, want not_found", body["code"])
+	}
+}
+
+// TestCommandsHandler_InstanceStart_Audit pins the D-12 audit leg: instance.start
+// emits exactly one control-action audit event per attempt, carrying the
+// instance_id (identifier-only) plus, on refusal, the bounded error token —
+// never the model name or any sibling identity.
+func TestCommandsHandler_InstanceStart_Audit(t *testing.T) {
+	e := newAuditEnv(t, 0)
+	addr := "10.9.8.7:4444"
+	sess, csrf := e.loggedIn(t, addr)
+	e.seedGracefulModel(t, "pcomp-start-audit")
+	id := startPipelineComponent(t, e, addr, sess, csrf, "pcomp-start-audit")
+
+	// Refused leg (running) → one audit with the bounded error token.
+	rec := e.do(t, http.MethodPost, "/api/v1/commands/execute", addr, sess, csrf,
+		`{"command":"instance.start","targetId":"`+id+`"}`)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("refused leg status = %d, want 409; body=%s", rec.Code, rec.Body.String())
+	}
+
+	// Success leg → one audit without the error token.
+	rec = e.do(t, http.MethodPost, "/api/v1/commands/execute", addr, sess, csrf,
+		`{"command":"instance.stop","targetId":"`+id+`"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("instance.stop status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	waitComponentTerminal(t, e, id)
+	rec = e.do(t, http.MethodPost, "/api/v1/commands/execute", addr, sess, csrf,
+		`{"command":"instance.start","targetId":"`+id+`"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("instance.start status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+
+	events := e.query(t, 100, 0, audit.EventInstanceStart)
+	if len(events) != 2 {
+		t.Fatalf("instance.start events = %d, want 2: %+v", len(events), events)
+	}
+	// Newest-first: events[0] is the success, events[1] the refusal.
+	if events[0].Detail["instance_id"] != id || events[0].Detail["error"] != "" {
+		t.Fatalf("success audit detail = %v, want instance_id only", events[0].Detail)
+	}
+	if events[1].Detail["instance_id"] != id || events[1].Detail["error"] != "already_running" {
+		t.Fatalf("refusal audit detail = %v, want error=already_running", events[1].Detail)
+	}
+	if events[0].User != "admin" {
+		t.Fatalf("audit user = %q, want admin", events[0].User)
+	}
+	// No model identity leak.
+	for _, ev := range events {
+		for _, v := range ev.Detail {
+			if v == "pcomp-start-audit-model" {
+				t.Fatalf("audit detail leaked model identity: %v", ev.Detail)
+			}
+		}
+	}
+}

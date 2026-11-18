@@ -19,9 +19,13 @@ import (
 // performs it. It holds no *process.Supervisor and no lifecycle logic of its own —
 // the entire lifecycle (start, stop, restart; model- and pipeline-owned) is reached
 // only by delegating to InstanceService and PipelineService, which in turn reach the
-// single ADR 017 arbitration boundary (Supervisor.AdmitAndStart / Stop / Restart).
-// There is no second supervisor, no second arbitration path and no lifecycle
-// duplication: this handler re-implements no admission, ownership or rollback rule.
+// single ADR 017 arbitration boundary (Supervisor.AdmitAndStart / Stop /
+// Restart / StartInstance). There is no second supervisor, no second
+// arbitration path and no lifecycle duplication: this handler re-implements no
+// admission, ownership or rollback rule. instance.start (ADR 024 D-12) is the
+// one command without a per-object route twin: it delegates to
+// InstanceService.StartInstance → Supervisor.StartInstance (the ADR 017 start
+// gate) and never to AdmitAndStart, and it creates no second instance record.
 type CommandsHandler struct {
 	instanceSvc *application.InstanceService
 	pipelineSvc *application.PipelineService
@@ -59,15 +63,17 @@ type commandRequest struct {
 	TargetID string `json:"targetId"`
 }
 
-// The closed Stage 1 command vocabulary (ADR 024 D-3, extended by D-8 and by D-11),
-// exact-match, case-sensitive. Any other command value is an unknown command (D-6).
-// The set is a clean three-tier by target scope: model.* acts on every live/in-flight
-// instance of a model, instance.* acts on one instance (a pipeline component is one
-// such instance), and pipeline.* acts on the whole pipeline group (ADR 024 D-11).
+// The closed Stage 1 command vocabulary (ADR 024 D-3, extended by D-8, D-11
+// and D-12), exact-match, case-sensitive. Any other command value is an
+// unknown command (D-6). The set is a clean three-tier by target scope:
+// model.* acts on every live/in-flight instance of a model, instance.* acts on
+// one instance (a pipeline component is one such instance), and pipeline.*
+// acts on the whole pipeline group (ADR 024 D-11/D-12).
 const (
 	cmdModelStart      = "model.start"
 	cmdModelStop       = "model.stop"
 	cmdModelRestart    = "model.restart"
+	cmdInstanceStart   = "instance.start"
 	cmdInstanceStop    = "instance.stop"
 	cmdInstanceRestart = "instance.restart"
 	cmdPipelineStart   = "pipeline.start"
@@ -98,6 +104,8 @@ func (h *CommandsHandler) Execute(w http.ResponseWriter, r *http.Request) {
 		h.executeModelStop(w, r, req.TargetID)
 	case cmdModelRestart:
 		h.executeModelRestart(w, r, req.TargetID)
+	case cmdInstanceStart:
+		h.executeInstanceStart(w, r, req.TargetID)
 	case cmdInstanceStop:
 		h.executeInstanceStop(w, r, req.TargetID)
 	case cmdInstanceRestart:
@@ -131,10 +139,10 @@ func (h *CommandsHandler) targetExists(ctx context.Context, command, id string) 
 		if _, err := h.repo.GetModel(id); err != nil {
 			return false, errors.New("model not found")
 		}
-	case cmdInstanceStop, cmdInstanceRestart:
+	case cmdInstanceStart, cmdInstanceStop, cmdInstanceRestart:
 		// A component is one instance; a live or retained-terminal instance is a
-		// valid stop/restart target (the same resolvable set the per-object
-		// /instances/{id} routes operate on, ADR 024 D-11).
+		// valid start/stop/restart target (the same resolvable set the per-object
+		// /instances/{id} routes operate on, ADR 024 D-11/D-12).
 		if _, err := h.instanceSvc.GetInstanceStatus(ctx, domain.InstanceID(id)); err != nil {
 			return false, errors.New("instance not found")
 		}
@@ -232,6 +240,34 @@ func (h *CommandsHandler) executeModelRestart(w http.ResponseWriter, r *http.Req
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "restarted"})
+}
+
+// executeInstanceStart is the instance.start dispatch (ADR 024 D-12). It
+// starts exactly ONE terminal (exited/failed) instance on its SAME InstanceID
+// through the ownership-aware InstanceService.StartInstance → Supervisor.
+// StartInstance path — the ADR 017 start gate inside the arbitration boundary
+// enforces the state contract atomically (running/stopping → 409
+// already_running, pending/starting → 409 launch_in_flight, stale/orphan →
+// bounded rejection, shutdown → 503) — so a live generation is NEVER stopped
+// or mutated by a start, and the started instance preserves its InstanceID,
+// record and PipelineID/PipelineEntryID attribution with a new PID. It returns
+// the 200 instance-entry body (environment nulled) and emits the ADR 007
+// instance.start control-action event (identifier-only); the only
+// command-surface difference is the bounded 404 not_found for an unresolvable
+// instance (D-6), handled in targetExists.
+func (h *CommandsHandler) executeInstanceStart(w http.ResponseWriter, r *http.Request, id string) {
+	inst, err := h.instanceSvc.StartInstance(r.Context(), domain.InstanceID(id))
+	if err != nil {
+		logAudit(h.audit, h.sess, r, audit.EventInstanceStart, map[string]string{
+			"instance_id": id,
+			"error":       lifecycleAuditToken(err),
+		})
+		writeLifecycleError(w, err)
+		return
+	}
+	logAudit(h.audit, h.sess, r, audit.EventInstanceStart, map[string]string{"instance_id": id})
+	inst.Environment = nil
+	writeJSON(w, http.StatusOK, domain.ToStorageEntry(inst))
 }
 
 // executeInstanceStop is the instance.stop dispatch (ADR 024 D-11). It is the

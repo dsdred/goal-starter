@@ -45,10 +45,17 @@ const (
 	// claimRestartExisting publishes a controller-local restart reservation on
 	// the existing controller of the exact target instance.
 	claimRestartExisting
+	// claimStartExisting (ADR 024 D-12) publishes the same controller-local
+	// reservation on the existing controller of the exact target instance, but
+	// its target precondition is the start gate: only exited/failed targets are
+	// admitted. A running or stopping target is refused with ErrAlreadyRunning
+	// — a start NEVER stops or mutates a live generation, which is what
+	// distinguishes it from claimRestartExisting.
+	claimStartExisting
 )
 
 // claimant is the sealed input of the arbitration boundary. All fields are
-// unexported and the struct is only built by the two constructors below.
+// unexported and the struct is only built by the three constructors below.
 type claimant struct {
 	mode       claimantMode
 	modelID    string
@@ -79,6 +86,20 @@ func newAdmissionClaimant(modelID string, inst *domain.LaunchInstance, ctrl *Ins
 func newRestartClaimant(ctrl *InstanceController, modelID string, owner domain.LaunchOwner) claimant {
 	return claimant{
 		mode:       claimRestartExisting,
+		modelID:    modelID,
+		instanceID: ctrl.instanceID,
+		owner:      owner,
+		ctrl:       ctrl,
+	}
+}
+
+// newStartClaimant builds the claimant for a START of an existing terminal
+// instance (ADR 024 D-12). It carries the same identity and self-exemption as
+// a restart claimant; what differs is the mode, which selects the stricter
+// start gate inside arbitrate.
+func newStartClaimant(ctrl *InstanceController, modelID string, owner domain.LaunchOwner) claimant {
+	return claimant{
+		mode:       claimStartExisting,
 		modelID:    modelID,
 		instanceID: ctrl.instanceID,
 		owner:      owner,
@@ -160,8 +181,13 @@ func (s *Supervisor) arbitrate(c claimant) (*spawnClaim, error) {
 		return nil, &AdmissionRejection{Reason: RejShuttingDown, ModelID: c.modelID}
 	}
 
-	if c.mode == claimRestartExisting {
+	switch c.mode {
+	case claimRestartExisting:
 		if err := checkRestartTarget(c.ctrl); err != nil {
+			return nil, err
+		}
+	case claimStartExisting:
+		if err := checkStartTarget(c.ctrl); err != nil {
 			return nil, err
 		}
 	}
@@ -252,7 +278,10 @@ func (s *Supervisor) publishClaimLocked(c claimant) (*spawnClaim, error) {
 		owner:      c.owner,
 		instanceID: c.instanceID,
 		opID:       opID,
-		restart:    c.mode == claimRestartExisting,
+		// Both existing-controller claimants (restart and start) reuse the
+		// controller's durable record and have no pre-spawn token, so the
+		// pre-spawn abort takes the same record-preserving path for both.
+		restart: c.mode != claimNewAdmission,
 	}
 	op := &launchOperation{id: opID, owner: c.owner, claim: claim}
 
@@ -321,6 +350,49 @@ func checkRestartTarget(ctrl *InstanceController) error {
 	}
 	if view.active != nil {
 		return fmt.Errorf("restart instance %s: %w: restart already in flight", string(ctrl.instanceID), ErrLaunchInFlight)
+	}
+	return nil
+}
+
+// checkStartTarget is the D-12 start state contract (ADR 024 D-12), enforced
+// inside the SAME atomic arbitrate section as checkRestartTarget — same
+// arbLock, same single view load, and strictly before the publication under
+// launchMu — so the start gate and the reservation publication are linearized
+// together and no caller-visible interleaving can slip a live generation past
+// the gate:
+//
+//	pending  refuse — ErrLaunchInFlight, the launch is still in flight
+//	starting refuse — ErrLaunchInFlight, the generation is inside the ADR 016
+//	         ownership-establishment window
+//	running  refuse — ErrAlreadyRunning, a start never stops a live generation
+//	stopping refuse — ErrAlreadyRunning, a live stop owner is finalizing it
+//	exited   allow
+//	failed   allow
+//	stale    refuse — ErrNotRestartable, terminal-but-unrecoverable attribution
+//	orphan   refuse — ErrNotRestartable; the repository orphan fence is
+//	         authoritative for repository orphans
+//
+// An active published operation (an in-flight start or restart of the target)
+// is refused with ErrLaunchInFlight, mirroring checkRestartTarget: a target
+// that already owns a reservation is never started twice.
+func checkStartTarget(ctrl *InstanceController) error {
+	// ADR 021 D5/D13: one view load keeps the state and the published
+	// operation from the same generation.
+	view := ctrl.view.Load()
+	snap := view.instance
+	switch snap.State {
+	case domain.InstanceStatePending:
+		return fmt.Errorf("start instance %s: %w: launch in flight", string(ctrl.instanceID), ErrLaunchInFlight)
+	case domain.InstanceStateStarting:
+		return fmt.Errorf("start instance %s: %w: generation is establishing ADR 016 ownership", string(ctrl.instanceID), ErrLaunchInFlight)
+	case domain.InstanceStateRunning, domain.InstanceStateStopping:
+		return fmt.Errorf("start instance %s: %w (state %s)", string(ctrl.instanceID), ErrAlreadyRunning, string(snap.State))
+	case domain.InstanceStateExited, domain.InstanceStateFailed:
+	default:
+		return fmt.Errorf("start instance %s: %w (state %s)", string(ctrl.instanceID), ErrNotRestartable, string(snap.State))
+	}
+	if view.active != nil {
+		return fmt.Errorf("start instance %s: %w: start or restart already in flight", string(ctrl.instanceID), ErrLaunchInFlight)
 	}
 	return nil
 }

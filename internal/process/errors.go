@@ -54,6 +54,12 @@ var ErrNotRestartable = errors.New("instance is not restartable")
 // HTTP handlers map it to 404 with code not_found.
 var ErrInstanceNotFound = errors.New("instance not found")
 
+// ErrAlreadyRunning reports that an instance.start (ADR 024 D-12) targets an
+// instance that is already running or being stopped: the start gate refuses to
+// stop or otherwise mutate a live generation (a start is not a restart).
+// HTTP handlers map it to 409 with code already_running.
+var ErrAlreadyRunning = errors.New("instance is already running")
+
 // RejectionReason classifies why admission was denied (ADR 017).
 type RejectionReason int
 

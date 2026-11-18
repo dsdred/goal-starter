@@ -374,11 +374,12 @@ async function main() {
     suite.log('5.4 Icon strip shows Restart+Stop while running (4 icons)', runningStrip === 4 && stopIcon && restartIcon, `icons=${runningStrip} stop=${stopIcon} restart=${restartIcon}`);
     await H.screenshot(page, ws, '03-pipeline-running');
 
-    // ═══ SECTION 5b: Per-component controls (G3-RES-01) ═══
+    // ═══ SECTION 5b: Per-component controls (G3-RES-01, incl. D-12 Start) ═══
     // Both A and B are running (Section 5). A precisely-attributed, running
-    // component exposes inline Stop + Restart on its chip; a stopped component
-    // shows a hint (there is NO per-component Start); an ambiguous (fallback
-    // model_id) attribution never yields a control.
+    // component exposes inline Stop + Restart on its chip; a precisely-attributed
+    // TERMINAL (stopped) component exposes a single inline Start (ADR 024 D-12);
+    // an ambiguous (fallback model_id) attribution never yields a control and
+    // shows the hint instead (recovery = pipeline-wide Start).
     const runByModel = async () => {
       const r = await runningFor(pipeId);
       const map = {};
@@ -430,36 +431,61 @@ async function main() {
     suite.log('5b.3b Sibling B is still running after A stopped',
       !!(afterStopA[idB] && afterStopA[idB].id), `B=${afterStopA[idB] ? afterStopA[idB].id : 'none'}`);
 
-    // 5b.4 The stopped chip A shows the hint icon and no control buttons; a
-    // per-component Start does not exist anywhere (recovery = pipeline Start).
-    await poll(async () => (await page.locator('#pipeline-list .pl-chip[title="Pipe Model A"].stopped .pl-chip-hint').count()) === 1, 8000);
+    // 5b.4 The stopped chip A (precise attribution, exited) exposes a single
+    // per-component Start (ADR 024 D-12) and no hint — recovery of a precisely
+    // attributed terminal component is now per-component, not pipeline-wide.
+    await poll(async () => (await page.locator('#pipeline-list .pl-chip[title="Pipe Model A"].stopped .icon-btn[onclick^="startComponent"]').count()) === 1, 8000);
+    const aChipStart = await page.locator('#pipeline-list .pl-chip[title="Pipe Model A"].stopped .icon-btn[onclick^="startComponent"]').count();
     const aChipHint = await page.locator('#pipeline-list .pl-chip[title="Pipe Model A"].stopped .pl-chip-hint').count();
     const aChipActions = await page.locator('#pipeline-list .pl-chip[title="Pipe Model A"] .pl-chip-actions .icon-btn').count();
-    suite.log('5b.4 Stopped component A shows the hint and no control buttons',
-      aChipHint === 1 && aChipActions === 0, `hint=${aChipHint} actions=${aChipActions}`);
-    const anyStartNow = await page.locator('#pipeline-list .pl-chip .icon-btn[onclick^="startComponent"]').count();
-    suite.log('5b.4b No per-component Start exists anywhere (recovery = pipeline Start)', anyStartNow === 0, `start=${anyStartNow}`);
+    suite.log('5b.4 Stopped component A shows a single Start button (precise terminal attribution)',
+      aChipStart === 1 && aChipHint === 0 && aChipActions === 1, `start=${aChipStart} hint=${aChipHint} actions=${aChipActions}`);
+    const aStartTarget = ((await page.locator('#pipeline-list .pl-chip[title="Pipe Model A"].stopped .icon-btn[onclick^="startComponent"]').first().getAttribute('onclick')) || '').match(/'([^']+)'/) || null;
+    suite.log('5b.4b The chip Start targets the exited component InstanceID (D-12 precise attribution)',
+      !!aStartTarget && aStartTarget[1] === aIdBeforeStop, `target=${aStartTarget ? aStartTarget[1] : 'none'} want=${aIdBeforeStop}`);
     await H.screenshot(page, ws, '03b-per-component-stopped');
 
-    // 5b.5 Guard (reachable projection): a per-component control is rendered
-    // only when resolveComponent returns an instanceId, which happens ONLY for a
-    // precisely-attributed RUNNING component. app.js is wrapped in an IIFE, so
-    // the resolver and its instance cache are not reachable from here; the DOM
-    // consequence is the testable projection — a control-bearing chip must be a
-    // `running` chip, and a non-running chip (stopped / transitional) never
-    // carries one. (The legacy fallback-attribution branch — a pre-upgrade
-    // instance with no pipeline_entry_id — is not creatable in a fresh browser
-    // session and is enforced by the resolveComponent contract, not a browser
-    // leg; see the report.)
+    // 5b.4c Clicking the chip Start brings the SAME InstanceID back to running
+    // (new PID) and leaves sibling B untouched — the D-12 leg end-to-end.
+    if (aStartTarget && aIdBeforeStop) {
+      const bIdBeforeStart = afterStopA[idB] ? afterStopA[idB].id : null;
+      await page.locator('#pipeline-list .pl-chip[title="Pipe Model A"].stopped .icon-btn[onclick^="startComponent"]').first().click();
+      const startedA = await poll(async () => {
+        const a = await api('GET', '/api/v1/instances/' + aIdBeforeStop);
+        return (a.status === 200 && a.data && a.data.state === 'running') ? a.data : null;
+      }, 25000);
+      const afterStartA = await runByModel();
+      suite.log('5b.4c Per-component Start re-runs the SAME InstanceID (no new record)',
+        !!startedA && startedA.id === aIdBeforeStop && afterStartA[idA] && afterStartA[idA].id === aIdBeforeStop, `id=${aIdBeforeStop}`);
+      suite.log('5b.4d Per-component Start leaves sibling B untouched (same id, still running)',
+        !!bIdBeforeStart && !!afterStartA[idB] && afterStartA[idB].id === bIdBeforeStart, `B=${bIdBeforeStart}`);
+    } else {
+      suite.log('5b.4c Per-component Start re-runs the SAME InstanceID', false, 'chip Start target not found');
+      suite.log('5b.4d Per-component Start leaves sibling B untouched', false, 'chip Start target not found');
+    }
+
+    // 5b.5 Guard (reachable projection): a Stop/Restart control is rendered
+    // ONLY on a `running` chip; a `stopped` chip (precise terminal attribution)
+    // may carry ONLY a Start control; a transitional or fallback-attributed
+    // chip carries no control at all (hint instead). app.js is wrapped in an
+    // IIFE, so the resolver and its instance cache are not reachable from here;
+    // the DOM consequence is the testable projection above. (The legacy
+    // fallback-attribution branch — a pre-upgrade instance with no
+    // pipeline_entry_id — is not creatable in a fresh browser session and is
+    // enforced by the resolveComponent contract, not a browser leg; see the
+    // report.)
     const guardChips = await page.evaluate(() => [...document.querySelectorAll('#pipeline-list .pl-chip')].map(c => ({
       running: c.className.split(' ').includes('running'),
-      hasControls: !!c.querySelector('.pl-chip-actions .icon-btn'),
+      stopped: c.className.split(' ').includes('stopped'),
+      hasStopRestart: !!c.querySelector('.icon-btn[onclick*="stopComponent"], .icon-btn[onclick*="restartComponent"]'),
+      hasStart: !!c.querySelector('.icon-btn[onclick^="startComponent"]'),
     })));
-    const nonRunningWithControls = guardChips.filter(c => c.hasControls && !c.running).length;
-    const runningWithControls = guardChips.filter(c => c.hasControls && c.running).length;
-    suite.log('5b.5 Per-component controls appear ONLY on running, precisely-attributed chips (guard)',
-      nonRunningWithControls === 0 && runningWithControls >= 1,
-      `running=${runningWithControls} nonRunning=${nonRunningWithControls} total=${guardChips.length}`);
+    const nonRunningWithStopRestart = guardChips.filter(c => c.hasStopRestart && !c.running).length;
+    const stoppedWithNonStart = guardChips.filter(c => c.stopped && c.hasStopRestart).length;
+    const runningWithControls = guardChips.filter(c => c.hasStopRestart && c.running).length;
+    suite.log('5b.5 Guard: Stop/Restart ONLY on running chips; a stopped chip carries only Start (D-12)',
+      nonRunningWithStopRestart === 0 && stoppedWithNonStart === 0 && runningWithControls >= 1,
+      `running=${runningWithControls} nonRunningStopRestart=${nonRunningWithStopRestart} stoppedNonStart=${stoppedWithNonStart} total=${guardChips.length}`);
 
     // 5b.6 Repeatable-model isolation: two entries of the SAME model in one
     // pipeline. Stopping the first entry stops only that entry; the sibling
@@ -493,11 +519,13 @@ async function main() {
     suite.log('5b.6d Stopping one entry stops only it (sibling still running)',
       isoRunning.length === 1 && !!stoppedOne && stoppedOne.state === 'exited' && isoRunning[0].id !== firstIsoTarget,
       `running=${isoRunning.map(i => i.id).join(',')} stopped=${stoppedOne ? stoppedOne.id + ':' + stoppedOne.state : 'n/a'}`);
-    await poll(async () => (await page.locator('#pipeline-list .pl-chip[title="Iso Model"].stopped .pl-chip-hint').count()) === 1, 8000);
-    const isoStoppedChips = await page.locator('#pipeline-list .pl-chip[title="Iso Model"].stopped .pl-chip-hint').count();
+    await poll(async () => (await page.locator('#pipeline-list .pl-chip[title="Iso Model"].stopped .icon-btn[onclick^="startComponent"]').count()) === 1, 8000);
+    const isoStoppedStarts = await page.locator('#pipeline-list .pl-chip[title="Iso Model"].stopped .icon-btn[onclick^="startComponent"]').count();
+    const isoStoppedHints = await page.locator('#pipeline-list .pl-chip[title="Iso Model"].stopped .pl-chip-hint').count();
     const isoRunningChips = await page.locator('#pipeline-list .pl-chip[title="Iso Model"].running').count();
-    suite.log('5b.6e The stopped entry shows the hint; the sibling chip stays running with its controls',
-      isoStoppedChips === 1 && isoRunningChips === 1, `stopped=${isoStoppedChips} running=${isoRunningChips}`);
+    suite.log('5b.6e The stopped entry shows a single per-component Start; the sibling chip stays running with its controls',
+      isoStoppedStarts === 1 && isoStoppedHints === 0 && isoRunningChips === 1,
+      `stoppedStart=${isoStoppedStarts} hint=${isoStoppedHints} running=${isoRunningChips}`);
     // Cleanup: stop the surviving entry, then delete the pipeline.
     for (const i of isoRunning) {
       await api('POST', '/api/v1/commands/execute', { command: 'instance.stop', targetId: i.id });

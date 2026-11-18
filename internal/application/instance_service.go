@@ -86,9 +86,42 @@ func (s *InstanceService) RestartInstance(ctx context.Context, id domain.Instanc
 		return nil, err
 	}
 
+	domainModel, domainRuntime, err := s.resolveInstanceLaunch(inst)
+	if err != nil {
+		return nil, err
+	}
+
+	return s.supervisor.RestartWithLaunch(ctx, id, domainModel, domainRuntime, nil, nil)
+}
+
+// StartInstance starts an existing TERMINAL (exited/failed) instance on its
+// SAME InstanceID with the CURRENT launch configuration resolved from the
+// repository (ownership-aware, exactly as RestartInstance: same entry Args
+// rule, same runtime re-resolution, same preserved attribution). The state
+// gate (exited/failed only; running/stopping refused, a live generation is
+// never stopped) is enforced by the Supervisor's ADR 017 start gate inside the
+// arbitration boundary (ADR 024 D-12).
+func (s *InstanceService) StartInstance(ctx context.Context, id domain.InstanceID) (*domain.LaunchInstance, error) {
+	inst, err := s.supervisor.Status(id)
+	if err != nil {
+		return nil, err
+	}
+
+	domainModel, domainRuntime, err := s.resolveInstanceLaunch(inst)
+	if err != nil {
+		return nil, err
+	}
+
+	return s.supervisor.StartInstance(ctx, id, domainModel, domainRuntime, nil, nil)
+}
+
+// resolveInstanceLaunch resolves the current model / entry Args / runtime
+// launch configuration for one instance (shared by RestartInstance and
+// StartInstance, ADR 024 D-12).
+func (s *InstanceService) resolveInstanceLaunch(inst *domain.LaunchInstance) (*domain.Model, *domain.Runtime, error) {
 	me, err := s.repo.GetModel(inst.ModelID)
 	if err != nil {
-		return nil, fmt.Errorf("model not found: %s", inst.ModelID)
+		return nil, nil, fmt.Errorf("model not found: %s", inst.ModelID)
 	}
 
 	domainModel := domain.ModelEntryToDomain(me)
@@ -98,16 +131,16 @@ func (s *InstanceService) RestartInstance(ctx context.Context, id domain.Instanc
 			// condition (arbitration.instanceOwner), so a caller sees one
 			// bounded error for one cause regardless of which layer catches it
 			// (BF-03a).
-			return nil, fmt.Errorf("%w: pipeline entry ownership cannot be reconstructed for instance %s (legacy attribution)",
-				process.ErrNotRestartable, id)
+			return nil, nil, fmt.Errorf("%w: pipeline entry ownership cannot be reconstructed for instance %s (legacy attribution)",
+				process.ErrNotRestartable, inst.ID)
 		}
 		pe, err := s.repo.GetPipeline(inst.PipelineID)
 		if err != nil {
-			return nil, fmt.Errorf("pipeline not found: %s", inst.PipelineID)
+			return nil, nil, fmt.Errorf("pipeline not found: %s", inst.PipelineID)
 		}
 		entry, ok := pipelineEntryByID(pe, inst.PipelineEntryID)
 		if !ok {
-			return nil, fmt.Errorf("pipeline entry %s not found in pipeline %s", inst.PipelineEntryID, inst.PipelineID)
+			return nil, nil, fmt.Errorf("pipeline entry %s not found in pipeline %s", inst.PipelineEntryID, inst.PipelineID)
 		}
 		if len(entry.Args) > 0 {
 			domainModel.Args = entry.Args
@@ -116,7 +149,7 @@ func (s *InstanceService) RestartInstance(ctx context.Context, id domain.Instanc
 
 	rte, err := s.repo.GetRuntime(domainModel.RuntimeID)
 	if err != nil {
-		return nil, fmt.Errorf("runtime not found: %s", domainModel.RuntimeID)
+		return nil, nil, fmt.Errorf("runtime not found: %s", domainModel.RuntimeID)
 	}
 
 	domainRuntime := process.RuntimeToDomain(
@@ -124,7 +157,7 @@ func (s *InstanceService) RestartInstance(ctx context.Context, id domain.Instanc
 		rte.Environment,
 	)
 
-	return s.supervisor.RestartWithLaunch(ctx, id, domainModel, domainRuntime, nil, nil)
+	return domainModel, domainRuntime, nil
 }
 
 // pipelineEntryByID finds a pipeline entry (ADR 013 D1 identity) by its ID.

@@ -729,7 +729,7 @@ func (s *Supervisor) Restart(ctx context.Context, id domain.InstanceID) (*domain
 	if err != nil {
 		return nil, err
 	}
-	return s.restart(ctx, ctrl, nil, "")
+	return s.startExisting(ctx, ctrl, nil, "", claimRestartExisting)
 }
 
 // RestartWithLaunch restarts a specific instance using a freshly resolved
@@ -754,21 +754,62 @@ func (s *Supervisor) RestartWithLaunch(ctx context.Context, id domain.InstanceID
 		return nil, fmt.Errorf("resolve instance: %w", err)
 	}
 
-	return s.restart(ctx, ctrl, spec, runtime.ID)
+	return s.startExisting(ctx, ctrl, spec, runtime.ID, claimRestartExisting)
 }
 
-// restart is the single restart entry: it derives the owner from the TARGET
-// instance, arbitrates under the per-ModelID arbLock, and only then hands the
-// winning claim to the lifecycle work. arbLock is already released when
-// restartWithRefresh acquires lifecycleMu (no arbLock -> lifecycleMu edge).
-func (s *Supervisor) restart(ctx context.Context, ctrl *InstanceController, spec *domain.CommandSpec, runtimeID string) (*domain.LaunchInstance, error) {
+// StartInstance starts an existing TERMINAL (exited/failed) instance on its
+// SAME InstanceID using a freshly resolved launch specification built from the
+// current model/runtime configuration (ADR 024 D-12). It is the spawn path of
+// the instance.start command. The target precondition is the START gate
+// (checkStartTarget), enforced inside the same atomic arbitrate section as the
+// restart gate: a running or stopping target is refused with ErrAlreadyRunning
+// — a start never stops or mutates a live generation, and a concurrent
+// start/restart of the target is refused with ErrLaunchInFlight while its
+// reservation is published. The InstanceID, the persisted record, and the
+// PipelineID/PipelineEntryID attribution are preserved (no new ID is minted,
+// no second instance record is created); only the launch-affecting fields are
+// refreshed before the new process generation starts.
+//
+// The fresh spec is resolved BEFORE arbitration so a resolution failure costs
+// no reservation; arbitration then decides admission exactly as for a new
+// launch (D1/BF-01), one boundary, entered from three claim modes.
+func (s *Supervisor) StartInstance(ctx context.Context, id domain.InstanceID, model *domain.Model, runtime *domain.Runtime, customArgs []string, customEnv map[string]string) (*domain.LaunchInstance, error) {
+	ctrl, err := s.controllerFor(id)
+	if err != nil {
+		return nil, err
+	}
+
+	spec, err := ctrl.resolver.Resolve(model, runtime, customArgs, customEnv)
+	if err != nil {
+		return nil, fmt.Errorf("resolve instance: %w", err)
+	}
+
+	return s.startExisting(ctx, ctrl, spec, runtime.ID, claimStartExisting)
+}
+
+// startExisting is the single existing-controller spawn entry shared by
+// restart (claimRestartExisting) and start (claimStartExisting): it derives the
+// owner from the TARGET instance, arbitrates under the per-ModelID arbLock
+// (the mode selects the target gate: checkRestartTarget or checkStartTarget),
+// and only then hands the winning claim to the lifecycle work. arbLock is
+// already released when restartWithRefresh acquires lifecycleMu (no arbLock ->
+// lifecycleMu edge).
+func (s *Supervisor) startExisting(ctx context.Context, ctrl *InstanceController, spec *domain.CommandSpec, runtimeID string, mode claimantMode) (*domain.LaunchInstance, error) {
 	snap := ctrl.Snapshot()
 	owner, err := instanceOwner(&snap)
 	if err != nil {
 		return nil, err
 	}
 
-	claim, err := s.arbitrate(newRestartClaimant(ctrl, snap.ModelID, owner))
+	var claimant claimant
+	switch mode {
+	case claimStartExisting:
+		claimant = newStartClaimant(ctrl, snap.ModelID, owner)
+	default:
+		claimant = newRestartClaimant(ctrl, snap.ModelID, owner)
+	}
+
+	claim, err := s.arbitrate(claimant)
 	if err != nil {
 		return nil, err
 	}
@@ -1801,11 +1842,14 @@ func (ic *InstanceController) stopCore(ctx context.Context) error {
 	return stopErr
 }
 
-// restartWithRefresh performs the restart lifecycle for one operation that has
-// already won arbitration and holds the generation-bound spawn claim (the
-// controller's published reservation). It is package-private and unexported on
-// purpose: the only way to reach it is Supervisor.Restart / RestartWithLaunch,
-// which arbitrate first (D1/BF-01).
+// restartWithRefresh performs the existing-controller spawn lifecycle for one
+// operation that has already won arbitration and holds the generation-bound
+// spawn claim (the controller's published reservation). It is the shared tail
+// of restart (Supervisor.Restart / RestartWithLaunch) and start
+// (Supervisor.StartInstance, ADR 024 D-12): both arbitrate first (D1/BF-01)
+// and both reuse the same InstanceID, record and attribution. It is
+// package-private and unexported on purpose: the only way to reach it is
+// Supervisor.Restart / RestartWithLaunch / StartInstance.
 //
 // Lock contract: lifecycleMu is acquired here, strictly after arbLock was
 // released by arbitrate. The reservation is released exactly once at return —

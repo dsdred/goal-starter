@@ -75,6 +75,7 @@
   "pipelines.chip.override": "замена аргументов",
   "pipelines.chip.more": "+{count}",
   "pipelines.chip.more_title": "Остальные: {names}",
+  "pipelines.chip.start": "Запустить компонент",
   "pipelines.chip.stop": "Остановить компонент",
   "pipelines.chip.restart": "Перезапустить компонент",
   "pipelines.chip.stopped_hint": "Компонент остановлен. Запустите его кнопкой «Запустить» пайплайна.",

@@ -73,6 +73,7 @@ const (
 	tokenShuttingDown           = "shutting_down"
 	tokenOrphan                 = "orphan"
 	tokenNotRestartable         = "not_restartable"
+	tokenAlreadyRunning         = "already_running"
 	tokenInstanceNotFound       = "instance_not_found"
 	tokenLaunchPersistFailed    = "launch_persist_failed"
 	tokenTerminationUnconfirmed = "termination_unconfirmed"
@@ -135,6 +136,8 @@ func lifecycleAPIError(err error) *apierrors.APIError {
 		return apierrors.NewAPIError(apierrors.CodeNotFound, tokenInstanceNotFound)
 	case errors.Is(err, process.ErrNotRestartable):
 		return apierrors.NewAPIError(apierrors.CodeConflict, tokenNotRestartable)
+	case errors.Is(err, process.ErrAlreadyRunning):
+		return apierrors.NewAPIError(apierrors.CodeConflict, tokenAlreadyRunning)
 	case process.HasRejectionReason(err, process.RejOrphan):
 		return apierrors.NewAPIError(apierrors.CodeConflict, tokenOrphan)
 	case errors.Is(err, process.ErrLaunchInFlight),

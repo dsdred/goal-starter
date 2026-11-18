@@ -261,10 +261,11 @@ What holds now:
   `409` `not_restartable` for `stale` is reachable only if a `stale` controller exists in this
   process; the code makes no attempt to manufacture that answer.
 - **`RestartWithLaunch` uses the same arbitration machinery as a new launch**, through the restart
-  claimant path: `Supervisor.RestartWithLaunch` → `restart` → `Supervisor.arbitrate` with a restart-mode
-  claimant, sharing `scanConflicts`, the orphan fence and the compatibility matrix with
-  `AdmitAndStart`. There is one arbitration boundary, entered from two claim modes (`new admission` and
-  `restart existing`) — not two admission systems.
+  claimant path: `Supervisor.RestartWithLaunch` → `startExisting` → `Supervisor.arbitrate` with a
+  restart-mode claimant, sharing `scanConflicts`, the orphan fence and the compatibility matrix with
+  `AdmitAndStart`. There is one arbitration boundary, entered from **three** sealed claim modes
+  (`new admission`, `restart existing`, and — added by the ADR 024 D-12 amendment, 2026-11-18 —
+  `start existing`) — not multiple admission systems.
 - **The restart reservation stays visible across the relevant interval.** Restart publishes an active
   operation on the controller before the stop begins, so it remains conflict-visible through
   stop → terminal → spawn. An in-flight check alone does not close that interval; the published
@@ -274,6 +275,50 @@ What holds now:
   (ADR 013 D3) — a restart of one entry does not conflict with its sibling entries.
 - The per-instance `lifecycleMu` and the pending gate still protect **same-instance** concurrency; they
   are complements to arbitration, never a substitute for it.
+
+### Start Interaction (ADR 024 D-12 amendment, 2026-11-18)
+
+A per-component **start** of an existing terminal instance (the `instance.start` command,
+ADR 024 D-12) enters the **same** boundary as a third sealed claimant, **`claimStartExisting`**
+(`Supervisor.StartInstance` → `startExisting` → `Supervisor.arbitrate`). It is a **gated** variant
+of the restart claimant, not a new system:
+
+- **The start gate is the restart gate with a stricter target precondition.** `checkStartTarget`
+  runs in the **same atomic `arbitrate` section** as `checkRestartTarget` — same per-ModelID
+  `arbLock`, same single published-view load, and strictly before the same `launchMu` publication —
+  and allows **only `exited` / `failed`** targets:
+  - `running` / `stopping` → refused with the new bounded sentinel `ErrAlreadyRunning`
+    (HTTP `409` `already_running`): a start **never stops or otherwise mutates a live generation** —
+    this is what distinguishes `claimStartExisting` from `claimRestartExisting`, which deliberately
+    allows `running`/`stopping` because a restart IS a stop-then-relaunch;
+  - `pending` / `starting` → refused with `ErrLaunchInFlight` (HTTP `409` `launch_in_flight`);
+  - `stale` / `orphan` → refused with `ErrNotRestartable` / the repository orphan fence
+    (HTTP `409` `not_restartable` / `orphan`); in ordinary operation a `stale` ID is `404`
+    `instance_not_found` (no registered controller);
+  - an **active published operation** on the target (an in-flight start **or** restart) → refused
+    with `ErrLaunchInFlight`, mirroring the restart gate: the target's reservation is visible to the
+    gate, so a concurrent second start of the same target is `409` `launch_in_flight`, and a
+    start-vs-restart race on the same target admits **exactly one** operation (the first published
+    reservation wins).
+- **Atomicity of the gate with the publication.** Because the gate and the reservation publication
+  are one linearized sequence under `arbLock`, no interleaving exists in which the gate observes
+  `exited` and the published claim nevertheless finds the instance `running`: any transition of the
+  target to `pending`/`starting`/`running` either (a) publishes an active operation **before** the
+  gate's view load — in which case the gate refuses `launch_in_flight` — or (b) is serialized behind
+  this claimant's own `arbLock` hold — in which case it cannot interleave at all. A service- or
+  handler-level pre-check does **not** provide this property (it is not atomic with the publication)
+  and was therefore rejected; the gate lives in the boundary, not in the caller.
+- **Everything else is reused verbatim.** Owner derivation from the TARGET instance, `scanConflicts`
+  (exact-InstanceID self-exemption, ADR 013 compatibility matrix), the repository orphan fence, the
+  controller-local reservation publication under `launchMu`, the generation-bound single-use spawn
+  claim (record-preserving pre-spawn abort included), and the `restartWithRefresh` lifecycle tail.
+  The same-ID invariant holds exactly as for restart: the **InstanceID**, the **persisted record**
+  and the `PipelineID`/`PipelineEntryID` attribution are preserved; a new PID is minted; **no new
+  instance record is created and `AdmitAndStart` is never used**.
+- **What does not change.** The `AdmitAndStart` admission path, the `checkRestartTarget` contract,
+  the orphan fence, the shutdown checks, the lock order and the ADR 013 matrix are all untouched.
+  `pipeline.start` semantics (ADR 010) and ADR 015 are unchanged. The sealed claimant set simply
+  gains one member whose only difference from the restart claimant is the target precondition.
 
 Consequence for this ADR's non-bypassability claim: it is established by Slice C **plus** D1, not by
 Slice C alone — see [Migration Slices](#migration-slices) and the chronology below.
@@ -352,7 +397,8 @@ still open — which is the drift D1 corrected. Restated against published behav
 1. No production path reaches the OS spawn except through the arbitration boundary. The production routes
    into `InstanceController.startCore` are exactly two, and both call `Supervisor.arbitrate` first:
    `AdmitAndStart` → `startPostAdmit` → `startWithReservation` → `startCore`, and
-   `restart` → `restartWithRefresh` → `startCore`. The only remaining caller of `startPostAdmit` is the
+   `startExisting` (the shared existing-controller entry for restart AND start — D-12) →
+   `restartWithRefresh` → `startCore`. The only remaining caller of `startPostAdmit` is the
    package-private test seam `Supervisor.start`, which mints a test-only spawn claim
    (`mintTestSpawnClaim`) and has **zero production callers** — every caller of it is a `_test.go` file.
 2. The old exported method is unexported: exported `Supervisor.Start` does not exist in the repository.
@@ -365,8 +411,11 @@ still open — which is the drift D1 corrected. Restated against published behav
    - pipeline entry start — `PipelineService.startEntry`, used by pipeline start/restart → `AdmitAndStart`
      (pipeline owner, per-entry identity);
    - instance restart — `POST /api/v1/instances/{id}/restart` and the model restart action →
-     `InstanceService.RestartInstance` → `Supervisor.RestartWithLaunch` → `restart` → `arbitrate`
+     `InstanceService.RestartInstance` → `Supervisor.RestartWithLaunch` → `startExisting` → `arbitrate`
      (restart claimant). **This is the initiator Slice C missed and D1 added.**
+   - instance start (ADR 024 D-12, 2026-11-18) — `POST /api/v1/commands/execute` `instance.start` →
+     `InstanceService.StartInstance` → `Supervisor.StartInstance` → `startExisting` → `arbitrate`
+     (**start claimant**, `claimStartExisting` — the third sealed claim mode).
 4. Race detector passes (Linux CI job).
 
 ### Concurrency / Regression Test Inventory
@@ -414,6 +463,18 @@ and `TestD3Cleanup_HistoricalRestartBeforeAndAfterCleanup`), and the canonical-p
 lifecycle error contract (`TestLifecycleErrorOrdering`,
 `TestLifecyclePrecedenceAgreesAcrossMappers`, `TestGroupFailureClassPrecedence`).
 
+The **D-12 amendment (2026-11-18)** added its own regressions in
+`internal/process/supervisor_start_instance_test.go` (start-gate state matrix:
+`TestStartInstance_Exited_RestartsSameID`, `TestStartInstance_Failed_RestartsSameID`,
+`TestStartInstance_Running_Rejected_NoMutation`, `TestStartInstance_Stopping_Rejected`,
+`TestStartInstance_PendingVisibleThroughGate`; concurrency: `TestStartInstance_Terminal_Concurrent_ExactlyOneAdmitted`,
+`TestStartInstance_VsRestart_SameBoundary`, `TestStartInstance_StartThenStop_NoResidue`;
+isolation and fences: `TestStartInstance_DuplicateModelIsolation`, `TestStartInstance_UnknownID_ReturnsInstanceNotFound`,
+`TestStartInstance_OrphanFence_Rejected`, `TestStartInstance_Shutdown_Rejected`) and the command-surface
+legs in `internal/webui/handlers/commands_test.go` (`TestCommandsHandler_InstanceStart_*`, including the
+audit leg). Every refusal leg asserts the **absence** of lifecycle side effects (no PID change, no spawn,
+no second record), not only the error class.
+
 **Missing chain coverage is recorded as technical debt, not as an acceptance blocker** — see
 [BACKLOG.md](../../BACKLOG.md): the `KillOrphan → stale → AdmitAndStart` end-to-end test, the
 `POST /models/{id}/start → 409 orphan` end-to-end test, and the orphan-specific autostart test.
@@ -439,6 +500,7 @@ Nothing below rewrites that sequence.
 | 2026-09-24 → recorded 2026-09-26 | **D6.2** — focused re-review of exactly D5-01, D5-02, D5-03, D5-04, D5-10 and the F-3 disposition, plus non-regression of the corrected error mappings. Ran over the published `3ba719d` bytes **after** D6.1's publication. | **Complete — PASS** (historical review). *Provenance: the verdict is persisted here on 2026-09-26 from the review's own gate record; the repository holds no separate D6.2 report artifact, so the execution is documented, not re-performed. Its subject matter is independently checkable in current bytes — see the corroboration row below. This record is NOT a new D6.2 execution.* |
 | 2026-09-26 | **Repository corroboration of D6.2's subject matter** (documentation-side, not a re-review): `internal/webui/handlers/helpers.go` `lifecycleAPIError` evaluates the three 500 classes ahead of the two 503 classes under the comment "Canonical precedence inside a multi-cause error is 500 > 503 > 409"; this ADR states `stale` is deliberately not restartable; its required-test inventory is the D6.1-reconciled real-identifier table; `BACKLOG.md` F-2 records that **no `deleted == 0` short-circuit exists**. | Verified against `main` |
 | 2026-09-24 / 2026-09-26 | **Manual Owner Acceptance** — RAN on 2026-09-24 over `3ba719d` and produced findings OWNER-UX-01 / OWNER-UX-02 / OWNER-IMPORT-01; the Owner recheck of those findings ran 2026-09-26 on a fresh `485cc6c` build. It is **no longer** gated on "D6.1 publication / D6.2 pass" — both already happened. **ADR 015** — FROZEN until remediation and Manual Owner Acceptance close. | Open — acceptance not closed; see ROADMAP P0/P1 for the current blocker set |
+| 2026-11-18 | **ADR 024 D-12 amendment (Owner-authorized)** — the sealed claimant set gains **`claimStartExisting`** (per-component `instance.start`): the start gate is enforced **inside the same atomic `arbitrate` section** as the restart gate — `exited`/`failed` only; `running`/`stopping` → new bounded `ErrAlreadyRunning` (HTTP `409` `already_running`); `pending`/`starting` and an active published operation → `launch_in_flight`; a start never stops or mutates a live generation. The pre-check-only alternative was examined and rejected (not atomic with the reservation publication). All other sealed invariants (admission path, restart contract, orphan fence, shutdown checks, lock order, ADR 013 matrix) are unchanged. | **Implemented in the working tree** (NOT committed — commit / publication / release remain separate Owner gates) |
 
 **What was actually wrong.** Terminal-instance `RestartWithLaunch` could reach the spawn path without
 passing the arbitration boundary this ADR defines: the scan inside `arbitrate` looked at in-flight
