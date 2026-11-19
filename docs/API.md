@@ -66,6 +66,7 @@ The `error` strings are English by design; the Web UI maps them to localized mes
 | `GET` | `/api/v1/admin/sessions` | Yes | — | List active sessions. |
 | `GET` | `/api/v1/admin/audit` | Yes | — | Query the security audit log ([details below](#get-apiv1adminaudit)). |
 | `GET` | `/api/v1/metrics` | Yes | — | Instance counts plus server settings: `listen_address`, `web_port`, `auth_enabled`, `admin_user`, `admin_password_set` (boolean; the password itself is never returned). |
+| `GET` | `/api/v1/system/gpu` | Yes | — | Read-only GPU/VRAM telemetry (ADR 025, RES-02A). Always `200` with a `state` body (`ok` / `gpu_unavailable` / `measurement_failed`); no CSRF ([details below](#get-apiv1systemgpu)). |
 | `PUT` | `/api/v1/settings` | Yes | Yes | Save server settings (`listen_address`, `web_port`, `auth_enabled`, optional `admin_user`, `admin_password`). Empty `admin_password` preserves the stored hash. Password changes take effect immediately (no restart); other changes require restart (indicated by `hint` in response). Password >72 bytes → `400`. Enabling auth without credentials → `400`. |
 | `POST` | `/api/v1/admin/reload` | Yes | Yes | Explicit hot-reload (ADR 009): re-reads and validates `goal.json`, applies hot fields (`logLevel`), responds `{"status":"reloaded","applied":[...],"restart_required":[...]}` (field names only). Never writes the file, never applies credential material, never re-seeds runtimes/models/profiles. Unreadable or invalid file → `400 {"status":"rejected","error":"...","code":"bad_request"}` with live values and the file untouched. Every attempt is audited as `config.reload`. |
 
@@ -105,6 +106,77 @@ First-scope event taxonomy: `login.success`, `login.failure` (attempted user), `
 Entity-CRUD extension (ADR 007 §2a): `model.create|update|delete|activate|deactivate`, `runtime.create|update|delete|replace|cascade_delete`, `pipeline.create|update|delete` — success-only, after the durable mutation, no event on 400/404/409. Detail: identifiers, bounded counts/booleans, and changed field *names* only (sentinel `"changed"`, never values) — `model.update`/`runtime.update`/`pipeline.update` record one `"<field>":"changed"` key per changed field; `runtime.replace` adds `new_runtime_id` + `models_moved`; `runtime.cascade_delete` adds `models_deleted`; `pipeline.create` adds `entries`; `model.activate`/`model.deactivate` add `active` `true`/`false`. Model-page and runtime-page process actions are not audited here (the `instance.*` trail is the sole process-lifecycle record).
 
 The audit log never contains passwords or hashes, session/CSRF tokens, environment values, entity names, launch args, executable/working-directory paths, request bodies, or raw headers.
+
+### GET /api/v1/system/gpu
+
+Read-only GPU/VRAM telemetry (ADR 025, slice **RES-02A**). Requires auth; **no CSRF** (the request changes no state). The endpoint **always answers HTTP `200`** and carries the measurement outcome in the body's `state` field — `gpu_unavailable` and `measurement_failed` are normal telemetry states, **not** server errors, so they never produce a `5xx`. Unauthenticated ⇒ `401` (the standard `requireAuth` behavior). The endpoint is purely additive; no other route changes.
+
+The source is `nvidia-smi`, sampled **on demand** (one GET ⇒ at most one shared sample). There is **no background polling, no timer, no automatic retry, and no cache**. Execution is bounded: a fixed **5 s** timeout kills a hung child, and **single-flight** means concurrent requests share one in-flight child rather than each spawning a process. A failed or timed-out read **never** returns a previously-successful value; every `ok` carries its own fresh `sampled_at`.
+
+States (`state` enum):
+
+| `state` | Meaning | `gpus` | `error` | `sampled_at` |
+|---------|---------|--------|---------|--------------|
+| `ok` | `nvidia-smi` ran and every device row parsed. | populated | absent | present (fresh) |
+| `gpu_unavailable` | No NVIDIA hardware / no driver / no usable device, or `nvidia-smi` not found. **Normal healthy state** (e.g. headless CI). | `[]` | bounded reason | absent |
+| `measurement_failed` | The binary/driver was reachable but the measurement broke: non-zero exit not classified as unavailable, timeout (child killed), or an unparseable required field. | `[]` | bounded reason | absent |
+
+`error` is a **bounded token** (e.g. `nvidia_smi_not_found`, `nvidia_driver_unavailable`, `no_devices`, `measurement_timeout`, `nvidia_smi_exit_error`, `malformed_csv`, `invalid_numeric_field`, `missing_gpu_identity`), never raw process text or a stack trace. Measurements are **never** written to the security audit log.
+
+Response `200` (`state=ok`, two GPUs):
+
+```json
+{
+  "state": "ok",
+  "gpus": [
+    {
+      "uuid": "GPU-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+      "index": 0,
+      "name": "NVIDIA GeForce RTX 4090",
+      "driver": "555.99",
+      "total_bytes": 25769803776,
+      "used_bytes": 1073741824,
+      "free_bytes": 24696061952
+    },
+    {
+      "uuid": "GPU-ffffffff-1111-2222-3333-444444444444",
+      "index": 1,
+      "name": "NVIDIA GeForce RTX 3080",
+      "driver": "555.99",
+      "total_bytes": 10737418240,
+      "used_bytes": 536870912,
+      "free_bytes": 10200547328
+    }
+  ],
+  "sampled_at": "2026-11-19T12:00:00.123456789Z"
+}
+```
+
+Response `200` (`state=gpu_unavailable`, no NVIDIA driver):
+
+```json
+{
+  "state": "gpu_unavailable",
+  "gpus": [],
+  "error": "nvidia_smi_not_found"
+}
+```
+
+Per-device fields:
+
+| Field | Type | Note |
+|-------|------|------|
+| `uuid` | string | **Stable identity** — survives reboot / re-indexing. |
+| `index` | int | **Current enumeration position** — may change on hotplug; not a stable identity. |
+| `name` | string | GPU product name. |
+| `driver` | string | NVIDIA driver version. |
+| `total_bytes` | int64 | Whole-GPU VRAM total, in **bytes** (`nvidia-smi` MiB × 1024 × 1024). |
+| `used_bytes` | int64 | Whole-GPU VRAM used, in bytes. |
+| `free_bytes` | int64 | Whole-GPU VRAM free, in bytes. |
+
+`sampled_at` (top level) is an RFC3339Nano timestamp taken **after** the query completes, present **only** with `state=ok`.
+
+**Semantics — GPU-wide only, no per-component attribution.** Every value is a **whole-GPU total**. Under Windows **WDDM**, `used_bytes` includes desktop/compositor/display allocations, so it is **not** a per-context figure. Nothing in this API states that a VRAM delta equals a specific component's exact consumption; any before/after delta is an **estimate/bound** with caveats (asynchronous CUDA caching-allocator release after process exit, other GPU clients in the window, WDDM desktop memory). The Stop / VRAM-delta measurement that would use these snapshots is a **separate future task (RES-02B)**, not part of this endpoint. All visible GPUs are returned (one row per device); there is **no GPU→component attribution** in this slice.
 
 ## Instances (processes)
 

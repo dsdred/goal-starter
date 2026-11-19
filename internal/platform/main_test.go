@@ -16,5 +16,11 @@ func TestMain(m *testing.M) {
 			code = 1
 		}
 	}
+	if err := cleanupFakeGpu(); err != nil {
+		fmt.Fprintf(os.Stderr, "fake gpu cleanup: %v\n", err)
+		if code == 0 {
+			code = 1
+		}
+	}
 	os.Exit(code)
 }

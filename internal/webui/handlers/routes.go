@@ -10,6 +10,7 @@ import (
 
 	"github.com/dsdred/goal/internal/application"
 	"github.com/dsdred/goal/internal/config"
+	"github.com/dsdred/goal/internal/platform"
 	"github.com/dsdred/goal/internal/process"
 	"github.com/dsdred/goal/internal/storage"
 	"github.com/dsdred/goal/internal/webui/audit"
@@ -80,6 +81,15 @@ func WithServerInfo(listenAddr string, webPort int, authEnabled bool) RouteRegis
 func WithConfigPath(path string) RouteRegistryOption {
 	return func(r *RouteRegistry) {
 		r.systemHandler.configPath = path
+	}
+}
+
+// WithGpuProvider injects the GPU telemetry provider (ADR 025 D-10). Production
+// uses the default nvidia-smi provider; tests inject a fake to exercise every
+// state branch without GPU hardware.
+func WithGpuProvider(p platform.GpuProvider) RouteRegistryOption {
+	return func(r *RouteRegistry) {
+		r.systemHandler.gpu = p
 	}
 }
 
@@ -166,6 +176,7 @@ func (r *RouteRegistry) Build() http.Handler {
 	mux.HandleFunc("GET /api/v1/auth/session", r.authHandler.CheckSession)
 
 	mux.HandleFunc("GET /api/v1/metrics", r.requireAuth(r.systemHandler.Metrics))
+	mux.HandleFunc("GET /api/v1/system/gpu", r.requireAuth(r.systemHandler.GPU))
 	mux.HandleFunc("PUT /api/v1/settings", r.requireAuthCSRF(r.systemHandler.SaveSettings))
 	mux.HandleFunc("GET /api/v1/instances", r.requireAuth(r.instanceHandler.List))
 	mux.HandleFunc("GET /api/v1/instances/{id}", r.requireAuth(r.instanceHandler.Get))

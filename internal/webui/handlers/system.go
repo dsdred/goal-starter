@@ -18,6 +18,7 @@ import (
 
 	"github.com/dsdred/goal/internal/application"
 	"github.com/dsdred/goal/internal/config"
+	"github.com/dsdred/goal/internal/platform"
 	"github.com/dsdred/goal/internal/process"
 	"github.com/dsdred/goal/internal/version"
 	"github.com/dsdred/goal/internal/webui/audit"
@@ -51,6 +52,7 @@ type SystemHandler struct {
 	sess       *security.SessionStore
 	csrf       *security.CSRF
 	insSvc     *application.InstanceService
+	gpu        platform.GpuProvider
 
 	tmplFS    fs.FS
 	tmplOnce  sync.Once
@@ -75,6 +77,7 @@ func NewSystemHandler(supervisor *process.Supervisor, sess *security.SessionStor
 		sess:       sess,
 		csrf:       csrf,
 		insSvc:     insSvc,
+		gpu:        platform.NewNvidiaSmiProvider(),
 		startedAt:  time.Now(),
 	}
 	for _, opt := range opts {
@@ -133,6 +136,16 @@ func (h *SystemHandler) Metrics(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// GPU handles GET /api/v1/system/gpu (ADR 025 RES-02A). It delegates to the
+// platform GPU provider — the handler never manages exec.Cmd — and always answers
+// HTTP 200 with the measurement state in the body (D-4/D-6). gpu_unavailable and
+// measurement_failed are normal telemetry states, not server errors. The sample
+// is read-only: no CSRF, no audit record (ADR 007 identifier-only policy).
+func (h *SystemHandler) GPU(w http.ResponseWriter, r *http.Request) {
+	report := h.gpu.Sample(r.Context())
+	writeJSON(w, http.StatusOK, report)
 }
 
 // adminConfigFields returns the configured admin username and whether a
