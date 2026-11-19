@@ -177,6 +177,7 @@ func (r *RouteRegistry) Build() http.Handler {
 
 	mux.HandleFunc("GET /api/v1/metrics", r.requireAuth(r.systemHandler.Metrics))
 	mux.HandleFunc("GET /api/v1/system/gpu", r.requireAuth(r.systemHandler.GPU))
+	mux.HandleFunc("GET /api/v1/system/resources", r.requireAuth(r.systemHandler.Resources))
 	mux.HandleFunc("PUT /api/v1/settings", r.requireAuthCSRF(r.systemHandler.SaveSettings))
 	mux.HandleFunc("GET /api/v1/instances", r.requireAuth(r.instanceHandler.List))
 	mux.HandleFunc("GET /api/v1/instances/{id}", r.requireAuth(r.instanceHandler.Get))

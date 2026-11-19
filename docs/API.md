@@ -67,6 +67,7 @@ The `error` strings are English by design; the Web UI maps them to localized mes
 | `GET` | `/api/v1/admin/audit` | Yes | — | Query the security audit log ([details below](#get-apiv1adminaudit)). |
 | `GET` | `/api/v1/metrics` | Yes | — | Instance counts plus server settings: `listen_address`, `web_port`, `auth_enabled`, `admin_user`, `admin_password_set` (boolean; the password itself is never returned). |
 | `GET` | `/api/v1/system/gpu` | Yes | — | Read-only GPU/VRAM telemetry (ADR 025, RES-02A). Always `200` with a `state` body (`ok` / `gpu_unavailable` / `measurement_failed`); no CSRF ([details below](#get-apiv1systemgpu)). |
+| `GET` | `/api/v1/system/resources` | Yes | — | Universal resource observation (ADR 026, RES-03A). Always `200` with a `state` body (`ok` / `partial` / `unavailable` / `measurement_failed`); no CSRF; additive — the legacy `/api/v1/system/gpu` is unchanged ([details below](#get-apiv1systemresources)). |
 | `PUT` | `/api/v1/settings` | Yes | Yes | Save server settings (`listen_address`, `web_port`, `auth_enabled`, optional `admin_user`, `admin_password`). Empty `admin_password` preserves the stored hash. Password changes take effect immediately (no restart); other changes require restart (indicated by `hint` in response). Password >72 bytes → `400`. Enabling auth without credentials → `400`. |
 | `POST` | `/api/v1/admin/reload` | Yes | Yes | Explicit hot-reload (ADR 009): re-reads and validates `goal.json`, applies hot fields (`logLevel`), responds `{"status":"reloaded","applied":[...],"restart_required":[...]}` (field names only). Never writes the file, never applies credential material, never re-seeds runtimes/models/profiles. Unreadable or invalid file → `400 {"status":"rejected","error":"...","code":"bad_request"}` with live values and the file untouched. Every attempt is audited as `config.reload`. |
 
@@ -177,6 +178,126 @@ Per-device fields:
 `sampled_at` (top level) is an RFC3339Nano timestamp taken **after** the query completes, present **only** with `state=ok`.
 
 **Semantics — GPU-wide only, no per-component attribution.** Every value is a **whole-GPU total**. Under Windows **WDDM**, `used_bytes` includes desktop/compositor/display allocations, so it is **not** a per-context figure. Nothing in this API states that a VRAM delta equals a specific component's exact consumption; any before/after delta is an **estimate/bound** with caveats (asynchronous CUDA caching-allocator release after process exit, other GPU clients in the window, WDDM desktop memory). The Stop / VRAM-delta measurement that would use these snapshots is a **separate future task (RES-02B)**, not part of this endpoint. All visible GPUs are returned (one row per device); there is **no GPU→component attribution** in this slice.
+
+### GET /api/v1/system/resources
+
+Universal, vendor-neutral resource observation (ADR 026, slice **RES-03A**). Requires auth; **no CSRF** (read-only). The endpoint **always answers HTTP `200`** with the outcome in the body's `state` field — `unavailable` and `measurement_failed` are normal telemetry states, **not** server errors. Unauthenticated ⇒ `401`. Measurements are **never** written to the security audit log. The endpoint is purely **additive**: the legacy [`GET /api/v1/system/gpu`](#get-apiv1systemgpu) keeps its byte-for-byte contract and execution path.
+
+Slice 1 wraps the existing NVIDIA `nvidia-smi` provider (RES-02A) as the **first** source through an adapter; the provider's bounded **5 s** timeout, child kill, **single-flight** and **no-cache** behavior are unchanged. One universal request takes **one** sample from the provider (no extra child is spawned to determine capabilities). There is **no background polling, no TTL, no last-good cache, and no shared snapshot** between independent requests — a legacy request and a universal request sample independently.
+
+States (`state` enum, derived only from provider outcomes):
+
+| `state` | Meaning | `devices` | `sampled_at` |
+|---------|---------|-----------|--------------|
+| `ok` | At least one provider obtained fresh data and none failed. | populated | present (fresh) |
+| `partial` | ≥1 provider `ok` **and** ≥1 provider `measurement_failed` (reachable only with ≥2 providers; a future slice). | populated | present |
+| `unavailable` | No measurement source present (no GPU / no driver / binary absent), or zero providers. **Normal healthy state** (CPU-only / headless). | `[]` | absent |
+| `measurement_failed` | A source was reachable but every measurement broke (timeout, non-zero exit, unparseable output). | `[]` | absent |
+
+`unavailable` (no source) and `measurement_failed` (source broke) are **different facts**, never interchangeable; neither is an HTTP error. An absent **optional** metric is a `Reading` with `provenance=unavailable` and never downgrades the state.
+
+Response `200` (`state=ok`, one NVIDIA GPU):
+
+```json
+{
+  "state": "ok",
+  "devices": [
+    {
+      "device_id": "GPU-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+      "index": 0,
+      "vendor": "nvidia",
+      "name": "NVIDIA GeForce RTX 4090",
+      "driver": "555.99",
+      "memory_class": "dedicated",
+      "resources": {
+        "vram_total": { "value": 25769803776, "unit": "bytes", "provenance": "measured", "source": "nvidia-smi memory.total" },
+        "vram_used":  { "value": 1073741824,  "unit": "bytes", "provenance": "measured", "source": "nvidia-smi memory.used" },
+        "vram_free":  { "value": 24696061952, "unit": "bytes", "provenance": "measured", "source": "nvidia-smi memory.free" }
+      }
+    }
+  ],
+  "system": null,
+  "processes": [],
+  "capabilities": {
+    "nvidia-smi": {
+      "vendor": "nvidia",
+      "metrics": {
+        "vram_total": { "supported": true, "available": true, "sampled": true },
+        "vram_used":  { "supported": true, "available": true, "sampled": true },
+        "vram_free":  { "supported": true, "available": true, "sampled": true }
+      }
+    }
+  },
+  "sampled_at": "2026-11-19T12:00:00.123456789Z",
+  "errors": []
+}
+```
+
+Response `200` (`state=unavailable`, CPU-only / no NVIDIA driver):
+
+```json
+{
+  "state": "unavailable",
+  "devices": [],
+  "system": null,
+  "processes": [],
+  "capabilities": {
+    "nvidia-smi": {
+      "vendor": "nvidia",
+      "metrics": {
+        "vram_total": { "supported": true, "available": false, "sampled": false },
+        "vram_used":  { "supported": true, "available": false, "sampled": false },
+        "vram_free":  { "supported": true, "available": false, "sampled": false }
+      }
+    }
+  },
+  "errors": [ { "provider": "nvidia-smi", "state": "unavailable", "reason": "nvidia_smi_not_found" } ]
+}
+```
+
+Top-level fields:
+
+| Field | Type | Note |
+|-------|------|------|
+| `state` | string | `ok` / `partial` / `unavailable` / `measurement_failed`. |
+| `devices` | array | **Empty array, never `null`** (CPU-only ⇒ `[]`). One entry per device. |
+| `system` | object\|null | **`null` in slice 1** (no system RAM/CPU provider yet). |
+| `processes` | array | **`[]` in slice 1** (per-process attribution is a future slice). |
+| `capabilities` | object | Per provider, per metric: `supported` / `available` / `sampled` (see below). |
+| `sampled_at` | string | RFC3339Nano sweep-completion time; present **only** with `state` `ok`/`partial`. |
+| `errors` | array | Bounded `{provider, state, reason}` entries for non-`ok` providers; `[]` when all `ok`. Never raw process text. |
+
+Per-device fields:
+
+| Field | Type | Note |
+|-------|------|------|
+| `device_id` | string | **Stable vendor-namespaced identity** (NVIDIA UUID); survives reboot / re-indexing. |
+| `index` | int | Current enumeration position; may change on hotplug (not identity). |
+| `vendor` | string | `nvidia` (slice 1); `amd` / `intel` / `apple` / `system` reserved. |
+| `name` | string | Device product name. |
+| `driver` | string | Driver version. |
+| `memory_class` | string | `dedicated` / `shared` / `unified`. NVIDIA discrete VRAM is `dedicated`. Memory kinds are **never summed** across devices or classes. |
+| `resources` | object | Map of resource type → `Reading`. Slice 1: `vram_total` / `vram_used` / `vram_free`. |
+
+A `Reading`:
+
+| Field | Type | Note |
+|-------|------|------|
+| `value` | int64\|null | A real number when `measured`/`estimated` (a **measured zero IS a value**); **`null` when `unavailable`** — never `0` or `-1` as a placeholder. |
+| `unit` | string | `bytes` (memory, MiB × 1024 × 1024) / `percent` (utilization). |
+| `provenance` | string | `measured` (driver/OS counter) / `estimated` (named formula) / `unavailable`. |
+| `source` | string | Counter/source, e.g. `nvidia-smi memory.used`. |
+| `reason` | string | Bounded; why unavailable / how estimated (omitted when empty). |
+
+**Three-level capabilities** (per provider, per metric, determined within the current request from the same single sample):
+
+- `supported` — static design fact: can this provider type measure the metric in principle? Changes only when the provider implementation changes.
+- `available` — is the measurement source present and addressable (the provider's existing source discovery)? A source reported absent (`unavailable`) ⇒ `available=false`; a source present but whose measurement transiently broke ⇒ `available=true`.
+- `sampled` — did this sample actually obtain a value?
+
+A **transient measurement failure never changes `supported` or `available`** — it only makes the metric not `sampled` and drives the report state. **Binary discovery is not a driver-health guarantee**: a found-but-failing source is `available=true`, `sampled=false`, state `measurement_failed`.
+
+**Slice-1 scope.** Only the NVIDIA provider is wired; `system=null`, `processes=[]`. AMD / Intel / Apple / system-RAM / CPU providers and per-process attribution are **future slices**. As on the legacy endpoint, every value is a **whole-GPU total** with no per-component attribution (ADR 025 D-9 preserved).
 
 ## Instances (processes)
 

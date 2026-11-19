@@ -20,6 +20,7 @@ import (
 	"github.com/dsdred/goal/internal/config"
 	"github.com/dsdred/goal/internal/platform"
 	"github.com/dsdred/goal/internal/process"
+	"github.com/dsdred/goal/internal/resource"
 	"github.com/dsdred/goal/internal/version"
 	"github.com/dsdred/goal/internal/webui/audit"
 	"github.com/dsdred/goal/internal/webui/security"
@@ -146,6 +147,17 @@ func (h *SystemHandler) Metrics(w http.ResponseWriter, r *http.Request) {
 func (h *SystemHandler) GPU(w http.ResponseWriter, r *http.Request) {
 	report := h.gpu.Sample(r.Context())
 	writeJSON(w, http.StatusOK, report)
+}
+
+// Resources handles GET /api/v1/system/resources (ADR 026 RES-03A). It is the
+// additive universal observation endpoint: requireAuth, no CSRF, no audit, always
+// HTTP 200 with the state in the body. It builds a separate adapter over the
+// existing GPU provider per request (D-12) — the legacy GPU handler above is not
+// rerouted through it, and no snapshot is shared between independent requests.
+// The handler never manages exec.Cmd; the bounded sample stays in the provider.
+func (h *SystemHandler) Resources(w http.ResponseWriter, r *http.Request) {
+	agg := resource.NewAggregator(resource.NewNvidiaAdapter(h.gpu))
+	writeJSON(w, http.StatusOK, agg.Report(r.Context()))
 }
 
 // adminConfigFields returns the configured admin username and whether a
