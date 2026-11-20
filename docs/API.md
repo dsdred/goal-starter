@@ -67,7 +67,7 @@ The `error` strings are English by design; the Web UI maps them to localized mes
 | `GET` | `/api/v1/admin/audit` | Yes | — | Query the security audit log ([details below](#get-apiv1adminaudit)). |
 | `GET` | `/api/v1/metrics` | Yes | — | Instance counts plus server settings: `listen_address`, `web_port`, `auth_enabled`, `admin_user`, `admin_password_set` (boolean; the password itself is never returned). |
 | `GET` | `/api/v1/system/gpu` | Yes | — | Read-only GPU/VRAM telemetry (ADR 025, RES-02A). Always `200` with a `state` body (`ok` / `gpu_unavailable` / `measurement_failed`); no CSRF ([details below](#get-apiv1systemgpu)). |
-| `GET` | `/api/v1/system/resources` | Yes | — | Universal resource observation (ADR 026, RES-03A). Always `200` with a `state` body (`ok` / `partial` / `unavailable` / `measurement_failed`); no CSRF; additive — the legacy `/api/v1/system/gpu` is unchanged ([details below](#get-apiv1systemresources)). |
+| `GET` | `/api/v1/system/resources` | Yes | — | Universal resource observation (ADR 026, RES-03A/RES-03B). Always `200` with a `state` body (`ok` / `partial` / `unavailable` / `measurement_failed`); no CSRF; additive — the legacy `/api/v1/system/gpu` is unchanged ([details below](#get-apiv1systemresources)). |
 | `PUT` | `/api/v1/settings` | Yes | Yes | Save server settings (`listen_address`, `web_port`, `auth_enabled`, optional `admin_user`, `admin_password`). Empty `admin_password` preserves the stored hash. Password changes take effect immediately (no restart); other changes require restart (indicated by `hint` in response). Password >72 bytes → `400`. Enabling auth without credentials → `400`. |
 | `POST` | `/api/v1/admin/reload` | Yes | Yes | Explicit hot-reload (ADR 009): re-reads and validates `goal.json`, applies hot fields (`logLevel`), responds `{"status":"reloaded","applied":[...],"restart_required":[...]}` (field names only). Never writes the file, never applies credential material, never re-seeds runtimes/models/profiles. Unreadable or invalid file → `400 {"status":"rejected","error":"...","code":"bad_request"}` with live values and the file untouched. Every attempt is audited as `config.reload`. |
 
@@ -181,22 +181,24 @@ Per-device fields:
 
 ### GET /api/v1/system/resources
 
-Universal, vendor-neutral resource observation (ADR 026, slice **RES-03A**). Requires auth; **no CSRF** (read-only). The endpoint **always answers HTTP `200`** with the outcome in the body's `state` field — `unavailable` and `measurement_failed` are normal telemetry states, **not** server errors. Unauthenticated ⇒ `401`. Measurements are **never** written to the security audit log. The endpoint is purely **additive**: the legacy [`GET /api/v1/system/gpu`](#get-apiv1systemgpu) keeps its byte-for-byte contract and execution path.
+Universal, vendor-neutral resource observation (ADR 026, slices **RES-03A** + **RES-03B**). Requires auth; **no CSRF** (read-only). The endpoint **always answers HTTP `200`** with the outcome in the body's `state` field — `unavailable` and `measurement_failed` are normal telemetry states, **not** server errors. Unauthenticated ⇒ `401`. Measurements are **never** written to the security audit log. The endpoint is purely **additive**: the legacy [`GET /api/v1/system/gpu`](#get-apiv1systemgpu) keeps its byte-for-byte contract and execution path (it never samples the system provider).
 
-Slice 1 wraps the existing NVIDIA `nvidia-smi` provider (RES-02A) as the **first** source through an adapter; the provider's bounded **5 s** timeout, child kill, **single-flight** and **no-cache** behavior are unchanged. One universal request takes **one** sample from the provider (no extra child is spawned to determine capabilities). There is **no background polling, no TTL, no last-good cache, and no shared snapshot** between independent requests — a legacy request and a universal request sample independently.
+RES-03A wraps the existing NVIDIA `nvidia-smi` provider (RES-02A) as the **first** source through an adapter; the provider's bounded **5 s** timeout, child kill, **single-flight** and **no-cache** behavior are unchanged. RES-03B adds the **system provider** (machine RAM/CPU, id `system`) as the second source, with the same bounds: one **5 s** per-sample deadline, **single-flight**, **no cache**, no polling. One universal request takes **one** sample from **each** provider (no extra child is spawned to determine capabilities). There is **no background polling, no TTL, no last-good cache, and no shared snapshot** between independent requests — a legacy request and a universal request sample independently.
+
+The system provider works **without NVIDIA and without any GPU** (Windows / Linux / macOS). Its core measurement is **RAM total**; RAM available, logical core count and CPU utilization are **optional** — their absence never downgrades the report. CPU utilization is a rate between **two counter reads inside the request** (fixed **250 ms** window on Windows/Linux; on macOS the bounded `top -l 2 -n 0` child takes its own interval) — one bounded measurement per sample, not background polling.
 
 States (`state` enum, derived only from provider outcomes):
 
 | `state` | Meaning | `devices` | `sampled_at` |
 |---------|---------|-----------|--------------|
-| `ok` | At least one provider obtained fresh data and none failed. | populated | present (fresh) |
-| `partial` | ≥1 provider `ok` **and** ≥1 provider `measurement_failed` (reachable only with ≥2 providers; a future slice). | populated | present |
-| `unavailable` | No measurement source present (no GPU / no driver / binary absent), or zero providers. **Normal healthy state** (CPU-only / headless). | `[]` | absent |
-| `measurement_failed` | A source was reachable but every measurement broke (timeout, non-zero exit, unparseable output). | `[]` | absent |
+| `ok` | At least one provider obtained fresh data and none failed. A **CPU-only machine is `ok`** with `system` data and `devices=[]` (ADR 026 D-8.3). | populated (GPU present) or `[]` (CPU-only) | present (fresh) |
+| `partial` | ≥1 provider `ok` **and** ≥1 provider `measurement_failed` (two providers are wired: GPU + system). | populated or `[]` | present |
+| `unavailable` | **No** measurement source present at all (no GPU/driver/binary **and** no system measurement source, e.g. an unsupported OS), or zero providers. On Windows/Linux/macOS the system provider normally succeeds, so absence of NVIDIA alone is `ok`, not `unavailable`. | `[]` | absent |
+| `measurement_failed` | Every provider with a present source broke (timeout, non-zero exit, unparseable output, failed OS call). | `[]` | absent |
 
 `unavailable` (no source) and `measurement_failed` (source broke) are **different facts**, never interchangeable; neither is an HTTP error. An absent **optional** metric is a `Reading` with `provenance=unavailable` and never downgrades the state.
 
-Response `200` (`state=ok`, one NVIDIA GPU):
+Response `200` (`state=ok`, one NVIDIA GPU + system RAM/CPU; Windows sources shown):
 
 ```json
 {
@@ -216,7 +218,17 @@ Response `200` (`state=ok`, one NVIDIA GPU):
       }
     }
   ],
-  "system": null,
+  "system": {
+    "ram": {
+      "total":     { "value": 17179869184, "unit": "bytes", "provenance": "measured", "source": "GlobalMemoryStatusEx.ullTotalPhys" },
+      "available": { "value": 8589934592,  "unit": "bytes", "provenance": "measured", "source": "GlobalMemoryStatusEx.ullAvailPhys" },
+      "used":      { "value": 8589934592,  "unit": "bytes", "provenance": "estimated", "source": "system_ram_total - system_ram_available", "reason": "estimated: total - available" }
+    },
+    "cpu": {
+      "logical_cores": { "value": 8,  "unit": "count",   "provenance": "measured", "source": "GetActiveProcessorCount(ALL_PROCESSOR_GROUPS)" },
+      "utilization":   { "value": 25, "unit": "percent", "provenance": "measured", "source": "GetSystemTimes" }
+    }
+  },
   "processes": [],
   "capabilities": {
     "nvidia-smi": {
@@ -226,6 +238,16 @@ Response `200` (`state=ok`, one NVIDIA GPU):
         "vram_used":  { "supported": true, "available": true, "sampled": true },
         "vram_free":  { "supported": true, "available": true, "sampled": true }
       }
+    },
+    "system": {
+      "vendor": "system",
+      "metrics": {
+        "system_ram_total":     { "supported": true, "available": true, "sampled": true },
+        "system_ram_available": { "supported": true, "available": true, "sampled": true },
+        "system_ram_used":      { "supported": true, "available": true, "sampled": true },
+        "cpu_logical_cores":    { "supported": true, "available": true, "sampled": true },
+        "cpu_util":             { "supported": true, "available": true, "sampled": true }
+      }
     }
   },
   "sampled_at": "2026-11-19T12:00:00.123456789Z",
@@ -233,13 +255,23 @@ Response `200` (`state=ok`, one NVIDIA GPU):
 }
 ```
 
-Response `200` (`state=unavailable`, CPU-only / no NVIDIA driver):
+Response `200` (`state=ok`, **CPU-only / no NVIDIA** — healthy, D-8.3; Linux sources shown):
 
 ```json
 {
-  "state": "unavailable",
+  "state": "ok",
   "devices": [],
-  "system": null,
+  "system": {
+    "ram": {
+      "total":     { "value": 16777216000, "unit": "bytes", "provenance": "measured", "source": "/proc/meminfo MemTotal" },
+      "available": { "value": 8388608000,  "unit": "bytes", "provenance": "measured", "source": "/proc/meminfo MemAvailable" },
+      "used":      { "value": 8388608000,  "unit": "bytes", "provenance": "estimated", "source": "system_ram_total - system_ram_available", "reason": "estimated: total - available" }
+    },
+    "cpu": {
+      "logical_cores": { "value": 8,  "unit": "count",   "provenance": "measured", "source": "/sys/devices/system/cpu/online" },
+      "utilization":   { "value": 12, "unit": "percent", "provenance": "measured", "source": "/proc/stat cpu" }
+    }
+  },
   "processes": [],
   "capabilities": {
     "nvidia-smi": {
@@ -249,8 +281,19 @@ Response `200` (`state=unavailable`, CPU-only / no NVIDIA driver):
         "vram_used":  { "supported": true, "available": false, "sampled": false },
         "vram_free":  { "supported": true, "available": false, "sampled": false }
       }
+    },
+    "system": {
+      "vendor": "system",
+      "metrics": {
+        "system_ram_total":     { "supported": true, "available": true, "sampled": true },
+        "system_ram_available": { "supported": true, "available": true, "sampled": true },
+        "system_ram_used":      { "supported": true, "available": true, "sampled": true },
+        "cpu_logical_cores":    { "supported": true, "available": true, "sampled": true },
+        "cpu_util":             { "supported": true, "available": true, "sampled": true }
+      }
     }
   },
+  "sampled_at": "2026-11-19T12:00:00.123456789Z",
   "errors": [ { "provider": "nvidia-smi", "state": "unavailable", "reason": "nvidia_smi_not_found" } ]
 }
 ```
@@ -261,8 +304,8 @@ Top-level fields:
 |-------|------|------|
 | `state` | string | `ok` / `partial` / `unavailable` / `measurement_failed`. |
 | `devices` | array | **Empty array, never `null`** (CPU-only ⇒ `[]`). One entry per device. |
-| `system` | object\|null | **`null` in slice 1** (no system RAM/CPU provider yet). |
-| `processes` | array | **`[]` in slice 1** (per-process attribution is a future slice). |
+| `system` | object\|null | Machine RAM/CPU observation (shape below). **`null` only when the system provider did not succeed** (unsupported OS, or its core measurement broke/absent). |
+| `processes` | array | **`[]`** (per-process attribution is a future slice). |
 | `capabilities` | object | Per provider, per metric: `supported` / `available` / `sampled` (see below). |
 | `sampled_at` | string | RFC3339Nano sweep-completion time; present **only** with `state` `ok`/`partial`. |
 | `errors` | array | Bounded `{provider, state, reason}` entries for non-`ok` providers; `[]` when all `ok`. Never raw process text. |
@@ -273,21 +316,42 @@ Per-device fields:
 |-------|------|------|
 | `device_id` | string | **Stable vendor-namespaced identity** (NVIDIA UUID); survives reboot / re-indexing. |
 | `index` | int | Current enumeration position; may change on hotplug (not identity). |
-| `vendor` | string | `nvidia` (slice 1); `amd` / `intel` / `apple` / `system` reserved. |
+| `vendor` | string | `nvidia` (devices); `amd` / `intel` / `apple` reserved. The system provider reports under `capabilities.system` with vendor `system` (it has no device entries). |
 | `name` | string | Device product name. |
 | `driver` | string | Driver version. |
 | `memory_class` | string | `dedicated` / `shared` / `unified`. NVIDIA discrete VRAM is `dedicated`. Memory kinds are **never summed** across devices or classes. |
-| `resources` | object | Map of resource type → `Reading`. Slice 1: `vram_total` / `vram_used` / `vram_free`. |
+| `resources` | object | Map of resource type → `Reading`. GPU devices: `vram_total` / `vram_used` / `vram_free`. |
 
 A `Reading`:
 
 | Field | Type | Note |
 |-------|------|------|
 | `value` | int64\|null | A real number when `measured`/`estimated` (a **measured zero IS a value**); **`null` when `unavailable`** — never `0` or `-1` as a placeholder. |
-| `unit` | string | `bytes` (memory, MiB × 1024 × 1024) / `percent` (utilization). |
+| `unit` | string | `bytes` (memory, MiB × 1024 × 1024) / `percent` (utilization) / `count` (logical cores). |
 | `provenance` | string | `measured` (driver/OS counter) / `estimated` (named formula) / `unavailable`. |
 | `source` | string | Counter/source, e.g. `nvidia-smi memory.used`. |
 | `reason` | string | Bounded; why unavailable / how estimated (omitted when empty). |
+
+**The `system` object** (RES-03B; present only when the system provider succeeded):
+
+| Field | Type | Semantics |
+|-------|------|-----------|
+| `ram.total` | `Reading` (`bytes`) | Total physical RAM. **Core measurement** — the provider is `ok` only when this was obtained. Measured on all three OSes. |
+| `ram.available` | `Reading` (`bytes`) | Allocatable RAM. Measured on Windows (`ullAvailPhys`) and Linux (`MemAvailable`; kernels < 3.14 without it ⇒ `unavailable`, reason `memavailable_not_present`). **Estimated** on macOS: `(free+inactive+speculative)*page_size` from `vm_stat`. |
+| `ram.used` | `Reading` (`bytes`) | **Always `estimated`**: the named formula `system_ram_total - system_ram_available`. When either dependency was not sampled, `used` is `unavailable` (reason `ram_dependency_unavailable`) — never computed against a fabricated zero. |
+| `cpu.logical_cores` | `Reading` (`count`) | Online logical CPU count. Measured (Windows `GetActiveProcessorCount`, Linux sysfs `online` with `/proc/cpuinfo` fallback, macOS `hw.logicalcpu`). |
+| `cpu.utilization` | `Reading` (`percent`) | Integer busy percent (0–100, nearest) between two counter reads **inside the request**: Windows `GetSystemTimes` / Linux `/proc/stat` with a fixed **250 ms** window; macOS `top -l 2 -n 0` (second-sample rate, `100 − idle`). A zero/regressing counter delta ⇒ `unavailable` (`counter_delta_invalid`), never a fabricated number. |
+
+System RAM is a **distinct memory kind** and is never summed with any GPU memory (ADR 026 D-4). Per-OS sources and bounds:
+
+| OS | RAM total / available | Cores | CPU utilization | Children |
+|----|----------------------|-------|-----------------|----------|
+| Windows | `GlobalMemoryStatusEx` (measured) | `GetActiveProcessorCount(ALL_PROCESSOR_GROUPS)` | `GetSystemTimes` ×2, 250 ms window | none |
+| Linux | `/proc/meminfo` `MemTotal` / `MemAvailable` (measured) | `/sys/devices/system/cpu/online`, fallback `/proc/cpuinfo` | `/proc/stat` aggregate `cpu` ×2, 250 ms window (idle = idle+iowait) | none |
+| macOS | `sysctl hw.memsize` (measured) / `vm_stat` (**estimated**) | `sysctl hw.logicalcpu` | `top -l 2 -n 0` (bounded read-only child) | `vm_stat`, `top` |
+| other | `unavailable`, reason `platform_not_supported` | — | — | — |
+
+All system failure reasons are **bounded tokens** (e.g. `proc_meminfo_not_found`, `meminfo_malformed`, `globalmemorystatusex_failed`, `getsystemtimes_failed`, `sysctl_hw_memsize_failed`, `vm_stat_not_found`, `vm_stat_malformed`, `top_not_found`, `top_output_malformed`, `measurement_timeout`, `counter_delta_invalid`) — never raw file or process text. macOS children run directly with `[]string` args (no shell) under the same **5 s** sample deadline with kill + bounded I/O closure.
 
 **Three-level capabilities** (per provider, per metric, determined within the current request from the same single sample):
 
@@ -297,7 +361,7 @@ A `Reading`:
 
 A **transient measurement failure never changes `supported` or `available`** — it only makes the metric not `sampled` and drives the report state. **Binary discovery is not a driver-health guarantee**: a found-but-failing source is `available=true`, `sampled=false`, state `measurement_failed`.
 
-**Slice-1 scope.** Only the NVIDIA provider is wired; `system=null`, `processes=[]`. AMD / Intel / Apple / system-RAM / CPU providers and per-process attribution are **future slices**. As on the legacy endpoint, every value is a **whole-GPU total** with no per-component attribution (ADR 025 D-9 preserved).
+**Current scope (RES-03A + RES-03B).** The NVIDIA GPU provider and the system RAM/CPU provider are wired; `processes=[]`. AMD / Intel / Apple GPU providers and per-process attribution are **future slices**. As on the legacy endpoint, every GPU value is a **whole-GPU total** with no per-component attribution (ADR 025 D-9 preserved). Monitoring stays separate from process management, model launch and scheduling (ADR 026 D-1): this endpoint never starts, stops or signals anything.
 
 ## Instances (processes)
 

@@ -45,7 +45,8 @@ main
 | Domain | `internal/domain/` | Type definitions, DTO conversion between storage and application layers. |
 | Application | `internal/application/` | Business logic: ModelService, RuntimeService, InstanceService. |
 | Process lifecycle | `internal/process/` | Supervisor, Manager, LogBroker, LogStore, SlotReservation. |
-| OS behavior | `internal/platform/` | Windows Job Object, Linux process groups. |
+| OS behavior | `internal/platform/` | Windows Job Object, Linux process groups; read-only telemetry providers (NVIDIA `nvidia-smi`, system RAM/CPU). |
+| Resource observation | `internal/resource/` | Universal resource model, three-level capabilities, aggregator (ADR 026, read-only; no lifecycle). |
 | HTTP / UI | `internal/webui/` | Routes, handlers, embedded templates, static assets, security. |
 | Security | `internal/webui/security/` | Sessions, CSRF, password store (bcrypt). |
 | Errors | `internal/webui/errors/` | Structured API error codes and classification. |

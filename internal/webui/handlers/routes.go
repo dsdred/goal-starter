@@ -93,6 +93,15 @@ func WithGpuProvider(p platform.GpuProvider) RouteRegistryOption {
 	}
 }
 
+// WithSystemProvider injects the system RAM/CPU provider (ADR 026 RES-03B).
+// Production uses the default OS provider; tests inject a fake to exercise
+// every state branch deterministically.
+func WithSystemProvider(p platform.SystemProvider) RouteRegistryOption {
+	return func(r *RouteRegistry) {
+		r.systemHandler.sys = p
+	}
+}
+
 // WithLiveConfig sets the currently effective configuration used by the
 // hot-reload endpoint to compute the restart-pending diff (ADR 009 D3).
 func WithLiveConfig(cfg *config.Config) RouteRegistryOption {

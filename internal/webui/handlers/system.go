@@ -54,6 +54,7 @@ type SystemHandler struct {
 	csrf       *security.CSRF
 	insSvc     *application.InstanceService
 	gpu        platform.GpuProvider
+	sys        platform.SystemProvider
 
 	tmplFS    fs.FS
 	tmplOnce  sync.Once
@@ -79,6 +80,7 @@ func NewSystemHandler(supervisor *process.Supervisor, sess *security.SessionStor
 		csrf:       csrf,
 		insSvc:     insSvc,
 		gpu:        platform.NewNvidiaSmiProvider(),
+		sys:        platform.NewSystemProvider(),
 		startedAt:  time.Now(),
 	}
 	for _, opt := range opts {
@@ -149,14 +151,18 @@ func (h *SystemHandler) GPU(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, report)
 }
 
-// Resources handles GET /api/v1/system/resources (ADR 026 RES-03A). It is the
-// additive universal observation endpoint: requireAuth, no CSRF, no audit, always
-// HTTP 200 with the state in the body. It builds a separate adapter over the
-// existing GPU provider per request (D-12) — the legacy GPU handler above is not
-// rerouted through it, and no snapshot is shared between independent requests.
-// The handler never manages exec.Cmd; the bounded sample stays in the provider.
+// Resources handles GET /api/v1/system/resources (ADR 026 RES-03A/RES-03B). It
+// is the additive universal observation endpoint: requireAuth, no CSRF, no
+// audit, always HTTP 200 with the state in the body. It builds separate
+// adapters over the existing GPU provider and the system provider per request
+// (D-12) — the legacy GPU handler above is not rerouted through them, and no
+// snapshot is shared between independent requests. The handler never manages
+// exec.Cmd; the bounded samples stay in the providers.
 func (h *SystemHandler) Resources(w http.ResponseWriter, r *http.Request) {
-	agg := resource.NewAggregator(resource.NewNvidiaAdapter(h.gpu))
+	agg := resource.NewAggregator(
+		resource.NewNvidiaAdapter(h.gpu),
+		resource.NewSystemAdapter(h.sys),
+	)
 	writeJSON(w, http.StatusOK, agg.Report(r.Context()))
 }
 

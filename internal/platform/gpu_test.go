@@ -160,10 +160,17 @@ func TestGpuProviderNAFieldFails(t *testing.T) {
 }
 
 func TestGpuProviderMalformedFails(t *testing.T) {
-	p, _ := newFakeGpuProvider(t, 3*time.Second, gpuSpec{CSV: "0, GPU-aaa, Name\n"})
+	// Warm-up absorbs the cold first execution of the fresh exe copy (Windows
+	// process creation / AV scan can exceed a tight deadline); the cache-free
+	// provider re-executes the child for the semantics check. 5s = gpuDefaultTimeout.
+	p, dir := newFakeGpuProvider(t, 5*time.Second, gpuSpec{CSV: validTwoGPU})
+	if warm := p.Sample(context.Background()); warm.State != GpuStateOK {
+		t.Fatalf("warm-up state/error = %q/%q, want ok", warm.State, warm.Error)
+	}
+	writeGpuSpec(t, dir, gpuSpec{CSV: "0, GPU-aaa, Name\n"})
 	r := p.Sample(context.Background())
 	if r.State != GpuStateFailed || r.Error != "malformed_csv" {
-		t.Fatalf("state/error = %q/%q, want measurement_failed/malformed_csv", r.State, r.Error)
+		t.Fatalf("state/error = %q/%q (runs=%d), want measurement_failed/malformed_csv", r.State, r.Error, gpuRunCount(t, dir))
 	}
 }
 

@@ -45,7 +45,8 @@ main
 | Домен | `internal/domain/` | Типы, конвертация DTO между storage и application слоями. |
 | Application | `internal/application/` | Бизнес-логика: ModelService, RuntimeService, InstanceService. |
 | Жизненный цикл | `internal/process/` | Supervisor, Manager, LogBroker, LogStore, SlotReservation. |
-| ОС | `internal/platform/` | Windows Job Object, Linux process groups. |
+| ОС | `internal/platform/` | Windows Job Object, Linux process groups; read-only телеметрия (NVIDIA `nvidia-smi`, системные RAM/CPU). |
+| Наблюдение за ресурсами | `internal/resource/` | Универсальная модель ресурсов, трёхуровневые capabilities, агрегатор (ADR 026, read-only; без lifecycle). |
 | HTTP / UI | `internal/webui/` | Роуты, хэндлеры, embedded шаблоны, статика, безопасность. |
 | Безопасность | `internal/webui/security/` | Сессии, CSRF, password store (bcrypt). |
 | Ошибки | `internal/webui/errors/` | Структурированные API коды ошибок и классификация. |

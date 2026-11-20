@@ -278,10 +278,17 @@ func TestNvidiaAdapterRealBinaryNAFails(t *testing.T) {
 }
 
 func TestNvidiaAdapterRealBinaryMalformedFails(t *testing.T) {
-	a, _, _ := newFakeBinaryAdapter(t, 3*time.Second, binarySpec{CSV: "0, GPU-aaa, Name\n"})
+	// Warm-up absorbs the cold first execution of the fresh exe copy (Windows
+	// process creation / AV scan can exceed a tight deadline); the cache-free
+	// provider re-executes the child for the semantics check. 5s = gpuDefaultTimeout.
+	a, dir, _ := newFakeBinaryAdapter(t, 5*time.Second, binarySpec{CSV: validTwoGPU})
+	if warm := a.Sample(context.Background()); warm.State != StateOK {
+		t.Fatalf("warm-up state/error = %q/%q, want ok", warm.State, warm.Error)
+	}
+	writeBinarySpec(t, dir, binarySpec{CSV: "0, GPU-aaa, Name\n"})
 	pr := a.Sample(context.Background())
 	if pr.State != StateMeasurementFailed || pr.Error != "malformed_csv" {
-		t.Fatalf("state/error = %q/%q, want measurement_failed/malformed_csv", pr.State, pr.Error)
+		t.Fatalf("state/error = %q/%q (runs=%d), want measurement_failed/malformed_csv", pr.State, pr.Error, runCount(t, dir))
 	}
 }
 
@@ -323,18 +330,26 @@ func TestNvidiaAdapterRealBinaryFoundButFailing(t *testing.T) {
 }
 
 func TestNvidiaAdapterRealBinaryHangBounded(t *testing.T) {
-	a, dir, _ := newFakeBinaryAdapter(t, 2*time.Second, binarySpec{Hang: true})
+	// Warm-up absorbs the cold first execution of the fresh exe copy so the hang
+	// child reliably starts (runs guard) within the production 5s deadline. The
+	// bounded-execution check keeps an upper limit: 5s + 2s WaitDelay + margin.
+	a, dir, _ := newFakeBinaryAdapter(t, 5*time.Second, binarySpec{CSV: validTwoGPU})
+	if warm := a.Sample(context.Background()); warm.State != StateOK {
+		t.Fatalf("warm-up state/error = %q/%q, want ok", warm.State, warm.Error)
+	}
+	writeBinarySpec(t, dir, binarySpec{Hang: true})
+	before := runCount(t, dir)
 	start := time.Now()
 	pr := a.Sample(context.Background())
 	elapsed := time.Since(start)
 	if pr.State != StateMeasurementFailed || pr.Error != "measurement_timeout" {
 		t.Fatalf("state/error = %q/%q, want measurement_failed/measurement_timeout", pr.State, pr.Error)
 	}
-	if elapsed > 6*time.Second {
+	if elapsed > 10*time.Second {
 		t.Fatalf("hanging child not bounded: took %v", elapsed)
 	}
-	if n := runCount(t, dir); n != 1 {
-		t.Fatalf("runs = %d, want 1", n)
+	if n := runCount(t, dir); n != before+1 {
+		t.Fatalf("runs = %d, want %d (hang child must actually start)", n, before+1)
 	}
 }
 

@@ -42,6 +42,11 @@ func (f *fakeGpuProvider) Sample(ctx context.Context) platform.GpuReport {
 
 func newGpuTestRouter(t *testing.T, p platform.GpuProvider, authEnabled bool) http.Handler {
 	t.Helper()
+	return newResourceTestRouter(t, p, &fakeSystemProvider{report: okSystemReport()}, authEnabled)
+}
+
+func newResourceTestRouter(t *testing.T, p platform.GpuProvider, sys platform.SystemProvider, authEnabled bool) http.Handler {
+	t.Helper()
 	repo, err := storage.NewJSONRepository(filepath.Join(t.TempDir(), "repo.json"))
 	if err != nil {
 		t.Fatalf("create repository: %v", err)
@@ -68,6 +73,7 @@ func newGpuTestRouter(t *testing.T, p platform.GpuProvider, authEnabled bool) ht
 		WithAuthEnabled(authEnabled),
 		WithWebAssets(fs.FS(assets), fs.FS(assets)),
 		WithGpuProvider(p),
+		WithSystemProvider(sys),
 	).Build()
 }
 

@@ -33,6 +33,11 @@ func (a *Aggregator) Report(ctx context.Context) ResourceReport {
 	for _, p := range a.providers {
 		pr := p.Sample(ctx)
 		report.Devices = append(report.Devices, pr.Devices...)
+		if pr.System != nil {
+			// Only the system provider populates System (RES-03B); there is
+			// exactly one such provider, so no cross-provider merge exists.
+			report.System = pr.System
+		}
 		report.Capabilities[pr.ProviderID] = pr.Capabilities
 		switch pr.State {
 		case StateOK:
