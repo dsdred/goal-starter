@@ -852,3 +852,59 @@ code { font-family: var(--font-mono); font-size: 0.9em; background: var(--bg-inp
     #pipeline-form .pl-block { padding: 8px 12px; }
     #pipeline-form .pl-block-head .pl-model-select { order: 2; flex: 1 1 0; }
 }
+/* ─── Resource Monitoring (G3-RES-04) ─────────────────────────────────────────
+   Read-only resource cards over GET /api/v1/system/resources (ADR 026). Scoped
+   by the res- prefix so no shared selector is edited. All colors come from the
+   theme variables, so the light theme adapts automatically. No text-transform
+   and no overflow-x:auto (both are forbidden states guarded by the browser
+   suites); long values wrap with overflow-wrap instead of scrolling. */
+.res-statusbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 1rem; }
+.res-state { display: inline-block; padding: 3px 9px; border-radius: var(--radius-sm); font-size: 0.72rem; font-weight: 600; border: 1px solid var(--border); }
+.res-state-ok { background: rgba(46, 204, 113, 0.15); color: var(--success); border-color: transparent; }
+.res-state-partial { background: rgba(243, 156, 18, 0.15); color: var(--warning); border-color: transparent; }
+.res-state-unavailable { background: rgba(154, 154, 180, 0.12); color: var(--text-muted); border-color: transparent; }
+.res-state-failed { background: rgba(231, 76, 60, 0.15); color: var(--danger); border-color: transparent; }
+.res-sampled { font-size: 0.75rem; color: var(--text-muted); margin-left: auto; }
+.res-banner { padding: 8px 12px; border-radius: var(--radius-sm); border: 1px solid var(--border); border-left: 2px solid var(--border); font-size: 0.82rem; margin-bottom: 0.8rem; color: var(--text-secondary); }
+.res-banner-partial { border-left-color: var(--warning); }
+.res-banner-failed { border-left-color: var(--danger); }
+.res-banner-muted { color: var(--text-muted); }
+.res-errors { margin-bottom: 0.8rem; font-size: 0.78rem; }
+.res-errors-title { color: var(--text-muted); margin-bottom: 4px; }
+.res-error-row { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; padding: 2px 0; }
+.res-error-prov { font-family: var(--font-mono); color: var(--accent); }
+.res-error-state { color: var(--text-muted); }
+.res-error-reason { font-family: var(--font-mono); color: var(--text-muted); overflow-wrap: anywhere; }
+.res-section-title { font-size: 0.95rem; font-weight: 600; color: var(--text-primary); margin: 1.2rem 0 0.6rem; }
+.res-count { display: inline-block; padding: 1px 7px; border-radius: var(--radius-sm); background: var(--accent-subtle); color: var(--accent); font-size: 0.72rem; font-weight: 700; }
+.res-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
+.res-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; display: flex; flex-direction: column; gap: 8px; }
+.res-card-title { font-size: 0.8rem; color: var(--text-muted); font-weight: 600; }
+.res-card-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.res-vendor { display: inline-block; padding: 2px 7px; border-radius: var(--radius-sm); font-size: 0.68rem; font-weight: 700; background: var(--accent-subtle); color: var(--accent); }
+.res-vendor-nvidia { background: rgba(118, 185, 0, 0.16); color: #76b900; }
+.res-vendor-amd { background: rgba(237, 28, 36, 0.14); color: #ed1c24; }
+.res-vendor-intel { background: rgba(0, 113, 197, 0.16); color: #4aa3df; }
+.res-vendor-apple { background: rgba(154, 154, 180, 0.16); color: var(--text-secondary); }
+.res-vendor-system { background: var(--accent-subtle); color: var(--accent); }
+.res-dev-name { font-weight: 600; font-size: 0.9rem; color: var(--text-primary); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.res-dev-index { font-family: var(--font-mono); font-size: 0.72rem; color: var(--text-muted); }
+.res-dev-meta { display: flex; flex-wrap: wrap; gap: 10px; font-size: 0.72rem; color: var(--text-muted); }
+.res-metric { font-size: 1.6rem; font-weight: 700; color: var(--text-primary); display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.res-meter { height: 6px; width: 100%; background: var(--bg-secondary); border-radius: 3px; overflow: hidden; }
+.res-meter-fill { height: 100%; border-radius: 3px; background: var(--accent); transition: width 0.3s ease; }
+.res-meter-low { background: var(--success); }
+.res-meter-mid { background: var(--warning); }
+.res-meter-high { background: var(--danger); }
+.res-rows { display: flex; flex-direction: column; gap: 4px; margin-top: 4px; }
+.res-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 0.8rem; }
+.res-row > span:first-child { color: var(--text-muted); }
+.res-row-val { display: flex; align-items: center; gap: 6px; font-family: var(--font-mono); font-size: 0.78rem; font-weight: 500; color: var(--text-secondary); }
+.res-prov { display: inline-block; padding: 1px 5px; border-radius: var(--radius-sm); font-size: 0.62rem; font-family: var(--font); }
+.res-prov-estimated { background: rgba(243, 156, 18, 0.15); color: var(--warning); }
+.res-prov-unavailable { background: rgba(154, 154, 180, 0.12); color: var(--text-muted); }
+@media (max-width: 768px) {
+    .res-grid { grid-template-columns: 1fr; }
+    .res-metric { font-size: 1.4rem; }
+    .res-sampled { margin-left: 0; }
+}

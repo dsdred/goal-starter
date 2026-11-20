@@ -74,10 +74,10 @@ async function main() {
       return [...groups].map(g => [...g.querySelectorAll('.nav-item')].map(b => b.dataset.view));
     });
     const expectedMain = ['models', 'adv-runtimes', 'pipelines'];
-    const expectedAdv = ['logs', 'history', 'adv-instances', 'adv-settings'];
+    const expectedAdv = ['logs', 'history', 'adv-instances', 'resources', 'adv-settings'];
     suite.log('1.4 RU nav: main group order is models→runtimes→pipelines',
       JSON.stringify(navGroups[0]) === JSON.stringify(expectedMain), `got=${JSON.stringify(navGroups[0])}`);
-    suite.log('1.5 RU nav: additional group order is logs→history→instances→settings',
+    suite.log('1.5 RU nav: additional group order is logs→history→instances→resources→settings',
       JSON.stringify(navGroups[1]) === JSON.stringify(expectedAdv), `got=${JSON.stringify(navGroups[1])}`);
     const advLabel = (await page.locator('.sidebar-label[data-i18n="nav.advanced"]').textContent() || '').trim();
     suite.log('1.6 RU nav: group label is "ДОПОЛНИТЕЛЬНО"', advLabel === 'ДОПОЛНИТЕЛЬНО', `text=${JSON.stringify(advLabel)}`);

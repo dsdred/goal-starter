@@ -509,6 +509,7 @@ function renderAll() {
     renderAdvRuntimes();
     renderAdvInstances();
     renderHistory();
+    renderResources();
     updateLogInstanceSelect();
     // Table labels change width with language/data: re-evaluate the shared
     // TABLE-iff-fits contract after the whole render pass.
@@ -1313,6 +1314,15 @@ function navigate(view) {
     } else if (logEs) {
         logEs.close();
         logEs = null;
+    }
+    // Resource sampling is page-scoped like the log stream: fetch on entry and
+    // refresh only while visible; leaving stops the interval so a hidden view
+    // creates no backend / GPU provider load.
+    if (view === 'resources') {
+        loadResources();
+        startResourcesRefresh();
+    } else {
+        stopResourcesRefresh();
     }
     if (view === 'adv-settings') loadSettings();
 }
@@ -2943,6 +2953,200 @@ async function portableImport() {
     });
 }
 
+// ─── Resource Monitoring (G3-RES-04) ─────────────────────────────────────────
+// Read-only observation over the published GET /api/v1/system/resources (ADR 026).
+// Fetching is page-scoped: data is loaded on navigate + a manual refresh + a 5 s
+// interval that runs ONLY while the resources view is visible. It is never part
+// of the global 3 s reloadAllData loop, so a hidden view creates no backend / GPU
+// provider load. Rendering re-runs from the cached report (renderAll) so a
+// language switch re-localizes it without a new sample.
+
+let resourcesData = null;
+let resourcesTimer = null;
+let resourcesInFlight = false;
+
+function fmtBytes(v) {
+    if (v === null || v === undefined || isNaN(v)) return '—';
+    const n = Number(v);
+    if (n < 0) return '—';
+    const gib = 1024 * 1024 * 1024, mib = 1024 * 1024, kib = 1024;
+    if (n >= gib) return (n / gib).toFixed(1) + ' GiB';
+    if (n >= mib) return Math.round(n / mib) + ' MiB';
+    if (n >= kib) return Math.round(n / kib) + ' KiB';
+    return n + ' B';
+}
+
+// resNum returns the reading's numeric value, or null when unavailable. A
+// measured zero IS a value (ADR 026 D-6); only null/absent means unavailable.
+function resNum(reading) {
+    return reading && typeof reading.value === 'number' ? reading.value : null;
+}
+
+function resPercent(usedReading, totalReading) {
+    const u = resNum(usedReading), t = resNum(totalReading);
+    if (u === null || t === null || t <= 0) return null;
+    return Math.max(0, Math.min(100, (u / t) * 100));
+}
+
+function resPctText(pct) {
+    return pct === null ? '—' : Math.round(pct) + '%';
+}
+
+function resMeter(pct) {
+    if (pct === null) return '<div class="res-meter"><div class="res-meter-fill" style="width:0%"></div></div>';
+    const p = Math.max(0, Math.min(100, pct));
+    const lvl = p >= 85 ? 'high' : (p >= 60 ? 'mid' : 'low');
+    return '<div class="res-meter"><div class="res-meter-fill res-meter-' + lvl + '" style="width:' + p.toFixed(1) + '%"></div></div>';
+}
+
+// resProvTag labels estimated / unavailable readings; measured carries no tag.
+function resProvTag(reading) {
+    const pr = reading ? reading.provenance : 'unavailable';
+    if (pr === 'estimated') return '<span class="res-prov res-prov-estimated">' + t('resources.provenance.estimated') + '</span>';
+    if (pr === 'unavailable') return '<span class="res-prov res-prov-unavailable">' + t('resources.provenance.unavailable') + '</span>';
+    return '';
+}
+
+function resRow(labelKey, reading, kind) {
+    const v = resNum(reading);
+    let val;
+    if (v === null) val = '—';
+    else if (kind === 'bytes') val = fmtBytes(v);
+    else if (kind === 'percent') val = v + '%';
+    else val = String(v);
+    return '<div class="res-row"><span>' + t(labelKey) + '</span><span class="res-row-val">' + esc(val) + resProvTag(reading) + '</span></div>';
+}
+
+function resVendorLabel(v) {
+    return (v === 'nvidia' || v === 'amd' || v === 'intel' || v === 'apple' || v === 'system') ? t('resources.vendor.' + v) : v;
+}
+
+function resMemClassLabel(c) {
+    return (c === 'dedicated' || c === 'shared' || c === 'unified') ? t('resources.memory_class.' + c) : c;
+}
+
+function resStatusBar(r) {
+    const st = r.state || 'unavailable';
+    const cls = st === 'measurement_failed' ? 'failed' : st;
+    let h = '<div class="res-statusbar"><span class="res-state res-state-' + cls + '">' + t('resources.state.' + st) + '</span>';
+    if (r.sampled_at) h += '<span class="res-sampled">' + t('resources.sampled_at') + ': ' + esc(fmtTime(r.sampled_at)) + '</span>';
+    h += '</div>';
+    return h;
+}
+
+function resErrors(errors) {
+    if (!errors || !errors.length) return '';
+    let h = '<div class="res-errors"><div class="res-errors-title">' + t('resources.errors.title') + '</div>';
+    errors.forEach(function (e) {
+        h += '<div class="res-error-row"><span class="res-error-prov">' + esc(e.provider || '') + '</span>' +
+            '<span class="res-error-state">' + t('resources.state.' + (e.state || 'unavailable')) + '</span>' +
+            '<span class="res-error-reason">' + esc(e.reason || '') + '</span></div>';
+    });
+    h += '</div>';
+    return h;
+}
+
+function resSystem(sys) {
+    const ram = sys.ram || {}, cpu = sys.cpu || {};
+    const cu = resNum(cpu.utilization);
+    const rp = resPercent(ram.used, ram.total);
+    let h = '<div class="res-section-title">' + t('resources.system.title') + '</div><div class="res-grid">';
+    h += '<div class="res-card"><div class="res-card-title">' + t('resources.cpu.title') + '</div>' +
+        '<div class="res-metric">' + (cu === null ? '—' : Math.round(cu) + '%') + resProvTag(cpu.utilization) + '</div>' +
+        resMeter(cu) + '<div class="res-rows">' + resRow('resources.cpu.cores', cpu.logical_cores, 'count') + '</div></div>';
+    h += '<div class="res-card"><div class="res-card-title">' + t('resources.ram.title') + '</div>' +
+        '<div class="res-metric">' + resPctText(rp) + resProvTag(ram.used) + '</div>' +
+        resMeter(rp) + '<div class="res-rows">' +
+        resRow('resources.ram.total', ram.total, 'bytes') +
+        resRow('resources.ram.used', ram.used, 'bytes') +
+        resRow('resources.ram.available', ram.available, 'bytes') + '</div></div>';
+    h += '</div>';
+    return h;
+}
+
+function resGpuCard(d) {
+    const res = d.resources || {};
+    const vp = resPercent(res.vram_used, res.vram_total);
+    const vendor = d.vendor || '', mc = d.memory_class || '';
+    let h = '<div class="res-card"><div class="res-card-head">' +
+        '<span class="res-vendor res-vendor-' + esc(vendor) + '">' + esc(resVendorLabel(vendor)) + '</span>' +
+        '<span class="res-dev-name">' + esc(d.name || '') + '</span>' +
+        '<span class="res-dev-index">#' + esc(String(d.index)) + '</span></div>';
+    h += '<div class="res-dev-meta">';
+    if (d.driver) h += '<span>' + t('resources.gpu.driver') + ': ' + esc(d.driver) + '</span>';
+    if (mc) h += '<span>' + t('resources.gpu.memory_class') + ': ' + esc(resMemClassLabel(mc)) + '</span>';
+    h += '</div>';
+    h += '<div class="res-metric">' + resPctText(vp) + resProvTag(res.vram_used) + '</div>' + resMeter(vp);
+    h += '<div class="res-rows">' +
+        resRow('resources.gpu.vram_total', res.vram_total, 'bytes') +
+        resRow('resources.gpu.vram_used', res.vram_used, 'bytes') +
+        resRow('resources.gpu.vram_free', res.vram_free, 'bytes') + '</div></div>';
+    return h;
+}
+
+function resGpu(devices) {
+    let h = '<div class="res-section-title">' + t('resources.gpu.title');
+    if (devices.length) h += ' <span class="res-count">' + devices.length + '</span>';
+    h += '</div>';
+    if (!devices.length) {
+        return h + '<div class="empty-state"><p>' + t('resources.gpu.empty') + '</p><small class="hint-text">' + t('resources.gpu.empty_hint') + '</small></div>';
+    }
+    h += '<div class="res-grid">';
+    devices.forEach(function (d) { h += resGpuCard(d); });
+    return h + '</div>';
+}
+
+function renderResources() {
+    const el = document.getElementById('resources-content');
+    if (!el) return;
+    if (!resourcesData) {
+        el.innerHTML = '<div class="empty-state"><p>' + t('resources.loading') + '</p></div>';
+        return;
+    }
+    const r = resourcesData;
+    let html = resStatusBar(r);
+    if (r.state === 'unavailable') {
+        html += '<div class="empty-state"><p>' + t('resources.empty.title') + '</p><small class="hint-text">' + t('resources.empty.hint') + '</small></div>';
+        el.innerHTML = html;
+        return;
+    }
+    if (r.state === 'measurement_failed') {
+        html += '<div class="res-banner res-banner-failed">' + t('resources.failed.banner') + '</div>' + resErrors(r.errors);
+    } else if (r.state === 'partial') {
+        html += '<div class="res-banner res-banner-partial">' + t('resources.partial.banner') + '</div>' + resErrors(r.errors);
+    }
+    html += r.system ? resSystem(r.system) : '<div class="res-banner res-banner-muted">' + t('resources.system.unavailable') + '</div>';
+    html += resGpu(r.devices || []);
+    el.innerHTML = html;
+}
+
+async function loadResources() {
+    if (resourcesInFlight) return;
+    resourcesInFlight = true;
+    try {
+        resourcesData = await api('/system/resources');
+    } catch {
+        resourcesData = null;
+        const el = document.getElementById('resources-content');
+        if (el) el.innerHTML = '<div class="empty-state"><p>' + t('resources.load_error') + '</p></div>';
+        resourcesInFlight = false;
+        return;
+    }
+    resourcesInFlight = false;
+    renderResources();
+}
+
+function startResourcesRefresh() {
+    if (resourcesTimer) return;
+    resourcesTimer = setInterval(function () {
+        if (currentView === 'resources') loadResources();
+    }, 5000);
+}
+
+function stopResourcesRefresh() {
+    if (resourcesTimer) { clearInterval(resourcesTimer); resourcesTimer = null; }
+}
+
 let lastMetrics = {};
 
 // ─── Expose to global scope for inline onclick handlers ────────────────────
@@ -2979,6 +3183,7 @@ window.clearLogView = clearLogView;
 window.closeModal = closeModal;
 window.closeConfirm = closeConfirm;
 window.reloadAllData = reloadAllData;
+window.loadResources = loadResources;
 window.addWizEnvRow = addWizEnvRow;
 window.addEnvRow = addEnvRow;
 window.onWizRtModeChange = onWizRtModeChange;

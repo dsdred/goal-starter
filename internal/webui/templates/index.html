@@ -263,6 +263,10 @@
                     <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>
                     <span data-i18n="nav.instances">Экземпляры</span>
                 </button>
+                <button class="nav-item nav-adv" data-view="resources" onclick="navigate('resources')">
+                    <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+                    <span data-i18n="nav.resources">Ресурсы</span>
+                </button>
                 <button class="nav-item nav-adv" data-view="adv-settings" onclick="navigate('adv-settings')">
                     <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12L18.93 16L17 20.66L12 20L7 20.66L5.07 16L2 12L5.07 8L7 3.34L12 4L17 3.34L18.93 8Z"/><path d="M12 9a3 3 0 1 0 0 6a3 3 0 1 0 0-6"/></svg>
                     <span data-i18n="nav.settings">Настройки</span>
@@ -449,6 +453,15 @@
                         <tbody id="adv-instances-body"></tbody>
                     </table>
                 </div>
+            </section>
+
+            <!-- View: Resource Monitoring (G3-RES-04) -->
+            <section class="view" id="view-resources">
+                <div class="view-header">
+                    <h1 data-i18n="resources.title">Ресурсы</h1>
+                    <button class="btn btn-ghost btn-sm" onclick="loadResources()" data-i18n="resources.refresh">Обновить</button>
+                </div>
+                <div id="resources-content"></div>
             </section>
 
             <!-- View: Advanced - Settings -->

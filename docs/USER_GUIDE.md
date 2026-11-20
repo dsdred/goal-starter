@@ -288,6 +288,7 @@ After starting, GoAl is available at: **http://127.0.0.1:8088**
 - **Launch History** — persistent terminal instance records (survives restart)
 - **Health Monitoring** — check runtime availability
 - **Metrics** — built-in application metrics
+- **Resource Monitoring** — read-only CPU / RAM / GPU observation (Resources page, advanced group)
 - **Theme** — System / Dark / Light (sidebar footer, persisted in browser localStorage)
 - **Language** — Russian / English (sidebar footer, persisted in browser localStorage)
 - **Server connection status** — the sidebar "Server" dot reflects live reachability (green = reachable, red = unreachable). If the server becomes unreachable, a red banner appears at the top of the page; when the connection is restored, the banner disappears and a short "connection restored" notification is shown. Detection polls `GET /api/v1/health` every 5 seconds and reacts immediately to browser network offline/online events.
@@ -305,6 +306,39 @@ Translation dictionaries live in:
 To add a new language, create a new JSON file with the same key set in the
 `i18n/` directory and add a `<option>` entry to the language `<select>` in
 `index.html`.
+
+### Resource Monitoring
+
+The **Resources** page (sidebar → Advanced → Resources) shows a read-only view of
+the host's compute resources, backed by `GET /api/v1/system/resources` (ADR 026).
+It observes; it never starts, stops, or schedules anything.
+
+- **CPU** — utilization percent and logical core count.
+- **RAM** — total, used, available, and usage percent. Used RAM is an estimate
+  (total − available) and is labelled `estimated`.
+- **GPU** — one card per detected device, each showing vendor, model, driver,
+  memory class, and VRAM total / used / free with a usage percent. Multiple GPUs
+  from different vendors (NVIDIA, AMD, Intel, Apple) are shown side by side; there
+  are no NVIDIA-specific assumptions.
+
+Readings carry a provenance: `measured` (no tag), `estimated`, or `unavailable`
+(shown as `—`). A measured zero is a real value, not a missing one. The report
+state is shown as a badge:
+
+- **OK** — all sources reported successfully. A CPU-only host (no GPU) is a
+  first-class healthy state, not an error.
+- **Partial** — some optional metrics are unavailable; available readings are
+  still shown. Missing optional metrics never hide the rest.
+- **Unavailable** — no resource provider reported a successful measurement; a
+  neutral empty state is shown (this is not a failure).
+- **Measurement failed** — a provider broke during measurement; a failure banner
+  and the provider error list are shown.
+
+**Refresh.** Data is fetched when you open the page, on the manual **Refresh**
+button, and automatically every 5 seconds **only while the Resources page is
+visible**. Leaving the page stops sampling, so a hidden view creates no load on
+the backend or GPU providers. Switching the interface language re-localizes the
+cached report without a new sample.
 
 ### Authentication
 
