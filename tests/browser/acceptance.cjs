@@ -166,7 +166,7 @@ async function main() {
       });
       return { count: items.length, items: results };
     });
-    suite.log('C.1 Sidebar: 7 nav items found', sidebarGeom.count === 7, `count=${sidebarGeom.count}`);
+    suite.log('C.1 Sidebar: 8 nav items found', sidebarGeom.count === 8, `count=${sidebarGeom.count}`);
     sidebarGeom.items.forEach((it, i) => {
       suite.log(`C.${i + 2} Sidebar "${it.label}": stroke-based icon (fill=none, stroke=currentColor, 24x24, sw=1.6)`,
         it.ok, it.ok ? `size=${it.w}x${it.h}` : it.issues.join(','));
