@@ -708,6 +708,13 @@ rename, Args, and `Active` can always be changed.
     order — add more with **+ Add model** and reorder with the ↑/↓ buttons (× removes a block)
 4. **Start / Stop / Restart / Edit / Delete** act on the whole group via the inline icon
     strip; the per-entry status chips and the **State** column show running/stopped/orphan state
+5. **Per-component control.** A chip whose entry is precisely attributed to one running
+    component offers inline **Stop** and **Restart**; once that component has exited or
+    failed, the chip offers **Start** (the same instance is relaunched under its existing
+    ID). Each control acts only on that component's instance — sibling entries in the same
+    pipeline and other copies of the same model are not touched. An entry that cannot be
+    attributed to a single instance (e.g. a legacy pipeline) shows no per-component buttons;
+    use the pipeline-wide Start in that case.
 
 ---
 
