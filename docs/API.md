@@ -181,18 +181,20 @@ Per-device fields:
 
 ### GET /api/v1/system/resources
 
-Universal, vendor-neutral resource observation (ADR 026, slices **RES-03A** + **RES-03B**). Requires auth; **no CSRF** (read-only). The endpoint **always answers HTTP `200`** with the outcome in the body's `state` field — `unavailable` and `measurement_failed` are normal telemetry states, **not** server errors. Unauthenticated ⇒ `401`. Measurements are **never** written to the security audit log. The endpoint is purely **additive**: the legacy [`GET /api/v1/system/gpu`](#get-apiv1systemgpu) keeps its byte-for-byte contract and execution path (it never samples the system provider).
+Universal, vendor-neutral resource observation (ADR 026, slices **RES-03A** + **RES-03B** + **RES-05A**). Requires auth; **no CSRF** (read-only). The endpoint **always answers HTTP `200`** with the outcome in the body's `state` field — `unavailable` and `measurement_failed` are normal telemetry states, **not** server errors. Unauthenticated ⇒ `401`. Measurements are **never** written to the security audit log. The endpoint is purely **additive**: the legacy [`GET /api/v1/system/gpu`](#get-apiv1systemgpu) keeps its byte-for-byte contract and execution path (it never samples the system or process providers).
 
-RES-03A wraps the existing NVIDIA `nvidia-smi` provider (RES-02A) as the **first** source through an adapter; the provider's bounded **5 s** timeout, child kill, **single-flight** and **no-cache** behavior are unchanged. RES-03B adds the **system provider** (machine RAM/CPU, id `system`) as the second source, with the same bounds: one **5 s** per-sample deadline, **single-flight**, **no cache**, no polling. One universal request takes **one** sample from **each** provider (no extra child is spawned to determine capabilities). There is **no background polling, no TTL, no last-good cache, and no shared snapshot** between independent requests — a legacy request and a universal request sample independently.
+RES-03A wraps the existing NVIDIA `nvidia-smi` provider (RES-02A) as the **first** source through an adapter; the provider's bounded **5 s** timeout, child kill, **single-flight** and **no-cache** behavior are unchanged. RES-03B adds the **system provider** (machine RAM/CPU, id `system`) as the second source, with the same bounds: one **5 s** per-sample deadline, **single-flight**, **no cache**, no polling. RES-05A (Amendment A-026-1) adds the **process provider** (id `process`, vendor `system`): read-only RAM **RSS attribution for processes GoAl itself launched** (Windows/Linux), with the same bounds. One universal request takes **one** sample from **each** provider (no extra child is spawned to determine capabilities). There is **no background polling, no TTL, no last-good cache, and no shared snapshot** between independent requests — a legacy request and a universal request sample independently.
 
 The system provider works **without NVIDIA and without any GPU** (Windows / Linux / macOS). Its core measurement is **RAM total**; RAM available, logical core count and CPU utilization are **optional** — their absence never downgrades the report. CPU utilization is a rate between **two counter reads inside the request** (fixed **250 ms** window on Windows/Linux; on macOS the bounded `top -l 2 -n 0` child takes its own interval) — one bounded measurement per sample, not background polling.
+
+The **process provider** attributes `process_rss` (working set / resident set size in bytes) **only to processes recorded in GoAl's own launch ledger** — instances in a non-terminal state (`starting` / `running` / `stopping`) plus store-detected `orphan` rows. It is **attribution, not ownership**: the report never claims the memory of processes GoAl did not launch, and it makes no foreign-attribution guarantee beyond the documented residual risk below. Identity is confirmed at sample time against the durable launch triple (PID + executable path + start time) using the same kill-tier composition as process control (path equal **and** start-time anchors present on both sides **and** within ±5 s): an exe-only or PID-only match **refuses** attribution. Windows opens **one** `PROCESS_QUERY_INFORMATION | PROCESS_VM_READ` handle per PID and runs the identity queries **and** the counter read through that same handle (an open handle blocks PID reissue); Linux runs **verify → read `/proc/<pid>/status` VmRSS → re-verify start time** and discards a sample whose identity changed mid-window as `identity_mismatch`. macOS and other OSes: provider `unavailable` with reason `platform_not_supported` (`supported=false` is a static per-OS fact).
 
 States (`state` enum, derived only from provider outcomes):
 
 | `state` | Meaning | `devices` | `sampled_at` |
 |---------|---------|-----------|--------------|
 | `ok` | At least one provider obtained fresh data and none failed. A **CPU-only machine is `ok`** with `system` data and `devices=[]` (ADR 026 D-8.3). | populated (GPU present) or `[]` (CPU-only) | present (fresh) |
-| `partial` | ≥1 provider `ok` **and** ≥1 provider `measurement_failed` (two providers are wired: GPU + system). | populated or `[]` | present |
+| `partial` | ≥1 provider `ok` **and** ≥1 provider `measurement_failed` (three providers are wired: GPU + system + process). | populated or `[]` | present |
 | `unavailable` | **No** measurement source present at all (no GPU/driver/binary **and** no system measurement source, e.g. an unsupported OS), or zero providers. On Windows/Linux/macOS the system provider normally succeeds, so absence of NVIDIA alone is `ok`, not `unavailable`. | `[]` | absent |
 | `measurement_failed` | Every provider with a present source broke (timeout, non-zero exit, unparseable output, failed OS call). | `[]` | absent |
 
@@ -229,7 +231,19 @@ Response `200` (`state=ok`, one NVIDIA GPU + system RAM/CPU; Windows sources sho
       "utilization":   { "value": 25, "unit": "percent", "provenance": "measured", "source": "GetSystemTimes" }
     }
   },
-  "processes": [],
+  "processes": [
+    {
+      "instance_id": "inst-0007",
+      "model_id": "model-llama",
+      "runtime_id": "rt-llamacpp",
+      "pipeline_id": "pipe-rag",
+      "pipeline_entry_id": "pe-1",
+      "pid": 4242,
+      "resources": {
+        "process_rss": { "value": 872415232, "unit": "bytes", "provenance": "measured", "source": "K32GetProcessMemoryInfo.WorkingSetSize" }
+      }
+    }
+  ],
   "capabilities": {
     "nvidia-smi": {
       "vendor": "nvidia",
@@ -247,6 +261,12 @@ Response `200` (`state=ok`, one NVIDIA GPU + system RAM/CPU; Windows sources sho
         "system_ram_used":      { "supported": true, "available": true, "sampled": true },
         "cpu_logical_cores":    { "supported": true, "available": true, "sampled": true },
         "cpu_util":             { "supported": true, "available": true, "sampled": true }
+      }
+    },
+    "process": {
+      "vendor": "system",
+      "metrics": {
+        "process_rss": { "supported": true, "available": true, "sampled": true }
       }
     }
   },
@@ -272,7 +292,26 @@ Response `200` (`state=ok`, **CPU-only / no NVIDIA** — healthy, D-8.3; Linux s
       "utilization":   { "value": 12, "unit": "percent", "provenance": "measured", "source": "/proc/stat cpu" }
     }
   },
-  "processes": [],
+  "processes": [
+    {
+      "instance_id": "inst-0011",
+      "model_id": "m-audio",
+      "runtime_id": "rt-audio-cpp",
+      "pid": 98765,
+      "resources": {
+        "process_rss": { "value": 65953792, "unit": "bytes", "provenance": "measured", "source": "/proc/<pid>/status VmRSS" }
+      }
+    },
+    {
+      "instance_id": "inst-0012",
+      "model_id": "m-llama",
+      "runtime_id": "rt-llamacpp",
+      "pid": 98770,
+      "resources": {
+        "process_rss": { "value": null, "unit": "bytes", "provenance": "unavailable", "source": "/proc/<pid>/status VmRSS", "reason": "counter_unavailable" }
+      }
+    }
+  ],
   "capabilities": {
     "nvidia-smi": {
       "vendor": "nvidia",
@@ -291,6 +330,12 @@ Response `200` (`state=ok`, **CPU-only / no NVIDIA** — healthy, D-8.3; Linux s
         "cpu_logical_cores":    { "supported": true, "available": true, "sampled": true },
         "cpu_util":             { "supported": true, "available": true, "sampled": true }
       }
+    },
+    "process": {
+      "vendor": "system",
+      "metrics": {
+        "process_rss": { "supported": true, "available": true, "sampled": true }
+      }
     }
   },
   "sampled_at": "2026-11-19T12:00:00.123456789Z",
@@ -305,7 +350,7 @@ Top-level fields:
 | `state` | string | `ok` / `partial` / `unavailable` / `measurement_failed`. |
 | `devices` | array | **Empty array, never `null`** (CPU-only ⇒ `[]`). One entry per device. |
 | `system` | object\|null | Machine RAM/CPU observation (shape below). **`null` only when the system provider did not succeed** (unsupported OS, or its core measurement broke/absent). |
-| `processes` | array | **`[]`** (per-process attribution is a future slice). |
+| `processes` | array | **Empty array, never `null`**. One entry per tracked non-terminal launch (RES-05A, shape below). A successful sample with zero tracked launches is `[]` — an honest value, not "unknown". |
 | `capabilities` | object | Per provider, per metric: `supported` / `available` / `sampled` (see below). |
 | `sampled_at` | string | RFC3339Nano sweep-completion time; present **only** with `state` `ok`/`partial`. |
 | `errors` | array | Bounded `{provider, state, reason}` entries for non-`ok` providers; `[]` when all `ok`. Never raw process text. |
@@ -353,6 +398,19 @@ System RAM is a **distinct memory kind** and is never summed with any GPU memory
 
 All system failure reasons are **bounded tokens** (e.g. `proc_meminfo_not_found`, `meminfo_malformed`, `globalmemorystatusex_failed`, `getsystemtimes_failed`, `sysctl_hw_memsize_failed`, `vm_stat_not_found`, `vm_stat_malformed`, `top_not_found`, `top_output_malformed`, `measurement_timeout`, `counter_delta_invalid`) — never raw file or process text. macOS children run directly with `[]string` args (no shell) under the same **5 s** sample deadline with kill + bounded I/O closure.
 
+**The `processes` entries** (RES-05A, Amendment A-026-1; one per tracked launch in an emitted state):
+
+| Field | Type | Note |
+|-------|------|------|
+| `instance_id` / `model_id` / `runtime_id` | string | **Always present** — launch join keys, the same IDs as the Instances API. |
+| `pipeline_id` / `pipeline_entry_id` | string | Present only for pipeline-launched instances (`omitempty`); absent otherwise. |
+| `pid` | int | A **fact of the launch record**, not a claim that the PID is currently this instance's process — aliveness/identity is decided per sample by the OS check above. |
+| `resources` | object | Always contains exactly `process_rss` (bytes). `measured` + real value when identity confirmed and the counter read; otherwise `unavailable` + **`null` value, never `0`** + bounded reason. |
+
+Bounded per-entry `reason` vocabulary (`provenance=unavailable`): `pid_not_assigned` · `process_exited` · `identity_mismatch` · `identity_unconfirmed` · `counter_unavailable`; provider-wide absence on an unsupported OS is the `unavailable` state with `platform_not_supported` (no entries). Per-entry failures **never** abort the pass or downgrade the report: a completed enumeration with all entries unavailable is still `state=ok` with `process_rss sampled=false`.
+
+Per-OS RSS sources: Windows `K32GetProcessMemoryInfo.WorkingSetSize` (kernel32) through the same identity handle; Linux `/proc/<pid>/status VmRSS` × 1024 after verify → read → re-verify; macOS/other: not supported in this slice. **Residual risk (documented):** the Windows and Linux compositions are *high-confidence*, not absolute — a PID reuse can theoretically coincide on all of PID, image path, and start time (and Linux quantizes the start-time anchor to whole seconds); the API makes **no absolute foreign-attribution guarantee**. The attribution is **accounting, not ownership**: RSS is memory-kind data and is **never summed** with system RAM or GPU memory figures.
+
 **Three-level capabilities** (per provider, per metric, determined within the current request from the same single sample):
 
 - `supported` — static design fact: can this provider type measure the metric in principle? Changes only when the provider implementation changes.
@@ -361,7 +419,7 @@ All system failure reasons are **bounded tokens** (e.g. `proc_meminfo_not_found`
 
 A **transient measurement failure never changes `supported` or `available`** — it only makes the metric not `sampled` and drives the report state. **Binary discovery is not a driver-health guarantee**: a found-but-failing source is `available=true`, `sampled=false`, state `measurement_failed`.
 
-**Current scope (RES-03A + RES-03B).** The NVIDIA GPU provider and the system RAM/CPU provider are wired; `processes=[]`. AMD / Intel / Apple GPU providers and per-process attribution are **future slices**. As on the legacy endpoint, every GPU value is a **whole-GPU total** with no per-component attribution (ADR 025 D-9 preserved). Monitoring stays separate from process management, model launch and scheduling (ADR 026 D-1): this endpoint never starts, stops or signals anything.
+**Current scope (RES-03A + RES-03B + RES-05A).** The NVIDIA GPU provider, the system RAM/CPU provider and the **process RSS attribution provider** (Windows/Linux; read-only, request-scoped) are wired. AMD / Intel / Apple GPU providers, per-process GPU VRAM and per-process CPU are **future / out-of-scope slices** (Amendment A-9). As on the legacy endpoint, every GPU value is a **whole-GPU total** with no per-component attribution (ADR 025 D-9 preserved). Monitoring stays separate from process management, model launch and scheduling (ADR 026 D-1): this endpoint never starts, stops or signals anything; the process provider reads OS counters through read-only handles/files and never manages `exec.Cmd`.
 
 ## Instances (processes)
 

@@ -127,6 +127,11 @@ func (a *App) InitRegistry() {
 		handlers.WithConfigPath(a.configPath),
 		handlers.WithLiveConfig(a.cfg),
 		handlers.WithAuditLogger(a.auditLog),
+		// ADR 026 Amendment A-026-1 (RES-05A): wire the read-only tracked-
+		// instance seam so GET /api/v1/system/resources can attribute RSS to
+		// GoAl-launched processes. Observation only — nothing here controls
+		// a process (D-1).
+		handlers.WithInstanceAttributor(a.instanceSvc),
 	)
 }
 

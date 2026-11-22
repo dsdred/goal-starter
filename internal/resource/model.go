@@ -35,6 +35,12 @@ const (
 	ResourceSystemRAMUsed      ResourceType = "system_ram_used"
 	ResourceCPULogicalCores    ResourceType = "cpu_logical_cores"
 	ResourceCPUUtil            ResourceType = "cpu_util"
+
+	// ResourceProcessRSS is the per-process resident-set attribution reserved
+	// by D-5 and ratified by ADR 026 Amendment A-026-1 (RES-05A). It is
+	// accounting, not ownership: values are the OS charge to the verified PID
+	// and are never summed across instances into system-RAM claims (A-6).
+	ResourceProcessRSS ResourceType = "process_rss"
 )
 
 // Unit is the explicit unit of a Reading (D-5). Memory is bytes; utilization is
@@ -146,12 +152,14 @@ type ProviderError struct {
 
 // ProviderReport is the outcome of one provider's single bounded sample.
 // System is non-nil only for the system provider's successful sample (RES-03B).
+// Processes is populated only by the process provider (RES-05A).
 type ProviderReport struct {
 	ProviderID   string
 	Vendor       Vendor
 	State        State
 	Devices      []ResourceDevice
 	System       *SystemResources
+	Processes    []ProcessReading
 	Capabilities ProviderCapabilities
 	Error        string
 	SampledAt    string
@@ -182,9 +190,21 @@ type SystemCPU struct {
 	Utilization  Reading `json:"utilization"`
 }
 
-// ProcessReading reserves future per-process attribution (D-10). Slice 1
-// populates nothing; ResourceReport.Processes is an empty array.
-type ProcessReading struct{}
+// ProcessReading is one per-process RSS attribution entry (ADR 026 Amendment
+// A-026-1 A-1, RES-05A): the join key to the launch record plus the identity
+// IDs, never a duplicate instance state. PID is a fact of the launch record,
+// not a claim that it is still this instance's process. resources.process_rss
+// is always present; its Reading is unavailable (value null), never a zero,
+// whenever the A-3 identity composition did not confirm (D-6).
+type ProcessReading struct {
+	InstanceID      string                   `json:"instance_id"`
+	ModelID         string                   `json:"model_id"`
+	RuntimeID       string                   `json:"runtime_id"`
+	PipelineID      string                   `json:"pipeline_id,omitempty"`
+	PipelineEntryID string                   `json:"pipeline_entry_id,omitempty"`
+	PID             int                      `json:"pid"`
+	Resources       map[ResourceType]Reading `json:"resources"`
+}
 
 // ResourceReport is the universal API body (D-11). Devices and Processes are
 // empty arrays never null; System is null unless the system provider succeeded

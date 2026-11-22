@@ -12,6 +12,7 @@ import (
 	"github.com/dsdred/goal/internal/config"
 	"github.com/dsdred/goal/internal/platform"
 	"github.com/dsdred/goal/internal/process"
+	"github.com/dsdred/goal/internal/resource"
 	"github.com/dsdred/goal/internal/storage"
 	"github.com/dsdred/goal/internal/webui/audit"
 	apierrors "github.com/dsdred/goal/internal/webui/errors"
@@ -99,6 +100,26 @@ func WithGpuProvider(p platform.GpuProvider) RouteRegistryOption {
 func WithSystemProvider(p platform.SystemProvider) RouteRegistryOption {
 	return func(r *RouteRegistry) {
 		r.systemHandler.sys = p
+	}
+}
+
+// WithProcessMemProvider injects the per-process RSS provider (ADR 026
+// Amendment A-026-1, RES-05A). Production uses the default OS provider; tests
+// inject a fake to exercise every A-5 boundary deterministically.
+func WithProcessMemProvider(p platform.ProcessMemProvider) RouteRegistryOption {
+	return func(r *RouteRegistry) {
+		r.systemHandler.proc = p
+	}
+}
+
+// WithInstanceAttributor wires the read-only tracked-instance seam
+// (ADR 026 Amendment A-026-1 A-2). Without it the resources report keeps the
+// published processes=[] shape; with it the process adapter joins RSS
+// attribution to the tracked live instances. It changes no lifecycle
+// semantics.
+func WithInstanceAttributor(a resource.InstanceAttributor) RouteRegistryOption {
+	return func(r *RouteRegistry) {
+		r.systemHandler.attr = a
 	}
 }
 

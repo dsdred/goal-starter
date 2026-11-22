@@ -55,6 +55,8 @@ type SystemHandler struct {
 	insSvc     *application.InstanceService
 	gpu        platform.GpuProvider
 	sys        platform.SystemProvider
+	proc       platform.ProcessMemProvider
+	attr       resource.InstanceAttributor
 
 	tmplFS    fs.FS
 	tmplOnce  sync.Once
@@ -81,6 +83,7 @@ func NewSystemHandler(supervisor *process.Supervisor, sess *security.SessionStor
 		insSvc:     insSvc,
 		gpu:        platform.NewNvidiaSmiProvider(),
 		sys:        platform.NewSystemProvider(),
+		proc:       platform.NewProcessMemProvider(),
 		startedAt:  time.Now(),
 	}
 	for _, opt := range opts {
@@ -151,18 +154,24 @@ func (h *SystemHandler) GPU(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, report)
 }
 
-// Resources handles GET /api/v1/system/resources (ADR 026 RES-03A/RES-03B). It
-// is the additive universal observation endpoint: requireAuth, no CSRF, no
-// audit, always HTTP 200 with the state in the body. It builds separate
-// adapters over the existing GPU provider and the system provider per request
-// (D-12) — the legacy GPU handler above is not rerouted through them, and no
-// snapshot is shared between independent requests. The handler never manages
-// exec.Cmd; the bounded samples stay in the providers.
+// Resources handles GET /api/v1/system/resources (ADR 026 RES-03A/RES-03B,
+// Amendment A-026-1 RES-05A). It is the additive universal observation
+// endpoint: requireAuth, no CSRF, no audit, always HTTP 200 with the state in
+// the body. It builds separate adapters over the existing GPU provider, the
+// system provider, and — only when the read-only InstanceAttributor seam is
+// wired — the process RSS provider, per request (D-12) — the legacy GPU
+// handler above is not rerouted through them, and no snapshot is shared
+// between independent requests. The handler never manages exec.Cmd; the
+// bounded samples stay in the providers.
 func (h *SystemHandler) Resources(w http.ResponseWriter, r *http.Request) {
-	agg := resource.NewAggregator(
+	providers := []resource.ResourceProvider{
 		resource.NewNvidiaAdapter(h.gpu),
 		resource.NewSystemAdapter(h.sys),
-	)
+	}
+	if h.attr != nil {
+		providers = append(providers, resource.NewProcessAdapter(h.proc, h.attr))
+	}
+	agg := resource.NewAggregator(providers...)
 	writeJSON(w, http.StatusOK, agg.Report(r.Context()))
 }
 
