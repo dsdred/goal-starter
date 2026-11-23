@@ -714,26 +714,57 @@ function pipelineEntryStatus(p, entry, idx) {
     return st;
 }
 
-// resolveComponent reports a component's state, its owning InstanceID, and
-// whether the entry -> instance attribution is precise (by pipeline_entry_id).
-// Per-component control (G3-RES-01, ADR 024 D-11/D-12) is offered ONLY for a
-// precisely-attributed instance: a fallback model_id match could address a
-// sibling copy of a repeatable model, so instanceId is null unless the
-// attribution is precise and the single attributed instance is in a state the
-// server allows its actions for — 'running' (Stop/Restart) or 'exited' /
-// 'failed' (Start). An entry without a resolvable instance keeps the
-// pipeline-wide Start (hint), never a per-component button.
+// resolveComponent reports a component's state, the InstanceID of its CURRENT
+// instance, and whether the entry -> instance attribution is precise (by
+// pipeline_entry_id). Per-component control (G3-RES-01, ADR 024 D-11/D-12,
+// retained-history clarification 2026-11-24) resolves the entry's current
+// instance rather than requiring a single record: pipeline-level starts mint a
+// fresh instance per cycle and retained terminal records are never pruned, so
+// multi-record history is the normal state, not an ambiguity. Selection: a
+// single 'running' attributed instance wins (Stop/Restart); otherwise the
+// newest attributed 'exited'/'failed' record wins (Start). More than one live
+// attributed instance is ambiguous and never resolves to an arbitrary target.
+// A transitional-only live instance, an orphan/stale-only entry, or an
+// imprecise (legacy model_id-fallback) attribution yields no per-component
+// button — the fallback never gains one, and an entry without a resolvable
+// instance keeps the pipeline-wide Start (hint).
 function resolveComponent(p, entry, idx) {
     const r = pipelineEntryInstances(p, entry, idx);
     const state = pipelineEntryStatus(p, entry, idx);
     let instanceId = null;
-    if (r.precise && r.list.length === 1) {
-        const st = r.list[0].state;
-        if (st === 'running' || st === 'exited' || st === 'failed') {
-            instanceId = r.list[0].id;
+    let targetState = null;
+    if (r.precise) {
+        // pending/starting/running/stopping are supervised states, orphan is an
+        // unsupervised LIVE process, unknown is indeterminate: any of them
+        // claims the entry and blocks terminal selection (arbitration would
+        // refuse a second launch anyway — the chip never offers it either).
+        const claiming = ['pending', 'starting', 'running', 'stopping', 'orphan', 'unknown'];
+        const live = r.list.filter(function (i) { return claiming.indexOf(i.state) !== -1; });
+        if (live.length === 1 && live[0].state === 'running') {
+            instanceId = live[0].id;
+            targetState = live[0].state;
+        } else if (live.length === 0) {
+            const terminals = r.list.filter(function (i) { return i.state === 'exited' || i.state === 'failed'; });
+            if (terminals.length > 0) {
+                terminals.sort(compareInstancesNewest);
+                instanceId = terminals[0].id;
+                targetState = terminals[0].state;
+            }
         }
     }
-    return { state: state, instanceId: instanceId, precise: r.precise };
+    return { state: state, instanceId: instanceId, targetState: targetState, precise: r.precise };
+}
+
+// compareInstancesNewest orders instances newest-first, deterministically and
+// locale-independently: started_at, then created_at, then InstanceID.
+function compareInstancesNewest(a, b) {
+    const sa = a.started_at ? new Date(a.started_at).getTime() : 0;
+    const sb = b.started_at ? new Date(b.started_at).getTime() : 0;
+    if (sa !== sb) return sb - sa;
+    const ca = a.created_at ? new Date(a.created_at).getTime() : 0;
+    const cb = b.created_at ? new Date(b.created_at).getTime() : 0;
+    if (ca !== cb) return cb - ca;
+    return a.id < b.id ? 1 : (a.id > b.id ? -1 : 0);
 }
 
 // pipelineChips renders one chip per entry (ADR 013 D7): a repeated model
@@ -752,12 +783,13 @@ function pipelineChips(p) {
         const name = getModelName(m.model_id);
         let actions = '';
         if (rc.instanceId) {
-            // A precisely-attributed RUNNING component offers Stop + Restart
-            // (D-11); a precisely-attributed TERMINAL (exited/failed) one offers
-            // Start (D-12, instance.start on the same InstanceID). Stop/Restart
-            // on a terminal component would be refused by the server anyway, so
-            // the chip offers only the action the state allows.
-            const running = rc.state === 'running';
+            // Action availability derives from the SELECTED instance's actual
+            // state, not the aggregate chip state: a selected RUNNING component
+            // offers Stop + Restart (D-11); a selected TERMINAL (exited/failed)
+            // one offers Start (D-12, instance.start on the same InstanceID).
+            // Stop/Restart on a terminal component would be refused by the
+            // server anyway, so the chip offers only the action the state allows.
+            const running = rc.targetState === 'running';
             actions = '<span class="pl-chip-actions">' +
                 (running
                     ? iconBtn(ICONS.stop, t('pipelines.chip.stop'), 'danger', 'stopComponent', rc.instanceId) +

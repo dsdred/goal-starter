@@ -549,6 +549,22 @@ async function main() {
     }, 25000);
     suite.log('6.1 Restart (icon strip): both running again', !!restarted, `running=${restarted ? restarted.length : 0}`);
     suite.log('6.2 Restart: new instances (old ones replaced)', !!restarted && restarted.every(i => oldIds.indexOf(i.id) === -1), `old=${JSON.stringify(oldIds)}`);
+    // 6.3 Retained-history regression (v2.3.0 RC fix): the restart minted NEW
+    // records while each entry's prior terminal record is RETAINED (supervisor
+    // retention, ADR 024 D-11: a retained terminal instance is resolvable
+    // history, not an ambiguity). Each chip must still expose exactly its own
+    // Stop + Restart for the single running instance — pre-fix the entry
+    // matched 2 records and the chip rendered NO per-component controls.
+    await poll(async () => (await page.locator('#pipeline-list .pl-chip .icon-btn[onclick*="stopComponent"]').count()) === 2, 8000);
+    const histStop = await page.locator('#pipeline-list .pl-chip .icon-btn[onclick*="stopComponent"]').count();
+    const histRestart = await page.locator('#pipeline-list .pl-chip .icon-btn[onclick*="restartComponent"]').count();
+    const histStart = await page.locator('#pipeline-list .pl-chip .icon-btn[onclick^="startComponent"]').count();
+    const histHint = await page.locator('#pipeline-list .pl-chip .pl-chip-hint').count();
+    const ownedAfterRestart = (await pipelineInstances()).filter(i => i.pipeline_id === pipeId);
+    const exitedAfterRestart = ownedAfterRestart.filter(i => i.state === 'exited').length;
+    suite.log('6.3 Stop/Restart visible with retained terminal history (2 chips x 2; no Start/hint)',
+      histStop === 2 && histRestart === 2 && histStart === 0 && histHint === 0 && ownedAfterRestart.length === 4 && exitedAfterRestart === 2,
+      `stop=${histStop} restart=${histRestart} start=${histStart} hint=${histHint} owned=${ownedAfterRestart.length} exited=${exitedAfterRestart}`);
     await H.screenshot(page, ws, '04-pipeline-restarted');
 
     // ═══ SECTION 7: Stop pipeline (icon strip, end-to-end) ═══
@@ -591,6 +607,55 @@ async function main() {
     ).map(el => el.className.replace(/^status-badge\s*/, '')));
     suite.log('7.2 Per-model status chips back to stopped (2)', chipsStopped === true && stoppedAfter === 2,
       `stopped=${stoppedAfter} chips=${JSON.stringify(chipStates)}`);
+    // 7.3 Retained-history Start regression (v2.3.0 RC fix): after this SECOND
+    // stop each entry holds TWO terminal records. Each chip must offer exactly
+    // one Start — no info hint (pre-fix the chip degraded to the hint) — and
+    // the Start must target the NEWEST terminal record of that entry
+    // (deterministic order: started_at, then created_at, then InstanceID).
+    const ownedTerminal = (await pipelineInstances()).filter(i => i.pipeline_id === pipeId && (i.state === 'exited' || i.state === 'failed'));
+    const newestTerminalFor = (modelId) => {
+      const t = ownedTerminal.filter(i => i.model_id === modelId);
+      t.sort((a, b) => {
+        const sa = a.started_at ? new Date(a.started_at).getTime() : 0;
+        const sb = b.started_at ? new Date(b.started_at).getTime() : 0;
+        if (sa !== sb) return sb - sa;
+        const ca = a.created_at ? new Date(a.created_at).getTime() : 0;
+        const cb = b.created_at ? new Date(b.created_at).getTime() : 0;
+        if (ca !== cb) return cb - ca;
+        return a.id < b.id ? 1 : (a.id > b.id ? -1 : 0);
+      });
+      return t[0] || null;
+    };
+    await poll(async () => (await page.locator('#pipeline-list .pl-chip .icon-btn[onclick^="startComponent"]').count()) === 2, 8000);
+    const histChecks = [];
+    for (const [title, mid] of [['Pipe Model A', idA], ['Pipe Model B', idB]]) {
+      const chip = page.locator('#pipeline-list .pl-chip[title="' + title + '"]');
+      const startCount = await chip.locator('.icon-btn[onclick^="startComponent"]').count();
+      const hintCount = await chip.locator('.pl-chip-hint').count();
+      const actionCount = await chip.locator('.pl-chip-actions .icon-btn').count();
+      const oc = startCount === 1 ? ((await chip.locator('.icon-btn[onclick^="startComponent"]').first().getAttribute('onclick')) || '') : '';
+      const tgt = (oc.match(/'([^']+)'/) || [])[1] || null;
+      const want = newestTerminalFor(mid);
+      histChecks.push({ chip: title, start: startCount, hint: hintCount, actions: actionCount,
+        target: tgt, wantNewest: want ? want.id : null, terminals: ownedTerminal.filter(i => i.model_id === mid).length });
+    }
+    const histStartOk = histChecks.every(c => c.start === 1 && c.hint === 0 && c.actions === 1 && c.wantNewest && c.target === c.wantNewest && c.terminals >= 2);
+    suite.log('7.3 Start visible after 2nd stop with MULTIPLE terminal records, targeting the newest',
+      histStartOk, JSON.stringify(histChecks));
+    // 7.4 Ambiguous-multi-live leg: two LIVE instances on ONE entry are not
+    // creatable through any public API path (ADR 017 arbitration refuses a
+    // same-model second launch; pipeline restart stops each entry before
+    // re-starting it), so resolveComponent's live.length > 1 guard (offer no
+    // control, never target an arbitrary process) is enforced by contract —
+    // the same treatment as the legacy fallback branch noted in 5b.5. Its
+    // reachable DOM projection is asserted here instead: no chip mixes Start
+    // with Stop/Restart, and no chip renders more than one control pair.
+    const invChips = await page.evaluate(() => [...document.querySelectorAll('#pipeline-list .pl-chip')].map(c => ({
+      start: c.querySelectorAll('.icon-btn[onclick^="startComponent"]').length,
+      stopRestart: c.querySelectorAll('.icon-btn[onclick*="stopComponent"], .icon-btn[onclick*="restartComponent"]').length,
+    })));
+    suite.log('7.4 Structural invariant: no chip mixes Start with Stop/Restart; at most one Start per chip',
+      invChips.every(c => !(c.start > 0 && c.stopRestart > 0) && c.start <= 1), JSON.stringify(invChips));
     await H.screenshot(page, ws, '05-pipeline-stopped');
 
     // ═══ SECTION 8: Pipeline Active (persistent, distinct from Start) ═══
