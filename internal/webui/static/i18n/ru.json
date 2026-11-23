@@ -404,5 +404,14 @@
   "resources.vendor.amd": "AMD",
   "resources.vendor.intel": "Intel",
   "resources.vendor.apple": "Apple",
-  "resources.vendor.system": "Система"
+  "resources.vendor.system": "Система",
+  "resources.processes.title": "Процессы GoAl",
+  "resources.processes.empty": "Нет запущенных процессов GoAl",
+  "resources.processes.empty_hint": "Живые запуски GoAl (запуск, работа, остановка) и подтверждённые по идентичности осиротевшие процессы показываются здесь с указанием потребления ОЗУ; завершённые запуски — в истории запусков.",
+  "resources.processes.pipeline_chip": "пайплайн",
+  "resources.processes.pipeline": "Пайплайн",
+  "resources.processes.component": "Компонент",
+  "resources.processes.runtime": "Runtime",
+  "resources.processes.pid": "PID",
+  "resources.processes.rss": "ОЗУ (RSS)"
 }

@@ -903,6 +903,8 @@ code { font-family: var(--font-mono); font-size: 0.9em; background: var(--bg-inp
 .res-prov { display: inline-block; padding: 1px 5px; border-radius: var(--radius-sm); font-size: 0.62rem; font-family: var(--font); }
 .res-prov-estimated { background: rgba(243, 156, 18, 0.15); color: var(--warning); }
 .res-prov-unavailable { background: rgba(154, 154, 180, 0.12); color: var(--text-muted); }
+.res-proc-reason { font-family: var(--font-mono); font-size: 0.62rem; color: var(--text-muted); overflow-wrap: anywhere; }
+.res-proc-rss .res-row-val { font-size: 0.95rem; font-weight: 700; color: var(--text-primary); flex-wrap: wrap; }
 @media (max-width: 768px) {
     .res-grid { grid-template-columns: 1fr; }
     .res-metric { font-size: 1.4rem; }

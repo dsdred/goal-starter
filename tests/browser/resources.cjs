@@ -5,10 +5,17 @@
 // every contract state (ok / partial / unavailable / measurement_failed), the
 // CPU-only healthy path, multi-vendor GPUs, missing metrics, measured-zero vs
 // unavailable, RU/EN relocalization, and the page-scoped refresh boundary.
+// G3-RES-06 (registered 2026-11-23; formerly re-designated G3-RES-05B) adds the
+// GoAl processes section leg: one/many/empty processes, unavailable-null never
+// rendered as 0, measured zero as a value, pipeline and component binding,
+// RU/EN, narrow screen, plus a live integration leg (real fake-runtime process
+// through the real API — no route stubbing there).
+const path = require('path');
 const H = require('./harness.cjs');
 
 const PORT = 19476;
 const BASE = `http://127.0.0.1:${PORT}`;
+const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 // Wire shape mirrors internal/resource/model.go. A Reading is
 // {value:int64|null, unit, provenance, source, reason?}; value:null means
@@ -84,10 +91,32 @@ const FIX_FAILED = report({
 });
 const FIX_NO_SYSTEM = report({ state: 'partial', system: null, devices: [gpu(0, 'nvidia', 'NVIDIA GeForce RTX 4090', '551.23', 'dedicated', 2147483648)] });
 
+// G3-RES-06 — processes[] fixtures (ADR 026 A-026-1 wire shape). m-alpha and
+// r-beta resolve through stubbed listing caches; m-gamma / m-zero stay raw IDs,
+// which is the documented fallback when a launch record outlives its entity.
+const P = (over) => Object.assign({
+  instance_id: 'inst-x', model_id: 'm-x', runtime_id: 'r-x', pid: 1000,
+  resources: { process_rss: R(1073741824, 'bytes', 'measured', 'fixture') },
+}, over);
+const PROC_A = P({ instance_id: 'inst-alpha', model_id: 'm-alpha', runtime_id: 'r-beta', pid: 4242,
+  resources: { process_rss: R(1610612736, 'bytes', 'measured', 'kmem') } });
+const PROC_B = P({ instance_id: 'inst-pipe', model_id: 'm-gamma', runtime_id: 'r-beta', pid: 4343,
+  pipeline_id: 'pl-main', pipeline_entry_id: 'pe-0123456789abcdef',
+  resources: { process_rss: R(null, 'bytes', 'unavailable', 'procfs', 'identity_mismatch') } });
+const PROC_C = P({ instance_id: 'inst-zero', model_id: 'm-zero', runtime_id: 'r-beta', pid: 4444,
+  resources: { process_rss: R(0, 'bytes', 'measured', 'kmem') } });
+const FIX_PROC_ONE = report({ devices: [], processes: [PROC_A] });
+const FIX_PROC_MULTI = report({ devices: [], processes: [PROC_A, PROC_B, PROC_C] });
+const FIX_PROC_EMPTY = report({ devices: [], processes: [] });
+
 async function main() {
   const ws = H.makeWorkspace('resources');
   const goalBin = H.buildGoal(ws);
-  H.writeConfig(ws, { webPort: PORT });
+  // The fake runtime is seeded via config only for the SECTION 13 live leg
+  // (real process, real API). It changes nothing earlier: no instance exists
+  // until SECTION 13 launches one, and the resources fixtures are mocked.
+  const fakeRt = H.buildFakeRuntime(ws);
+  H.writeConfig(ws, { webPort: PORT, runtimes: [{ id: 'rt-fake', name: 'RT Fake Live', executable: fakeRt, workingDirectory: path.dirname(fakeRt) }] });
   const server = H.startServer(goalBin, ws);
   if (!await H.waitForHealth(BASE)) {
     console.error('Server failed to start. Output:', server.output);
@@ -122,10 +151,16 @@ async function main() {
     await page.route(RES_URL, route => { reqCount++; route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(rep) }); });
     await page.evaluate(() => window.loadResources());
     if (waitText) {
-      await page.waitForFunction((txt) => {
+      const appeared = await page.waitForFunction((txt) => {
         const el = document.querySelector('#resources-content');
         return !!el && (el.textContent || '').includes(txt);
-      }, waitText, { timeout: 6000 }).catch(() => {});
+      }, waitText, { timeout: 6000 }).then(() => true).catch(() => false);
+      if (!appeared) {
+        // T-2: a swallowed wait would let each downstream check fail silently;
+        // name the stuck fixture precisely instead.
+        suite.log(`FIXTURE WAIT TIMEOUT: "${waitText}" never rendered`, false,
+          `state=${rep.state} devices=${(rep.devices || []).length} processes=${(rep.processes || []).length}`);
+      }
     } else {
       await page.waitForTimeout(300);
     }
@@ -264,13 +299,139 @@ async function main() {
     await page.waitForTimeout(600);
     suite.log('11.3 returning to the view resumes sampling', reqCount > hiddenStart, `hidden=${hiddenStart} now=${reqCount}`);
 
-    // ═══ SECTION 12: sanity ═══
+    // ═══ SECTION 12: GoAl processes (G3-RES-06 per-process RAM) ═══
+    // Stub the listing caches so ID→name joins are exercised on a real page
+    // without touching the backend: the resources fixture stays the only mock
+    // of the monitored endpoint.
+    await page.route('**/api/v1/runtimes', route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([{ id: 'r-beta', name: 'RT Beta' }]) }));
+    await page.route('**/api/v1/models', route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([{ id: 'm-alpha', name: 'Alpha Model', runtime_id: 'r-beta' }]) }));
+    await page.route('**/api/v1/pipelines', route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([{ id: 'pl-main', name: 'Main Pipe', models: [{ id: 'pe-0123456789abcdef', model_id: 'm-gamma', auto_start: false }] }]) }));
+    await page.evaluate(() => window.reloadAllData());
+    await page.waitForTimeout(500);
+
+    // One process.
+    await setFixture(FIX_PROC_ONE, 'GoAl Processes');
+    suite.log('12.1 processes section renders', (await contentText()).includes('GoAl Processes'));
+    suite.log('12.2 one process card', (await page.locator('.res-proc').count()) === 1);
+    const t12a = await contentText();
+    suite.log('12.3 model + runtime names joined', t12a.includes('Alpha Model') && t12a.includes('RT Beta'));
+    suite.log('12.4 PID shown', t12a.includes('4242'));
+    suite.log('12.5 measured RSS 1.5 GiB shown', t12a.includes('1.5 GiB'));
+
+    // Several processes incl. unavailable-null and measured-zero.
+    await setFixture(FIX_PROC_MULTI, 'identity_mismatch');
+    // T-3: every unavailable-process assertion is scoped to PROC_B's own card
+    // (identified by its unique PID 4343), so a dash, tag or raw ID elsewhere
+    // on the page cannot make these checks pass.
+    const cardB = page.locator('.res-proc', { hasText: '4343' }).first();
+    const cardBText = (await cardB.textContent()) || '';
+    suite.log('12.6 three process cards', (await page.locator('.res-proc').count()) === 3 && (await cardB.count()) === 1);
+    suite.log('12.7 unavailable process NOT hidden (raw-ID fallback inside its own card)', cardBText.includes('m-gamma'));
+    suite.log('12.8 unavailable RSS shows absence in-card, never 0', cardBText.includes('—') && (await cardB.locator('.res-prov-unavailable').count()) === 1 && !cardBText.includes('0 B'));
+    suite.log('12.9 bounded reason token shown in-card', cardBText.includes('identity_mismatch'));
+    const cardC = page.locator('.res-proc', { hasText: '4444' }).first();
+    const cardCText = (await cardC.textContent()) || '';
+    suite.log('12.10 measured zero renders as a value (0 B, not —) in its own card', cardCText.includes('0 B') && !cardCText.includes('—'));
+    suite.log('12.11 pipeline + component binding in-card', cardBText.includes('Main Pipe') && cardBText.includes('…89abcdef') && cardBText.includes('Pipeline') && cardBText.includes('Component'));
+
+    // Empty list.
+    await setFixture(FIX_PROC_EMPTY, 'No running GoAl processes');
+    const t12c = await contentText();
+    suite.log('12.12 empty list shows clear empty state', t12c.includes('No running GoAl processes') && t12c.includes('Live launches tracked by GoAl'));
+    suite.log('12.13 empty list renders no cards', (await page.locator('.res-proc').count()) === 0);
+
+    // RU localization (render re-runs from cache; the page-scoped 5 s timer may
+    // still sample — localization itself must not blank or drop the section).
+    await setFixture(FIX_PROC_MULTI, 'identity_mismatch');
+    await page.evaluate(() => window.setLanguage('ru'));
+    await page.waitForTimeout(400);
+    const t12ru = await contentText();
+    suite.log('12.14 RU section title localized', t12ru.includes('Процессы GoAl'));
+    suite.log('12.15 RU unavailable tag localized', t12ru.includes('недоступно'));
+    suite.log('12.16 RU: i18nMissing empty + no raw keys', (await missingKeys()).length === 0 && (await domRawKeys()).length === 0);
+    await H.screenshot(page, ws, '12-processes-ru');
+    suite.log('12.17 RU relocalizes from cache, all cards stay', (await page.locator('.res-proc').count()) === 3);
+    await page.evaluate(() => window.setLanguage('en'));
+    await page.waitForTimeout(400);
+    suite.log('12.18 EN relocalizes back', (await contentText()).includes('GoAl Processes') && (await missingKeys()).length === 0);
+
+    // Narrow screen: cards stay stacked, no horizontal overflow.
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.waitForTimeout(400);
+    suite.log('12.19 narrow screen keeps all three cards', (await page.locator('.res-proc').count()) === 3);
+    const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+    suite.log('12.20 narrow screen: no horizontal overflow', overflow <= 0, `overflow=${overflow}px`);
+    await H.screenshot(page, ws, '12-processes-narrow');
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.waitForTimeout(300);
+
+    // ═══ SECTION 13: live integration (T-1) — one real fake-runtime launch ═══
+    // No page.route involvement: the launch, the listing caches and the
+    // resources report all come from the running server. Guarded so a missing
+    // wire entry can never pass via dash/label coincidence elsewhere.
+    await page.unroute(RES_URL).catch(() => {});
+    await page.unroute('**/api/v1/runtimes').catch(() => {});
+    await page.unroute('**/api/v1/models').catch(() => {});
+    await page.unroute('**/api/v1/pipelines').catch(() => {});
+    const mk = await H.api(BASE, 'POST', '/api/v1/models', { name: 'Res Live Model', runtime_id: 'rt-fake', args: ['infinite'] });
+    const mId = mk.data && mk.data.id;
+    const st = await H.api(BASE, 'POST', `/api/v1/models/${mId}/start`);
+    const instId = st.data && st.data.id;
+    let liveProc = null;
+    let livePid = 0;
+    for (let i = 0; i < 40 && !liveProc; i++) {
+      const rep = await H.api(BASE, 'GET', '/api/v1/system/resources');
+      const hit = ((rep.data && rep.data.processes) || []).find(p => p.instance_id === instId);
+      if (hit && hit.pid > 0) { liveProc = hit; livePid = hit.pid; }
+      else await sleep(500);
+    }
+    suite.log('13.1 live API: processes[] carries the real instance with a PID', !!liveProc && livePid === liveProc.pid, `inst=${instId} pid=${livePid}`);
+    await page.evaluate(() => window.reloadAllData());
+    await sleep(600);
+    await page.evaluate(() => window.loadResources());
+    const domOk = await page.waitForFunction((pid) => {
+      // Lookaround, not \b: concatenated cell text is 'PID'+digits+'RAM', and
+      // a word boundary never exists between a letter and a digit there.
+      return Array.from(document.querySelectorAll('.res-proc')).some(el => new RegExp('(?<!\\d)' + pid + '(?!\\d)').test(el.textContent || ''));
+    }, livePid, { timeout: 12000 }).then(() => true).catch(() => false);
+    suite.log('13.2 DOM: live process card renders with the real PID', domOk, `pid=${livePid}`);
+    const liveCard = page.locator('.res-proc').filter({ has: page.locator('.res-row-val', { hasText: new RegExp('^' + livePid + '$') }) }).first();
+    const liveCardText = (await liveCard.textContent()) || '';
+    suite.log('13.3 live card joins real model + runtime names (no stubs)', liveCardText.includes('Res Live Model') && liveCardText.includes('RT Fake Live'), `card=${liveCardText.slice(0, 90)}`);
+    const rssRowText = (await liveCard.locator('.res-proc-rss').textContent()) || '';
+    const supported = process.platform === 'win32' || process.platform === 'linux';
+    suite.log('13.4 live RSS is measured on the supported platform', supported && /\d+(\.\d+)?\s?(B|KiB|MiB|GiB)/.test(rssRowText) && !rssRowText.includes('—') && (await liveCard.locator('.res-prov').count()) === 0, `platform=${process.platform} rss='${rssRowText.trim()}'`);
+    await H.screenshot(page, ws, '13-live-process-card');
+
+    // Post-stop leg: per A-1 entries are emitted for NON-TERMINAL instances
+    // only, so a confirmed stop must remove the entry from the live API and
+    // from the DOM — a stale card or a lingering OS process would fail here.
+    await H.api(BASE, 'POST', `/api/v1/instances/${instId}/stop`);
+    let apiGone = false;
+    for (let i = 0; i < 40 && !apiGone; i++) {
+      const rep = await H.api(BASE, 'GET', '/api/v1/system/resources');
+      apiGone = !((rep.data && rep.data.processes) || []).some(p => p.instance_id === instId);
+      if (!apiGone) await sleep(500);
+    }
+    suite.log('13.5 after stop: API entry removed (terminal records emit no entry, A-1)', apiGone, `pid=${livePid}`);
+    await page.evaluate(() => window.loadResources());
+    const domGone = await page.waitForFunction((pid) => {
+      return !Array.from(document.querySelectorAll('.res-proc')).some(el => new RegExp('(?<!\\d)' + pid + '(?!\\d)').test(el.textContent || ''));
+    }, livePid, { timeout: 12000 }).then(() => true).catch(() => false);
+    suite.log('13.6 after stop: DOM card removed — no stale row, no fabricated 0', domGone, `pid=${livePid} cards=${await page.locator('.res-proc').count()}`);
+    const instRow = await H.api(BASE, 'GET', `/api/v1/instances/${instId}`);
+    const instState = instRow.data && (instRow.data.state || instRow.data.status);
+    suite.log('13.7 cleanup: launch record reached a terminal state (OS process gone)', ['exited', 'failed', 'stale'].includes(instState), `state=${instState}`);
+    await H.api(BASE, 'DELETE', `/api/v1/models/${mId}`).catch(() => {});
+    await H.api(BASE, 'DELETE', '/api/v1/runtimes/rt-fake').catch(() => {});
+
+    // ═══ SECTION 14: sanity ═══
     const unexpectedConsole = suite.consoleErrors.filter(e =>
       !/Failed to load resource[^\n]*401 \(Unauthorized\)/.test(e) &&
       !/Failed to load resource[^\n]*net::ERR_FAILED/.test(e));
-    suite.log('12.1 No unexpected console errors', unexpectedConsole.length === 0,
+    suite.log('14.1 No unexpected console errors', unexpectedConsole.length === 0,
       unexpectedConsole.slice(0, 3).join('; ') || `(${suite.consoleErrors.length} expected notices ignored)`);
-    suite.log('12.2 No server 5xx errors', suite.serverErrors.length === 0, JSON.stringify(suite.serverErrors.slice(0, 3)));
+    suite.log('14.2 No server 5xx errors', suite.serverErrors.length === 0, JSON.stringify(suite.serverErrors.slice(0, 3)));
 
     ok = await suite.finish();
   } catch (err) {

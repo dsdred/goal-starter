@@ -288,7 +288,7 @@ After starting, GoAl is available at: **http://127.0.0.1:8088**
 - **Launch History** — persistent terminal instance records (survives restart)
 - **Health Monitoring** — check runtime availability
 - **Metrics** — built-in application metrics
-- **Resource Monitoring** — read-only CPU / RAM / GPU observation (Resources page, advanced group)
+- **Resource Monitoring** — read-only CPU / RAM / GPU and per-process RAM observation (Resources page, advanced group)
 - **Theme** — System / Dark / Light (sidebar footer, persisted in browser localStorage)
 - **Language** — Russian / English (sidebar footer, persisted in browser localStorage)
 - **Server connection status** — the sidebar "Server" dot reflects live reachability (green = reachable, red = unreachable). If the server becomes unreachable, a red banner appears at the top of the page; when the connection is restored, the banner disappears and a short "connection restored" notification is shown. Detection polls `GET /api/v1/health` every 5 seconds and reacts immediately to browser network offline/online events.
@@ -320,6 +320,21 @@ It observes; it never starts, stops, or schedules anything.
   memory class, and VRAM total / used / free with a usage percent. Multiple GPUs
   from different vendors (NVIDIA, AMD, Intel, Apple) are shown side by side; there
   are no NVIDIA-specific assumptions.
+- **GoAl processes** — one card per tracked live launch of GoAl (starting,
+  running, stopping) and per identity-confirmed orphan, showing the model,
+  runtime, PID and RAM usage (RSS). Pipeline launches also name their pipeline
+  and component entry. An `unavailable` RSS (e.g. the process exited before the
+  sample completed or its identity could not be confirmed) renders as `—` with
+  a bounded reason — never `0` — and the process stays in the list. When a
+  launch reaches a terminal state its entry disappears; completed launches
+  remain visible in Launch History, not here. With no tracked live launches
+  the section shows a clear empty state. Process RSS is accounting, not
+  ownership: cards of concurrent launches each describe their own process, so
+  their values say nothing about a "total RAM used by GoAl"; RSS measures
+  system RAM usage, never GPU VRAM; the figures are never summed into the
+  system RAM ones; and the page never controls the processes it shows
+  (ADR 026 Amendment A-026-1; Windows and Linux — on other platforms the
+  section stays empty).
 
 Readings carry a provenance: `measured` (no tag), `estimated`, or `unavailable`
 (shown as `—`). A measured zero is a real value, not a missing one. The report

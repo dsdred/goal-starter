@@ -3096,6 +3096,48 @@ function resGpu(devices) {
     return h + '</div>';
 }
 
+// G3-RES-06: per-process RAM attribution (ADR 026 A-026-1, read-only). An
+// unavailable RSS is rendered as an absence ('—' + tag + bounded reason), never
+// as 0; a measured zero IS a value (D-6). Entries are never hidden and never
+// summed into the system RAM figures above (live launches only per A-1:
+// terminal records drop out; RSS is accounting, not GPU VRAM). Names resolve
+// through the existing listing caches (same fallbacks as the Instances view);
+// no extra fetch or timer runs here.
+function resProcessCard(p) {
+    const res = p.resources || {};
+    const rss = res.process_rss || {};
+    const pipe = p.pipeline_id ? pipelinesData.find(function (x) { return x.id === p.pipeline_id; }) : null;
+    let h = '<div class="res-card res-proc">';
+    h += '<div class="res-card-head"><span class="res-dev-name">' + esc(getModelName(p.model_id)) + '</span>';
+    if (p.pipeline_id) h += '<span class="res-vendor res-vendor-system">' + t('resources.processes.pipeline_chip') + '</span>';
+    h += '</div>';
+    if (p.pipeline_id) {
+        h += '<div class="res-dev-meta"><span>' + t('resources.processes.pipeline') + ': ' + esc(pipe ? pipe.name : compactInstanceId(p.pipeline_id)) + '</span>';
+        if (p.pipeline_entry_id) h += '<span>' + t('resources.processes.component') + ': ' + esc(compactInstanceId(p.pipeline_entry_id, true)) + '</span>';
+        h += '</div>';
+    }
+    const rssText = typeof rss.value === 'number' ? fmtBytes(rss.value) : '—';
+    h += '<div class="res-rows">';
+    h += '<div class="res-row"><span>' + t('resources.processes.runtime') + '</span><span class="res-row-val">' + esc(getRuntimeName(p.runtime_id)) + '</span></div>';
+    h += '<div class="res-row"><span>' + t('resources.processes.pid') + '</span><span class="res-row-val">' + esc(p.pid ? String(p.pid) : '—') + '</span></div>';
+    h += '<div class="res-row res-proc-rss"><span>' + t('resources.processes.rss') + '</span><span class="res-row-val">' + esc(rssText) + resProvTag(rss) +
+        (rss.reason ? '<span class="res-proc-reason">' + esc(rss.reason) + '</span>' : '') + '</span></div>';
+    h += '</div></div>';
+    return h;
+}
+
+function resProcesses(procs) {
+    let h = '<div class="res-section-title">' + t('resources.processes.title');
+    if (procs.length) h += ' <span class="res-count">' + procs.length + '</span>';
+    h += '</div>';
+    if (!procs.length) {
+        return h + '<div class="empty-state"><p>' + t('resources.processes.empty') + '</p><small class="hint-text">' + t('resources.processes.empty_hint') + '</small></div>';
+    }
+    h += '<div class="res-grid">';
+    procs.forEach(function (p) { h += resProcessCard(p); });
+    return h + '</div>';
+}
+
 function renderResources() {
     const el = document.getElementById('resources-content');
     if (!el) return;
@@ -3117,6 +3159,7 @@ function renderResources() {
     }
     html += r.system ? resSystem(r.system) : '<div class="res-banner res-banner-muted">' + t('resources.system.unavailable') + '</div>';
     html += resGpu(r.devices || []);
+    html += resProcesses(r.processes || []);
     el.innerHTML = html;
 }
 

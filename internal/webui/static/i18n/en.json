@@ -404,5 +404,14 @@
   "resources.vendor.amd": "AMD",
   "resources.vendor.intel": "Intel",
   "resources.vendor.apple": "Apple",
-  "resources.vendor.system": "System"
+  "resources.vendor.system": "System",
+  "resources.processes.title": "GoAl Processes",
+  "resources.processes.empty": "No running GoAl processes",
+  "resources.processes.empty_hint": "Live launches tracked by GoAl (starting, running, stopping) and identity-confirmed orphaned processes appear here with their RAM usage; completed launches are listed in Launch History.",
+  "resources.processes.pipeline_chip": "pipeline",
+  "resources.processes.pipeline": "Pipeline",
+  "resources.processes.component": "Component",
+  "resources.processes.runtime": "Runtime",
+  "resources.processes.pid": "PID",
+  "resources.processes.rss": "RAM (RSS)"
 }
