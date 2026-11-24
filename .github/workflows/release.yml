@@ -114,36 +114,65 @@ jobs:
             throw "Release checksums do not list the exact canonical archive set"
           }
 
-      # Release notes live in tracked bytes, one file per version, and are fed
-      # to the GitHub Release at creation (softprops body_path) — never post-hoc.
+      # Release notes live in tracked bytes, one file per version per language
+      # (English primary, Russian secondary — bilingual contract from v2.3.0),
+      # and a single combined body is fed to the GitHub Release at creation
+      # (softprops body_path) — never post-hoc.
       # The path is inlined at each use site: top-level vars do not evaluate
       # context expressions, so github.ref_name is expanded here, where the
       # github context is guaranteed.
-      - name: Validate release notes (version-specific, tracked, non-empty)
+      - name: Validate bilingual release notes (version-specific, tracked, non-empty)
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $notesPath = "docs/releases/${{ github.ref_name }}-ru.md"
-          if ($notesPath -notmatch 'docs/releases/v[0-9][0-9.]+-ru\.md$') {
-            throw "Release notes path is not version-specific: $notesPath"
+          $version = $env:RELEASE_VERSION
+          foreach ($lang in @("en", "ru")) {
+            $notesPath = "docs/releases/${{ github.ref_name }}-$lang.md"
+            if ((Split-Path $notesPath -Leaf) -ne "$version-$lang.md") {
+              throw "Release notes path is not version-specific: $notesPath"
+            }
+            if (-not (Test-Path -LiteralPath $notesPath)) {
+              throw "Release notes ($lang) missing: $notesPath (the GitHub Release would be created with an incomplete body)"
+            }
+            $text = [IO.File]::ReadAllText($notesPath)
+            if ($text.Trim().Length -lt 200) {
+              throw "Release notes ($lang) too short to be a real body: $notesPath"
+            }
+            if ($text.Trim() -eq $version) {
+              throw "Release notes ($lang) contain only the version string: $notesPath"
+            }
+            if (-not ($text.StartsWith("# ") -or $text.Contains("`n# "))) {
+              throw "Release notes ($lang) have no Markdown heading — placeholder-only content: $notesPath"
+            }
           }
-          if (-not (Test-Path -LiteralPath $notesPath)) {
-            throw "Release notes missing: $notesPath (the GitHub Release would be created with an empty body)"
-          }
-          $text = [IO.File]::ReadAllText($notesPath)
-          if ($text.Trim().Length -lt 200) {
-            throw "Release notes too short to be a real body: $notesPath"
-          }
-          if ($text.Trim() -eq $env:RELEASE_VERSION) {
-            throw "Release notes contain only the version string: $notesPath"
-          }
+
+      - name: Generate combined bilingual release body
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $en = [IO.File]::ReadAllText("docs/releases/${{ github.ref_name }}-en.md")
+          $ru = [IO.File]::ReadAllText("docs/releases/${{ github.ref_name }}-ru.md")
+          $body = ([string[]](
+            "[English](#english) | [Русский](#русский)",
+            "",
+            "## English",
+            "",
+            $en.Trim(),
+            "",
+            "---",
+            "",
+            "## Русский",
+            "",
+            $ru.Trim()
+          )) -join [Environment]::NewLine
+          [IO.File]::WriteAllText("release-notes-combined.md", $body, (New-Object System.Text.UTF8Encoding $false))
 
       - name: Upload exact release assets
         uses: softprops/action-gh-release@v2
         with:
           fail_on_unmatched_files: true
           overwrite_files: false
-          body_path: docs/releases/${{ github.ref_name }}-ru.md
+          body_path: release-notes-combined.md
           files: |
             bin/goal-windows-amd64.exe
             bin/goal-linux-amd64

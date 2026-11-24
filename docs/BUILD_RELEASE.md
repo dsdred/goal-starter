@@ -15,6 +15,8 @@ This document describes the release process for GoAl.
 The GitHub Release asset set is exactly these five files. Empty-version names such as `goal--windows-amd64.zip` are invalid and must never be published.
 
 **Latest published tag:** `v2.3.0` (tag → commit `0811bb71128fea36f1d99720db9fb66271135f00`, release workflow run `45456730986` attempt 1, published 2026-11-24T18:15:24Z; release body is the tracked RU notes `docs/releases/v2.3.0-ru.md` fed via `body_path` at creation; previous release `v2.2.0` → `1e55064`, run `43930538485`, 2026-11-16)
+
+**Bilingual release notes contract (Owner decision 2026-11-25, from v2.3.0):** every release tag carries two tracked note files — `docs/releases/<tag>-en.md` (English, primary) and `docs/releases/<tag>-ru.md` (Russian, secondary) with semantic parity (features, improvements, fixes, commands, resource monitoring, supported platforms, known limitations, installation and upgrade, acceptance and quality checks). The release workflow validates **both** files before any GitHub Release creation (missing, empty, or placeholder-only notes fail the release) and generates a single combined body — `English | Русский` navigation with working Markdown anchors, then a `## English` section, a `---` separator, and a `## Русский` section (UTF-8, no BOM) — fed to the Release via softprops `body_path` **at creation, never post-hoc**. The already-published v2.3.0 body (RU-only) and all previous releases remain unchanged; updating the v2.3.0 remote body is a separate Owner decision.
 **Release:** [GitHub Releases](https://github.com/dsdred/goal-starter/releases/tag/v2.3.0)
 
 ## Windows Authenticode signing (capability, not currently active)
@@ -120,13 +122,16 @@ Semantic versioning: `vMAJOR.MINOR.PATCH`
 
 1. Ensure all tests pass: `go test ./... && go test -race ./...`
 2. Ensure all required checks pass: `gofmt -w . && go vet ./...`
-3. Create tag: `git tag vX.Y.Z`
-4. Push tag: `git push origin vX.Y.Z`
-5. GitHub Actions release workflow runs automatically:
+3. Author and commit the bilingual release notes **before** tagging: `docs/releases/vX.Y.Z-en.md` (English, primary) and `docs/releases/vX.Y.Z-ru.md` (Russian, secondary), with semantic parity (features, improvements, fixes, commands, resource monitoring, supported platforms, known limitations, installation and upgrade, acceptance and quality checks); planned features are never advertised as implemented
+4. Create tag: `git tag vX.Y.Z`
+5. Push tag: `git push origin vX.Y.Z`
+6. GitHub Actions release workflow runs automatically:
+   - Validates both note files (missing, empty, or placeholder-only notes fail the release)
+   - Generates the combined bilingual body (`## English` / `## Русский`) used as the Release body at creation
    - Tests, build, sign Windows, verify signature
    - Generate checksums (post-signing)
    - Publish release with all assets
-6. Verify the published release:
+7. Verify the published release:
    - Check signature: `Get-AuthenticodeSignature .\goal-windows-amd64.exe`
    - Verify checksums: `Get-FileHash` vs `checksums.txt`
 
