@@ -408,10 +408,15 @@
   "resources.processes.title": "GoAl Processes",
   "resources.processes.empty": "No running GoAl processes",
   "resources.processes.empty_hint": "Live launches tracked by GoAl (starting, running, stopping) and identity-confirmed orphaned processes appear here with their RAM usage; completed launches are listed in Launch History.",
+  "resources.unit.gib": "GiB",
+  "resources.unit.mib": "MiB",
+  "resources.unit.kib": "KiB",
+  "resources.unit.b": "B",
   "resources.processes.pipeline_chip": "pipeline",
   "resources.processes.pipeline": "Pipeline",
   "resources.processes.component": "Component",
   "resources.processes.runtime": "Runtime",
   "resources.processes.pid": "PID",
-  "resources.processes.rss": "RAM (RSS)"
+  "resources.processes.rss": "Process RAM",
+  "resources.processes.rss_note": "Resident process memory may include shared pages and memory-mapped model files."
 }

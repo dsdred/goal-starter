@@ -2997,15 +2997,20 @@ let resourcesData = null;
 let resourcesTimer = null;
 let resourcesInFlight = false;
 
+function resDecimal(n, digits) {
+    const loc = (typeof currentLang === 'string' && currentLang.startsWith('ru')) ? 'ru-RU' : 'en-US';
+    return n.toLocaleString(loc, { minimumFractionDigits: digits, maximumFractionDigits: digits });
+}
+
 function fmtBytes(v) {
     if (v === null || v === undefined || isNaN(v)) return '—';
     const n = Number(v);
     if (n < 0) return '—';
     const gib = 1024 * 1024 * 1024, mib = 1024 * 1024, kib = 1024;
-    if (n >= gib) return (n / gib).toFixed(1) + ' GiB';
-    if (n >= mib) return Math.round(n / mib) + ' MiB';
-    if (n >= kib) return Math.round(n / kib) + ' KiB';
-    return n + ' B';
+    if (n >= gib) return resDecimal(n / gib, 1) + ' ' + t('resources.unit.gib');
+    if (n >= mib) return Math.round(n / mib) + ' ' + t('resources.unit.mib');
+    if (n >= kib) return Math.round(n / kib) + ' ' + t('resources.unit.kib');
+    return n + ' ' + t('resources.unit.b');
 }
 
 // resNum returns the reading's numeric value, or null when unavailable. A
@@ -3165,6 +3170,7 @@ function resProcesses(procs) {
     if (!procs.length) {
         return h + '<div class="empty-state"><p>' + t('resources.processes.empty') + '</p><small class="hint-text">' + t('resources.processes.empty_hint') + '</small></div>';
     }
+    h += '<small class="hint-text res-proc-note">' + t('resources.processes.rss_note') + '</small>';
     h += '<div class="res-grid">';
     procs.forEach(function (p) { h += resProcessCard(p); });
     return h + '</div>';

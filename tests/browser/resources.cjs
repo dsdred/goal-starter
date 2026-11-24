@@ -108,6 +108,9 @@ const PROC_C = P({ instance_id: 'inst-zero', model_id: 'm-zero', runtime_id: 'r-
 const FIX_PROC_ONE = report({ devices: [], processes: [PROC_A] });
 const FIX_PROC_MULTI = report({ devices: [], processes: [PROC_A, PROC_B, PROC_C] });
 const FIX_PROC_EMPTY = report({ devices: [], processes: [] });
+// SECTION 15 needs BOTH a GPU card (VRAM unit/label localization) and process
+// cards (runtime / RSS label + explanation localization) in one render.
+const FIX_GPU_PROCS = report({ devices: [gpu(0, 'nvidia', 'NVIDIA GeForce RTX 4090', '551.23', 'dedicated', 2147483648)], processes: [PROC_A, PROC_B, PROC_C] });
 
 async function main() {
   const ws = H.makeWorkspace('resources');
@@ -180,7 +183,10 @@ async function main() {
     const realText = await contentText();
     suite.log('1.1 resources view is active', await page.locator('#view-resources').evaluate(el => el.classList.contains('active')));
     suite.log('1.2 real fetch renders a state badge', (await stateText()).length > 0, `state=${JSON.stringify(await stateText())}`);
-    suite.log('1.3 real host shows a System section with RAM total', realText.includes('32.0 GiB') || /\d+(\.\d+)?\s*(GiB|MiB)/.test(realText), `text=${JSON.stringify(realText.slice(0, 120))}`);
+    // RU locale on first render: the RAM figure may carry the locale decimal
+    // separator and localized units, so the regex admits both dot and comma
+    // and both unit alphabets (locale-aware fmtBytes).
+    suite.log('1.3 real host shows a System section with RAM total', realText.includes('32.0 GiB') || /\d+([.,]\d+)?\s*(GiB|MiB|ГиБ|МиБ)/.test(realText), `text=${JSON.stringify(realText.slice(0, 120))}`);
     suite.log('1.4 real host shows logical cores', await page.locator('.res-row').count() > 0);
     suite.log('1.5 real leg: no raw i18n keys in DOM', (await domRawKeys()).length === 0, `raw=${JSON.stringify((await domRawKeys()).slice(0, 5))}`);
     suite.log('1.6 real leg: i18nMissing empty', (await missingKeys()).length === 0, `missing=${JSON.stringify((await missingKeys()).slice(0, 5))}`);
@@ -424,6 +430,43 @@ async function main() {
     suite.log('13.7 cleanup: launch record reached a terminal state (OS process gone)', ['exited', 'failed', 'stale'].includes(instState), `state=${instState}`);
     await H.api(BASE, 'DELETE', `/api/v1/models/${mId}`).catch(() => {});
     await H.api(BASE, 'DELETE', '/api/v1/runtimes/rt-fake').catch(() => {});
+
+    // ═══ SECTION 15: RU/EN unit localization (v2.3.0 release polish) ═══
+    // Localized binary units + locale decimal separator (RU: comma), localized
+    // VRAM / Runtime / RSS labels, and the localized RSS explanation. Values
+    // and thresholds (1024-based) are unchanged: the same 1.5 GiB / 24 GiB
+    // readings render as "1,5 ГиБ" in RU and "1.5 GiB" in EN.
+    await setFixture(FIX_GPU_PROCS, 'identity_mismatch');
+    await page.evaluate(() => window.setLanguage('ru'));
+    await page.waitForTimeout(400);
+    const t15ru = await contentText();
+    suite.log('15.1 RU GiB value uses localized unit', t15ru.includes('1,5 ГиБ'));
+    suite.log('15.2 RU GPU VRAM value uses localized unit', t15ru.includes('24,0 ГиБ'));
+    suite.log('15.3 RU runtime label is Рантайм', t15ru.includes('Рантайм'));
+    suite.log('15.4 RU RSS label is ОЗУ процесса', t15ru.includes('ОЗУ процесса'));
+    suite.log('15.5 RU RSS explanation shown', t15ru.includes('Резидентная память процесса может включать общие страницы и смонтированные в память файлы моделей'));
+    suite.log('15.6 RU VRAM label uses the Russian equivalent', t15ru.includes('Видеопамять: всего'));
+    suite.log('15.7 RU: no untranslated VRAM/English unit remains in the view', !t15ru.includes('VRAM') && !/GiB|MiB|KiB/.test(t15ru));
+    // i18nMissing accumulates across the whole session: the SECTION 13 live
+    // instance renders its `stopping` state through historyStateLabel, which
+    // probes the absent history.state.stopping key before falling back to the
+    // present models.status.stopping (display text is correct; the dynamic-key
+    // gap is pre-existing at HEAD and outside this suite's scope). Assert that
+    // no resources.* key is missing and that no raw key reaches the DOM.
+    const miss15ru = (await missingKeys()).filter(k => k.startsWith('resources.'));
+    suite.log('15.8 RU: no resources.* key missing + no raw keys in DOM', miss15ru.length === 0 && (await domRawKeys()).length === 0,
+      `resourcesMissing=${JSON.stringify(miss15ru.slice(0, 5))} raw=${JSON.stringify((await domRawKeys()).slice(0, 5))}`);
+    await H.screenshot(page, ws, '15-ru-units');
+    await page.evaluate(() => window.setLanguage('en'));
+    await page.waitForTimeout(400);
+    const t15en = await contentText();
+    suite.log('15.9 EN GiB value keeps ASCII unit and dot', t15en.includes('1.5 GiB'));
+    suite.log('15.10 EN GPU VRAM value keeps ASCII unit', t15en.includes('24.0 GiB'));
+    suite.log('15.11 EN labels unchanged (Runtime / Process RAM)', t15en.includes('Runtime') && t15en.includes('Process RAM'));
+    suite.log('15.12 EN RSS explanation shown', t15en.includes('Resident process memory may include shared pages and memory-mapped model files'));
+    const miss15en = (await missingKeys()).filter(k => k.startsWith('resources.'));
+    suite.log('15.13 EN: no resources.* key missing + no raw keys in DOM', miss15en.length === 0 && (await domRawKeys()).length === 0,
+      `resourcesMissing=${JSON.stringify(miss15en.slice(0, 5))} raw=${JSON.stringify((await domRawKeys()).slice(0, 5))}`);
 
     // ═══ SECTION 14: sanity ═══
     const unexpectedConsole = suite.consoleErrors.filter(e =>

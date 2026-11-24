@@ -114,11 +114,36 @@ jobs:
             throw "Release checksums do not list the exact canonical archive set"
           }
 
+      # Release notes live in tracked bytes, one file per version, and are fed
+      # to the GitHub Release at creation (softprops body_path) — never post-hoc.
+      # The path is inlined at each use site: top-level vars do not evaluate
+      # context expressions, so github.ref_name is expanded here, where the
+      # github context is guaranteed.
+      - name: Validate release notes (version-specific, tracked, non-empty)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $notesPath = "docs/releases/${{ github.ref_name }}-ru.md"
+          if ($notesPath -notmatch 'docs/releases/v[0-9][0-9.]+-ru\.md$') {
+            throw "Release notes path is not version-specific: $notesPath"
+          }
+          if (-not (Test-Path -LiteralPath $notesPath)) {
+            throw "Release notes missing: $notesPath (the GitHub Release would be created with an empty body)"
+          }
+          $text = [IO.File]::ReadAllText($notesPath)
+          if ($text.Trim().Length -lt 200) {
+            throw "Release notes too short to be a real body: $notesPath"
+          }
+          if ($text.Trim() -eq $env:RELEASE_VERSION) {
+            throw "Release notes contain only the version string: $notesPath"
+          }
+
       - name: Upload exact release assets
         uses: softprops/action-gh-release@v2
         with:
           fail_on_unmatched_files: true
           overwrite_files: false
+          body_path: docs/releases/${{ github.ref_name }}-ru.md
           files: |
             bin/goal-windows-amd64.exe
             bin/goal-linux-amd64
