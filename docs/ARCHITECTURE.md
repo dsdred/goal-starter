@@ -132,6 +132,8 @@ See [ADR 009](adr/009-hot-reload-wiring.md), [ADR 004](adr/004-config-vs-reposit
 
 The Web UI is served from embedded filesystems (`templateFS`, `staticFS` declared in `internal/webui/server.go`). The dashboard renders `templates/index.html` from `templateFS`. Static assets are served from `staticFS` at `/static/`.
 
+Brand assets: the canonical Owner-approved visual identity lives in `assets/brand/` (reference: `assets/brand/BRAND.md`). The runtime copies served by the binary are `internal/webui/static/brand/` — theme-aware full logo variants (sidebar and login branding, swapped by CSS on the `data-theme` attribute), the same unified theme-aware logo in the mobile top bar (≤ 768 px drawer layout, round 1 of the Owner visual review) and the browser favicon (SVG + ICO). `TestEmbeddedBrandAssetsMatchCanonical` enforces byte identity between the two locations. The Windows PE icon is supplied by `winres/` through the existing go-winres step of `scripts/build-all.ps1` (UI-BRAND-01).
+
 See [ADR 003](adr/003-webui-embedded-fs.md).
 
 ## Dependency direction

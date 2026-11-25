@@ -1,10 +1,23 @@
-# GoAl
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: light)" srcset="assets/brand/goal-logo-light.svg">
+    <img src="assets/brand/goal-logo-dark.svg" alt="GoAl" width="327" height="128">
+  </picture>
+</p>
+
+<p align="center">
+  <strong>Ваш центр управления локальной AI-инфраструктурой.</strong>
+</p>
+
+<p align="center">
+  Оркестрируйте. Управляйте. Мониторьте.
+</p>
 
 [![XERJ Corpus Hub contributor](https://hub.xerj.org/contributors/dsdred/badge.svg)](https://hub.xerj.org/contributors/dsdred)
 
 Запись в корпусе: [dsdred--goal-starter](https://hub.xerj.org/corpus/dsdred--goal-starter)
 
-GoAl — лёгкий однофайловый менеджер для локальных AI-рантаймов и моделей. Один бинарник для Windows amd64 и Linux amd64.
+GoAl — лёгкий кроссплатформенный центр управления локальной AI-инфраструктурой в одном бинарнике. Один исполняемый файл для Windows amd64 и Linux amd64.
 
 **Архитектура:** Runtime ← Model → Instance. Runtime — исполнительный движок (executable, workingDir, environment). Model — настроенное определение запуска (runtime + args + environment). Instance — конкретный процесс (PID, state, logs). Физические GGUF/MMProj-файлы — обычные аргументы запуска, не отдельные сущности.
 

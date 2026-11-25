@@ -36,7 +36,7 @@
         "info": {
           "0409": {
             "CompanyName": "",
-            "FileDescription": "GoAl - Local AI runtime manager",
+            "FileDescription": "GoAl - Your local AI infrastructure control center",
             "FileVersion": "1.0.0.0",
             "InternalName": "goal",
             "LegalCopyright": "Copyright (c) 2026 GoAl contributors",

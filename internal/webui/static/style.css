@@ -154,10 +154,18 @@ code { font-family: var(--font-mono); font-size: 0.9em; background: var(--bg-inp
 }
 
 /* Logo */
-.logo { display: flex; align-items: center; gap: 10px; color: var(--accent); margin-bottom: 0.5rem; font-size: 1.3rem; font-weight: 700; }
-.logo svg { flex-shrink: 0; }
-.sidebar-logo { display: flex; align-items: center; gap: 8px; color: var(--accent); font-weight: 700; font-size: 1.1rem; padding: 1rem 1.2rem; }
-.sidebar-logo svg { flex-shrink: 0; }
+.logo { display: flex; align-items: center; gap: 10px; margin-bottom: 0.5rem; }
+.sidebar-logo { display: flex; align-items: center; gap: 8px; padding: 1rem 1.2rem; }
+/* Owner-approved brand mark: theme-aware logo variant swap, aspect ratio preserved */
+.brand-logo { display: none; height: 34px; width: auto; flex-shrink: 0; }
+.brand-logo-dark { display: block; }
+[data-theme="light"] .brand-logo-dark { display: none; }
+[data-theme="light"] .brand-logo-light { display: block; }
+.sidebar-logo .brand-logo { height: 30px; }
+.mobile-topbar .brand-logo { height: 26px; }
+#login-modal .logo { justify-content: center; }
+#login-modal .brand-logo { height: 48px; }
+#login-modal h2 { text-align: center; }
 
 /* App Shell */
 .app-shell { display: flex; min-height: 100vh; }
@@ -721,7 +729,6 @@ code { font-family: var(--font-mono); font-size: 0.9em; background: var(--bg-inp
 }
 .mobile-topbar .hamburger:hover { background: var(--accent-subtle); }
 .mobile-topbar .hamburger svg { width: 22px; height: 22px; fill: currentColor; }
-.mobile-topbar .topbar-title { font-size: 1rem; font-weight: 600; color: var(--accent); }
 .mobile-topbar .topbar-action { margin-left: auto; }
 
 /* Mobile drawer overlay */

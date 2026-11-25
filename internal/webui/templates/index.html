@@ -4,6 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>GoAl</title>
+    <link rel="icon" type="image/svg+xml" href="/static/brand/favicon.svg">
+    <link rel="icon" href="/static/brand/favicon.ico">
     <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
@@ -11,8 +13,8 @@
     <div id="login-modal" class="modal-overlay" style="display:none;">
         <div class="modal-box">
             <div class="logo">
-                <svg width="32" height="32" viewBox="0 0 32 32" fill="none"><path d="M6 4L28 16L6 28V4Z" fill="currentColor" opacity="0.9"/><path d="M10 8L22 16L10 24V8Z" fill="var(--bg-primary)" opacity="0.5"/></svg>
-                <span>GoAl</span>
+                <img class="brand-logo brand-logo-dark" src="/static/brand/goal-logo-dark.svg" alt="GoAl">
+                <img class="brand-logo brand-logo-light" src="/static/brand/goal-logo-light.svg" alt="GoAl">
             </div>
             <h2 data-i18n="auth.login.title">Вход</h2>
             <form id="login-form" onsubmit="return handleLogin(event)">
@@ -225,14 +227,15 @@
             <button class="hamburger" onclick="toggleDrawer()" aria-label="Menu">
                 <svg viewBox="0 0 24 24"><path d="M3 6h18v2H3V6zm0 5h18v2H3v-2zm0 5h18v2H3v-2z"/></svg>
             </button>
-            <span class="topbar-title">GoAl</span>
+            <img class="brand-logo brand-logo-dark" src="/static/brand/goal-logo-dark.svg" alt="GoAl">
+            <img class="brand-logo brand-logo-light" src="/static/brand/goal-logo-light.svg" alt="GoAl">
         </div>
         <div class="drawer-overlay" id="drawer-overlay" onclick="closeDrawer()"></div>
         <!-- Sidebar -->
         <aside class="sidebar" id="sidebar">
             <div class="sidebar-logo">
-                <svg width="28" height="28" viewBox="0 0 32 32" fill="none"><path d="M6 4L28 16L6 28V4Z" fill="currentColor" opacity="0.9"/><path d="M10 8L22 16L10 24V8Z" fill="var(--bg-primary)" opacity="0.5"/></svg>
-                <span>GoAl</span>
+                <img class="brand-logo brand-logo-dark" src="/static/brand/goal-logo-dark.svg" alt="GoAl">
+                <img class="brand-logo brand-logo-light" src="/static/brand/goal-logo-light.svg" alt="GoAl">
             </div>
             <nav class="sidebar-nav">
                 <button class="nav-item active" data-view="models" onclick="navigate('models')">

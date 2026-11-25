@@ -1,10 +1,23 @@
-# GoAl
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: light)" srcset="assets/brand/goal-logo-light.svg">
+    <img src="assets/brand/goal-logo-dark.svg" alt="GoAl" width="327" height="128">
+  </picture>
+</p>
+
+<p align="center">
+  <strong>Your local AI infrastructure control center.</strong>
+</p>
+
+<p align="center">
+  Orchestrate. Manage. Monitor.
+</p>
 
 [![XERJ Corpus Hub contributor](https://hub.xerj.org/contributors/dsdred/badge.svg)](https://hub.xerj.org/contributors/dsdred)
 
 Corpus entry: [dsdred--goal-starter](https://hub.xerj.org/corpus/dsdred--goal-starter)
 
-GoAl is a lightweight, single-binary manager for local AI runtimes and models. One executable for Windows amd64 and Linux amd64.
+GoAl is a lightweight, single-binary, cross-platform control center for local AI infrastructure. One executable for Windows amd64 and Linux amd64.
 
 **Architecture:** Runtime ← Model → Instance. A Runtime is an execution engine (executable, working directory, environment). A Model is a configured launch definition (runtime + launch arguments + environment). An Instance is a concrete process launch (PID, state, logs). Physical GGUF/MMProj files are ordinary launch arguments, not separate entities.
 
