@@ -16,7 +16,7 @@ The GitHub Release asset set is exactly these five files. Empty-version names su
 
 **Latest published tag:** `v2.3.0` (tag → commit `0811bb71128fea36f1d99720db9fb66271135f00`, release workflow run `45456730986` attempt 1, published 2026-11-24T18:15:24Z; release body is the tracked RU notes `docs/releases/v2.3.0-ru.md` fed via `body_path` at creation; previous release `v2.2.0` → `1e55064`, run `43930538485`, 2026-11-16)
 
-**Bilingual release notes contract (Owner decision 2026-11-25, from v2.3.0):** every release tag carries two tracked note files — `docs/releases/<tag>-en.md` (English, primary) and `docs/releases/<tag>-ru.md` (Russian, secondary) with semantic parity (features, improvements, fixes, commands, resource monitoring, supported platforms, known limitations, installation and upgrade, acceptance and quality checks). The release workflow validates **both** files before any GitHub Release creation (missing, empty, or placeholder-only notes fail the release) and generates a single combined body — `English | Русский` navigation with working Markdown anchors, then a `## English` section, a `---` separator, and a `## Русский` section (UTF-8, no BOM) — fed to the Release via softprops `body_path` **at creation, never post-hoc**. The already-published v2.3.0 body (RU-only) and all previous releases remain unchanged; updating the v2.3.0 remote body is a separate Owner decision.
+**Bilingual release notes contract (Owner decision 2026-11-25, from v2.3.0):** every release tag carries two tracked note files — `docs/releases/<tag>-en.md` (English, primary) and `docs/releases/<tag>-ru.md` (Russian, secondary) with semantic parity (features, improvements, fixes, commands, resource monitoring, supported platforms, known limitations, installation and upgrade, acceptance and quality checks). The release workflow validates **both** files before any GitHub Release creation (missing, empty, or placeholder-only notes fail the release) and generates a single combined body — `English | Русский` navigation with working Markdown anchors, then a `## English` section, a `---` separator, and a `## Русский` section (UTF-8, no BOM) — fed to the Release via softprops `body_path` **at creation, never post-hoc**. The already-published v2.3.0 body (RU-only) and all previous releases remain unchanged; updating the v2.3.0 remote body is a separate Owner decision. **2026-11-25 correction (supersedes the preceding sentence):** the v2.3.0 remote body was updated by an authorized body-only PATCH to the sealed bilingual artifact. Owner manual acceptance then FAILED on the language navigation: the release-body renderer emits **no heading anchor ids**, so the `#english`/`#русский` Markdown fragments could not resolve. The workflow's generated body therefore uses explicit HTML anchors — `<a id="english"></a>` / `<a id="russkiy"></a>` (ASCII ids, stable across releases) placed immediately before each language section, with navigation hrefs `#user-content-english` / `#user-content-russkiy`: GitHub's release-body renderer preserves explicit HTML anchor elements but prefixes their rendered ids with `user-content-` (verified in the rendered DOM on 2026-11-25). A compact `[↑ English]` return link is emitted at the top of the Russian section. The corrected combined body is to be applied to the published v2.3.0 by a separate Owner-authorized body-only PATCH. All previous releases remain unchanged.
 **Release:** [GitHub Releases](https://github.com/dsdred/goal-starter/releases/tag/v2.3.0)
 
 ## Windows Authenticode signing (capability, not currently active)
@@ -127,13 +127,14 @@ Semantic versioning: `vMAJOR.MINOR.PATCH`
 5. Push tag: `git push origin vX.Y.Z`
 6. GitHub Actions release workflow runs automatically:
    - Validates both note files (missing, empty, or placeholder-only notes fail the release)
-   - Generates the combined bilingual body (`## English` / `## Русский`) used as the Release body at creation
+   - Generates the combined bilingual body (`## English` / `## Русский`) used as the Release body at creation; language navigation is explicit HTML anchors (`<a id="english"></a>` / `<a id="russkiy"></a>`) with `#user-content-…` hrefs — the release-body renderer emits no heading anchor ids (see the bilingual contract above)
    - Tests, build, sign Windows, verify signature
    - Generate checksums (post-signing)
    - Publish release with all assets
 7. Verify the published release:
    - Check signature: `Get-AuthenticodeSignature .\goal-windows-amd64.exe`
    - Verify checksums: `Get-FileHash` vs `checksums.txt`
+   - In a real browser, click both language navigation links (top nav and the `[↑ English]` return link) and confirm the page scrolls to the matching section — static Markdown inspection is not sufficient
 
 ## Release verification
 

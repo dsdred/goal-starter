@@ -152,8 +152,14 @@ jobs:
           $ErrorActionPreference = "Stop"
           $en = [IO.File]::ReadAllText("docs/releases/${{ github.ref_name }}-en.md")
           $ru = [IO.File]::ReadAllText("docs/releases/${{ github.ref_name }}-ru.md")
+          # GitHub's release-body renderer emits no heading anchor ids, but it
+          # DOES preserve explicit HTML anchors and prefixes their ids with
+          # "user-content-" (verified in the rendered DOM, 2026-11-25). Nav
+          # hrefs must therefore target #user-content-<id>, with ASCII ids.
           $body = ([string[]](
-            "[English](#english) | [Русский](#русский)",
+            "[English](#user-content-english) | [Русский](#user-content-russkiy)",
+            "",
+            "<a id=\"english\"></a>",
             "",
             "## English",
             "",
@@ -161,7 +167,11 @@ jobs:
             "",
             "---",
             "",
+            "<a id=\"russkiy\"></a>",
+            "",
             "## Русский",
+            "",
+            "[↑ English](#user-content-english)",
             "",
             $ru.Trim()
           )) -join [Environment]::NewLine
