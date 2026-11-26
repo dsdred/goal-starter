@@ -447,15 +447,29 @@ async function main() {
     suite.log('15.5 RU RSS explanation shown', t15ru.includes('Резидентная память процесса может включать общие страницы и смонтированные в память файлы моделей'));
     suite.log('15.6 RU VRAM label uses the Russian equivalent', t15ru.includes('Видеопамять: всего'));
     suite.log('15.7 RU: no untranslated VRAM/English unit remains in the view', !t15ru.includes('VRAM') && !/GiB|MiB|KiB/.test(t15ru));
-    // i18nMissing accumulates across the whole session: the SECTION 13 live
-    // instance renders its `stopping` state through historyStateLabel, which
-    // probes the absent history.state.stopping key before falling back to the
-    // present models.status.stopping (display text is correct; the dynamic-key
-    // gap is pre-existing at HEAD and outside this suite's scope). Assert that
-    // no resources.* key is missing and that no raw key reaches the DOM.
-    const miss15ru = (await missingKeys()).filter(k => k.startsWith('resources.'));
-    suite.log('15.8 RU: no resources.* key missing + no raw keys in DOM', miss15ru.length === 0 && (await domRawKeys()).length === 0,
-      `resourcesMissing=${JSON.stringify(miss15ru.slice(0, 5))} raw=${JSON.stringify((await domRawKeys()).slice(0, 5))}`);
+    // I18N-HIST-01: the SECTION 13 live instance rendered its `stopping`
+    // state through historyStateLabel while the history.state.stopping key was
+    // absent — the models.status fallback kept the display text correct but
+    // the raw key landed in window.i18nMissing. The key now exists in both
+    // dictionaries, so the FULL session-accumulating set must stay empty,
+    // exactly like the unfiltered assertions of the earlier sections.
+    const miss15ru = await missingKeys();
+    suite.log('15.8 RU: i18nMissing fully empty (live stopping rendered clean) + no raw keys in DOM',
+      miss15ru.length === 0 && (await domRawKeys()).length === 0,
+      `missing=${JSON.stringify(miss15ru.slice(0, 5))} raw=${JSON.stringify((await domRawKeys()).slice(0, 5))}`);
+    // Dictionary contract for the dynamic history.state.* keys: every state a
+    // launch record can carry resolves its own key in both dictionaries, so
+    // historyStateLabel never falls back to models.status.* for a displayable
+    // label (the fallback stays as defense-in-depth, never load-bearing).
+    const dictGaps = [];
+    for (const lang of ['ru', 'en']) {
+      const d = await (await page.request.get(BASE + '/static/i18n/' + lang + '.json')).json();
+      for (const state of ['starting', 'running', 'stopping', 'stopped', 'exited', 'failed', 'stale', 'orphan']) {
+        if (!d['history.state.' + state]) dictGaps.push(lang + ':' + state);
+      }
+    }
+    suite.log('15.8a served dictionaries: all 8 history.state.* keys present in RU and EN',
+      dictGaps.length === 0, `gaps=${JSON.stringify(dictGaps)}`);
     await H.screenshot(page, ws, '15-ru-units');
     await page.evaluate(() => window.setLanguage('en'));
     await page.waitForTimeout(400);
@@ -464,9 +478,10 @@ async function main() {
     suite.log('15.10 EN GPU VRAM value keeps ASCII unit', t15en.includes('24.0 GiB'));
     suite.log('15.11 EN labels unchanged (Runtime / Process RAM)', t15en.includes('Runtime') && t15en.includes('Process RAM'));
     suite.log('15.12 EN RSS explanation shown', t15en.includes('Resident process memory may include shared pages and memory-mapped model files'));
-    const miss15en = (await missingKeys()).filter(k => k.startsWith('resources.'));
-    suite.log('15.13 EN: no resources.* key missing + no raw keys in DOM', miss15en.length === 0 && (await domRawKeys()).length === 0,
-      `resourcesMissing=${JSON.stringify(miss15en.slice(0, 5))} raw=${JSON.stringify((await domRawKeys()).slice(0, 5))}`);
+    const miss15en = await missingKeys();
+    suite.log('15.13 EN: i18nMissing fully empty (stopping label resolved, not fallback) + no raw keys in DOM',
+      miss15en.length === 0 && (await domRawKeys()).length === 0,
+      `missing=${JSON.stringify(miss15en.slice(0, 5))} raw=${JSON.stringify((await domRawKeys()).slice(0, 5))}`);
 
     // ═══ SECTION 14: sanity ═══
     const unexpectedConsole = suite.consoleErrors.filter(e =>

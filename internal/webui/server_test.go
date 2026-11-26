@@ -91,6 +91,27 @@ func TestI18nDictionariesParity(t *testing.T) {
 	}
 }
 
+// TestHistoryStateKeysCoverAllInstanceStates enforces the hard i18n rule for
+// DYNAMIC keys: historyStateLabel in app.js builds "history.state." + state at
+// runtime, so TestI18nDictionariesParity cannot see it. Every state an
+// instance launch record can carry must resolve its own history.state.* key
+// in BOTH dictionaries — the models.status.* fallback is defense-in-depth and
+// must never be what makes the label displayable (a missed lookup records the
+// raw key in window.i18nMissing).
+func TestHistoryStateKeysCoverAllInstanceStates(t *testing.T) {
+	ru := loadI18nDict(t, "ru")
+	en := loadI18nDict(t, "en")
+	for _, state := range []string{"starting", "running", "stopping", "stopped", "exited", "failed", "stale", "orphan"} {
+		key := "history.state." + state
+		if ru[key] == "" {
+			t.Errorf("%q is missing or empty in ru.json", key)
+		}
+		if en[key] == "" {
+			t.Errorf("%q is missing or empty in en.json", key)
+		}
+	}
+}
+
 // TestEnvVariableInputsAreLocalized closes the UI-I18N-01 blind spot: a raw
 // placeholder literal in JS-assembled markup matches neither data-i18n nor
 // t('...'), so TestI18nDictionariesParity cannot see it.
