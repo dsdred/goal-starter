@@ -355,9 +355,9 @@ async function main() {
     suite.log('T-4′ RU Models: no native title in the row carries the hint (the badge title is gone)',
       !!stripRU && !stripRU.rowTitles.includes(ruHint),
       stripRU ? `row_titles=${JSON.stringify(stripRU.rowTitles)}` : 'model row absent');
-    suite.log('T-4′ RU Models: Logs/Edit/Delete keep their order after the info control',
-      !!stripRU && stripRU.order.length === 4 && stripRU.infoIndex === 0 &&
-        stripRU.order.slice(1).join('|') === [I18N.ru['models.actions.logs'], I18N.ru['models.actions.edit'], I18N.ru['models.actions.delete']].join('|'),
+    suite.log('T-4′ RU Models: Logs/Edit/Copy/Delete keep their order after the info control (ADR 027)',
+      !!stripRU && stripRU.order.length === 5 && stripRU.infoIndex === 0 &&
+        stripRU.order.slice(1).join('|') === [I18N.ru['models.actions.logs'], I18N.ru['models.actions.edit'], I18N.ru['models.actions.copy'], I18N.ru['models.actions.delete']].join('|'),
       stripRU ? `order=${JSON.stringify(stripRU.order)}` : 'model row absent');
     await H.screenshot(pageRU, ws, 'orphan_models_ru');
 
@@ -616,8 +616,8 @@ async function main() {
         stripEN.triggerCount === 1 && stripEN.tag === 'BUTTON' && stripEN.type === 'button' &&
         stripEN.tooltip === enHint && stripEN.ariaLabel === enHint && !!stripEN.box &&
         stripEN.box.w >= 44 && stripEN.box.h >= 44 && !stripEN.rowTitles.includes(enHint) &&
-        stripEN.order.length === 4 && stripEN.infoIndex === 0 &&
-        stripEN.order.slice(1).join('|') === [I18N.en['models.actions.logs'], I18N.en['models.actions.edit'], I18N.en['models.actions.delete']].join('|'),
+        stripEN.order.length === 5 && stripEN.infoIndex === 0 &&
+        stripEN.order.slice(1).join('|') === [I18N.en['models.actions.logs'], I18N.en['models.actions.edit'], I18N.en['models.actions.copy'], I18N.en['models.actions.delete']].join('|'),
       stripEN ? `strip_text=${JSON.stringify(stripEN.text)} triggers=${stripEN.triggerCount} tooltip=${JSON.stringify(stripEN.tooltip)} box=${stripEN.box ? stripEN.box.w + 'x' + stripEN.box.h : 'null'} order=${JSON.stringify(stripEN.order)} titles=${JSON.stringify(stripEN.rowTitles)}` : 'model row absent');
     const infoBtnEN = pageRU.locator('#model-list .model-row-actions button[data-tooltip]').first();
     const mouseEN = await hoverFlow(pageRU, infoBtnEN, tipState);

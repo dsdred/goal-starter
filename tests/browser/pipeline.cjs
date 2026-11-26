@@ -344,12 +344,12 @@ async function main() {
     const nameTitle = (await page.locator('#pipeline-list .pl-name').first().getAttribute('title')) || '';
     suite.log('3.12 Name cell carries the full name in its title', nameTitle === 'Cluster A', `title=${JSON.stringify(nameTitle)}`);
     // (list layout, Models pattern) an inline icon strip: stopped → Start + Edit +
-    // Delete (3 icon buttons); no overflow "…" menu.
+    // Copy + Delete (4 icon buttons after ADR 027); no overflow "…" menu.
     const stripIcons = await page.locator('#pipeline-list .model-row .model-row-actions .icon-btn').count();
     const overflowCount = await page.locator('#pipeline-list .pl-overflow').count();
     const startIconPresent = (await page.locator('#pipeline-list .icon-btn[onclick*="startPipeline"]').count()) === 1;
-    suite.log('3.13 List shows the inline icon strip (Start+Edit+Delete), no overflow',
-      stripIcons === 3 && overflowCount === 0 && startIconPresent, `icons=${stripIcons} overflow=${overflowCount} start=${startIconPresent}`);
+    suite.log('3.13 List shows the inline icon strip (Start+Edit+Copy+Delete), no overflow',
+      stripIcons === 4 && overflowCount === 0 && startIconPresent, `icons=${stripIcons} overflow=${overflowCount} start=${startIconPresent}`);
 
     // ═══ SECTION 4: Per-model status renders (stopped initially) ═══
     const stoppedChips = await page.locator('#pipeline-list .pl-chips-wrap .status-badge.stopped').count();
@@ -367,11 +367,11 @@ async function main() {
     await poll(async () => (await page.locator('#pipeline-list .pl-chips-wrap .status-badge.running').count()) === 2, 8000);
     const runningChips = await page.locator('#pipeline-list .pl-chips-wrap .status-badge.running').count();
     suite.log('5.3 Per-model status chips show running (2)', runningChips === 2, `running=${runningChips}`);
-    // Running: the icon strip flips to Restart + Stop (plus Edit + Delete).
+    // Running: the icon strip flips to Restart + Stop (plus Edit + Copy + Delete).
     const runningStrip = await page.locator('#pipeline-list .model-row .model-row-actions .icon-btn').count();
     const stopIcon = (await page.locator('#pipeline-list .icon-btn[onclick*="stopPipeline"]').count()) === 1;
     const restartIcon = (await page.locator('#pipeline-list .icon-btn[onclick*="restartPipeline"]').count()) === 1;
-    suite.log('5.4 Icon strip shows Restart+Stop while running (4 icons)', runningStrip === 4 && stopIcon && restartIcon, `icons=${runningStrip} stop=${stopIcon} restart=${restartIcon}`);
+    suite.log('5.4 Icon strip shows Restart+Stop while running (5 icons after ADR 027)', runningStrip === 5 && stopIcon && restartIcon, `icons=${runningStrip} stop=${stopIcon} restart=${restartIcon}`);
     await H.screenshot(page, ws, '03-pipeline-running');
 
     // ═══ SECTION 5b: Per-component controls (G3-RES-01, incl. D-12 Start) ═══
@@ -1068,11 +1068,11 @@ async function main() {
     await page.waitForTimeout(500);
     const mobileCardVisible = await page.locator('#pipeline-list .model-row').first().isVisible();
     suite.log('12b.11 Mobile card visible', mobileCardVisible);
-    // (card) the inline icon strip (stopped → Start + Edit + Delete) sits on
-    // the right; no overflow "..." menu.
+    // (card) the inline icon strip (stopped → Start + Edit + Copy + Delete)
+    // sits on the right; no overflow "..." menu.
     const cardIcons = await page.locator('#pipeline-list .model-row .model-row-actions .icon-btn').count();
     const cardStart = (await page.locator('#pipeline-list .icon-btn[onclick*="startPipeline"]').count()) === 1;
-    suite.log('12b.12 Card shows the inline icon strip (Start+Edit+Delete)', cardIcons === 3 && cardStart, `icons=${cardIcons} start=${cardStart}`);
+    suite.log('12b.12 Card shows the inline icon strip (Start+Edit+Copy+Delete)', cardIcons === 4 && cardStart, `icons=${cardIcons} start=${cardStart}`);
     const cardOverflow = await page.locator('#pipeline-list .pl-overflow').count();
     suite.log('12b.13 Card has no overflow "..." menu', cardOverflow === 0, `overflow=${cardOverflow}`);
     const overflowX = await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1);

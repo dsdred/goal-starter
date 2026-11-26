@@ -428,6 +428,7 @@ var ICONS = {
     restart: '<svg viewBox="0 0 24 24"><path d="M17.65 6.35A7.96 7.96 0 0012 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0112 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg>',
     logs: '<svg viewBox="0 0 24 24"><path d="M3 18h12v-2H3v2zM3 6v2h18V6H3zm0 7h18v-2H3v2z"/></svg>',
     edit: '<svg viewBox="0 0 24 24"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1 1 0 000-1.41l-2.34-2.34a1 1 0 00-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>',
+    copy: '<svg viewBox="0 0 24 24"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>',
     del: '<svg viewBox="0 0 24 24"><path d="M6 19c0 1.1.9 2 2 2h8a2 2 0 002-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>',
     kill: '<svg viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>',
     drag: '<svg viewBox="0 0 24 24"><path d="M11 18c0 1.1-.9 2-2 2s-2-.9-2-2 .9-2 2-2 2 .9 2 2zm-2-8c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0-6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm6 4c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 6c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 6c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2z"/></svg>',
@@ -588,6 +589,7 @@ function renderModels() {
                 actionBtns +
                 iconBtn(ICONS.logs, t('models.actions.logs'), 'ghost', 'viewInstanceLogs', inst ? inst.id : '') +
                 iconBtn(ICONS.edit, t('models.actions.edit'), 'ghost', 'openWizard', m.id) +
+                iconBtn(ICONS.copy, t('models.actions.copy'), 'ghost', 'copyModel', m.id) +
                 iconBtn(ICONS.del, t('models.actions.delete'), 'danger', 'deleteModel', m.id) +
             '</div>' +
         '</div>';
@@ -851,6 +853,7 @@ function pipelineActionStrip(p) {
         s += iconBtn(ICONS.start, t('pipelines.actions.start'), 'success', 'startPipeline', p.id);
     }
     s += iconBtn(ICONS.edit, t('pipelines.actions.edit'), 'ghost', 'editPipeline', p.id);
+    s += iconBtn(ICONS.copy, t('pipelines.actions.copy'), 'ghost', 'copyPipeline', p.id);
     s += iconBtn(ICONS.del, t('pipelines.actions.delete'), 'danger', 'deletePipeline', p.id);
     return s;
 }
@@ -1133,6 +1136,23 @@ function editPipeline(id) {
     openPipelineModal(pipelinesData.find(function (x) { return x.id === id; }) || null);
 }
 
+// copyPipeline (ADR 027): opens the create form pre-filled from the source
+// pipeline. Entry ids are cleared so the server issues new ones (ADR 013 D1);
+// model references and order are preserved; active defaults to off.
+function copyPipeline(id) {
+    const p = pipelinesData.find(function (x) { return x.id === id; });
+    if (!p) return;
+    openPipelineModal(p);
+    const form = document.getElementById('pipeline-form');
+    form.id.value = '';
+    document.getElementById('pipeline-modal-title').textContent = t('pipelines.create.title');
+    document.getElementById('pipeline-submit-btn').textContent = t('pipelines.btn.create');
+    document.getElementById('pl-name').value = t('entity.copy.name', { name: p.name });
+    document.getElementById('pl-active').checked = false;
+    plEntries.forEach(function (e) { e.id = ''; });
+    renderPlBuilder();
+}
+
 async function handlePipelineSubmit(e) {
     e.preventDefault();
     const f = e.target;
@@ -1370,6 +1390,7 @@ function openWizard(modelId) {
     document.getElementById('wizard-error').style.display = 'none';
     document.getElementById('wiz-env-container').innerHTML = '';
     document.getElementById('wiz-env-container').setAttribute('data-original-keys', '[]');
+    removeCopyEnvNotices();
     document.querySelector('input[name=wiz-rt-mode][value=existing]').checked = true;
     onWizRtModeChange();
     loadWizardRuntimeCards();
@@ -1415,6 +1436,23 @@ function openWizard(modelId) {
 }
 
 function closeWizard() { document.getElementById('wizard-modal').style.display = 'none'; }
+
+// copyModel (ADR 027): reuses the edit pre-fill of the wizard, then switches
+// to create mode (wizEditId = null) so the submit path is POST /models.
+// Name becomes the localized copy suggestion, active defaults to off; the
+// environment keys are pre-filled write-only (values are never exposed).
+function copyModel(id) {
+    const m = modelsData.find(function (x) { return x.id === id; });
+    if (!m) return;
+    openWizard(id);
+    wizEditId = null;
+    document.getElementById('wizard-title').textContent = t('wizard.title.add');
+    document.getElementById('wiz-name').value = t('entity.copy.name', { name: m.name });
+    document.getElementById('wiz-autostart').checked = false;
+    document.getElementById('wiz-delay-group').style.display = 'none';
+    showCopyEnvNotice('wiz-env-container', m.environment_keys);
+    updateWizardStep();
+}
 
 function loadWizardRuntimeCards() {
     rtSelectedId = null;
@@ -1644,6 +1682,24 @@ function addEnvRow(containerId) {
 
 function addWizEnvRow() { addEnvRow('wiz-env-container'); }
 
+// showCopyEnvNotice (ADR 027 D-9): contextual notice above an env container
+// when a copy pre-filled environment keys. Reuses the existing .hint-text
+// pattern; no notice when the source had no env keys. The notice is a dynamic
+// DOM node located by class (no template id).
+function removeCopyEnvNotices() {
+    document.querySelectorAll('.copy-env-notice').forEach(function (n) { n.remove(); });
+}
+
+function showCopyEnvNotice(containerId, keys) {
+    removeCopyEnvNotices();
+    if (!keys || !keys.length) return;
+    const container = document.getElementById(containerId);
+    const notice = document.createElement('div');
+    notice.className = 'hint-text copy-env-notice';
+    notice.textContent = t('entity.copy.env_notice');
+    container.parentNode.insertBefore(notice, container);
+}
+
 function collectEnvRows(containerId) {
     const env = {};
     document.querySelectorAll('#' + containerId + ' .env-row').forEach(function (row) {
@@ -1710,6 +1766,7 @@ function renderAdvRuntimes() {
     document.getElementById('adv-runtimes-body').innerHTML = runtimesData.map(function (r) {
         return '<tr><td>' + esc(r.name) + '</td><td title="' + esc(r.executable || '') + '">' + esc(r.executable) + '</td><td title="' + esc(r.working_directory || '') + '">' + esc(r.working_directory || '—') + '</td>' +
             '<td class="actions-cell">' + iconBtn(ICONS.edit, t('runtimes.actions.edit'), 'ghost', 'editRuntime', r.id) +
+            iconBtn(ICONS.copy, t('runtimes.actions.copy'), 'ghost', 'copyRuntime', r.id) +
             iconBtn(ICONS.del, t('runtimes.actions.delete'), 'danger', 'deleteRuntime', r.id) + '</td></tr>';
     }).join('');
     const compact = document.getElementById('runtimes-compact');
@@ -1725,6 +1782,7 @@ function renderAdvRuntimes() {
                 '</div>' +
                 '<div class="compact-actions">' +
                     iconBtn(ICONS.edit, t('runtimes.actions.edit'), 'ghost', 'editRuntime', r.id) +
+                    iconBtn(ICONS.copy, t('runtimes.actions.copy'), 'ghost', 'copyRuntime', r.id) +
                     iconBtn(ICONS.del, t('runtimes.actions.delete'), 'danger', 'deleteRuntime', r.id) +
                 '</div>' +
             '</div>';
@@ -1737,7 +1795,28 @@ function showCreateRuntimeModal() {
     const f = document.querySelector('#create-runtime-modal form');
     f.reset();
     document.getElementById('rt-create-env-container').innerHTML = '';
+    removeCopyEnvNotices();
     document.getElementById('create-runtime-modal').style.display = 'flex';
+}
+
+// copyRuntime (ADR 027): opens the create modal pre-filled from the source
+// runtime. Environment keys are pre-filled with empty values (write-only:
+// values are never exposed or copied).
+function copyRuntime(id) {
+    const r = runtimesData.find(function (x) { return x.id === id; });
+    if (!r) return;
+    showCreateRuntimeModal();
+    const f = document.querySelector('#create-runtime-modal form');
+    f.querySelector('[name=name]').value = t('entity.copy.name', { name: r.name });
+    f.querySelector('[name=executable]').value = r.executable || '';
+    f.querySelector('[name=working_directory]').value = r.working_directory || '';
+    const keys = r.environment_keys || [];
+    keys.forEach(function (key) {
+        addEnvRow('rt-create-env-container');
+        const lastRow = document.querySelector('#rt-create-env-container .env-row:last-child');
+        if (lastRow) lastRow.querySelector('input').value = key;
+    });
+    showCopyEnvNotice('rt-create-env-container', keys);
 }
 
 async function handleCreateRuntime(e) {
@@ -2096,10 +2175,15 @@ function renderHistory() {
     });
 
     if (filtered.length === 0) {
-        if (empty) empty.style.display = 'block';
-        if (tableWrap) tableWrap.dataset.has = '0';
+        // Clear the previous render: the filter's onchange path calls
+        // renderHistory() without applyFit, so stale rows must not survive
+        // into the empty state (same clear contract as renderAdvRuntimes /
+        // renderAdvInstances).
+        document.getElementById('history-body').innerHTML = '';
         const compact = document.getElementById('history-compact');
         if (compact) compact.classList.remove('visible');
+        if (empty) empty.style.display = 'block';
+        if (tableWrap) tableWrap.dataset.has = '0';
         return;
     }
     if (empty) empty.style.display = 'none';
@@ -3237,6 +3321,7 @@ window.handleLogout = handleLogout;
 window.navigate = navigate;
 window.openWizard = openWizard;
 window.closeWizard = closeWizard;
+window.copyModel = copyModel;
 window.wizPrev = wizPrev;
 window.wizGoto = wizGoto;
 window.viewInstanceLogs = viewInstanceLogs;
@@ -3254,6 +3339,7 @@ window.restartComponent = restartComponent;
 window.showCreateRuntimeModal = showCreateRuntimeModal;
 window.handleCreateRuntime = handleCreateRuntime;
 window.editRuntime = editRuntime;
+window.copyRuntime = copyRuntime;
 window.handleEditRuntime = handleEditRuntime;
 window.deleteRuntime = deleteRuntime;
 window.toggleAutostart = toggleAutostart;
@@ -3304,6 +3390,7 @@ window.deletePipeline = deletePipeline;
 window.togglePipelineActive = togglePipelineActive;
 window.openCreatePipelineModal = openCreatePipelineModal;
 window.editPipeline = editPipeline;
+window.copyPipeline = copyPipeline;
 window.handlePipelineSubmit = handlePipelineSubmit;
 window.renderPlBuilder = renderPlBuilder;
 window.plAddEntry = plAddEntry;

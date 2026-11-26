@@ -295,6 +295,143 @@ async function main() {
       suite.log('15.1 Create autostart model', false, 'Fake Runtime 2 not found');
     }
 
+    // ═══ SECTION 16: History filter consistency (stale-row defect) ═══
+    // Section 14 deleted rt-fake-1 and every model on it (modelA included),
+    // so the filter preconditions are built here on a runtime that survives:
+    // the one section 15 created. stateA owns real history records (started
+    // once); stateC stays history-free and stands in for a fresh copy. The
+    // filter onchange path renders synchronously from historyData; the empty
+    // branch must clear the previous render (rows and compact cards) so the
+    // empty state and a populated table are never visible simultaneously.
+    // The wrap's fit-table class is intentionally NOT asserted: it is a
+    // viewport-dependent mode toggle, not part of the consistency contract.
+    await page.click('#sidebar button[data-view="history"]');
+    await page.waitForTimeout(800);
+    const histApi = async () => (await H.api(BASE, 'GET', '/api/v1/history')).data || [];
+    const rts16 = (await H.api(BASE, 'GET', '/api/v1/runtimes')).data;
+    const rt16 = rts16.find(r => r.name === 'Fake Runtime 2');
+    let stateA = null, stateC = null;
+    if (rt16) {
+      stateA = (await H.api(BASE, 'POST', '/api/v1/models', {
+        name: 'HF State Model', runtime_id: rt16.id,
+      })).data;
+      await H.api(BASE, 'POST', `/api/v1/models/${stateA.id}/start`);
+      const t0 = Date.now();
+      while (Date.now() - t0 < 15000) {
+        if ((await histApi()).some(i => i.model_id === stateA.id)) break;
+        await sleep(300);
+      }
+      stateC = (await H.api(BASE, 'POST', '/api/v1/models', {
+        name: 'HF Filter Model', runtime_id: rt16.id,
+      })).data;
+    }
+    const histNow = await histApi();
+    suite.log('16.1 Precondition: model with history + model without history',
+      !!(stateA && stateC && stateC.id) &&
+      histNow.some(i => i.model_id === stateA.id) &&
+      histNow.every(i => i.model_id !== stateC.id),
+      `stateA=${stateA && stateA.id} stateC=${stateC && stateC.id} hist=${histNow.length}`);
+    if (stateA && stateC) {
+      // Re-enter the view so the new models reach the hf-model options
+      // (updateFilterOptions runs on every data reload).
+      await page.click('#sidebar button[data-view="models"]');
+      await page.waitForTimeout(700);
+      await page.click('#sidebar button[data-view="history"]');
+      await page.waitForTimeout(700);
+      const histApiRows = await histApi();
+      const hRowsFor = (mid, st) => histApiRows.filter(i => i.model_id === mid && (!st || i.state === st));
+      const histProbe = () => page.evaluate(() => {
+        const empty = document.getElementById('history-empty');
+        const wrap = document.getElementById('history-table-wrap');
+        const rows = Array.from(document.querySelectorAll('#history-body tr'));
+        const compact = document.getElementById('history-compact');
+        return {
+          emptyShown: empty ? getComputedStyle(empty).display !== 'none' : null,
+          has: wrap ? wrap.dataset.has : null,
+          rowCount: rows.length,
+          rowNames: rows.map(tr => tr.cells[0].title),
+          compactShown: compact ? compact.classList.contains('visible') : null,
+          compactCount: compact ? compact.querySelectorAll('.chist-row').length : null,
+          filter: document.getElementById('hf-model').value,
+          stateFilter: document.getElementById('hf-state').value,
+        };
+      });
+      // Empty state: the compact list must be hidden (its hidden DOM content
+      // is stale-by-design, same as the sibling renderers). Populated state:
+      // the compact innerHTML is rewritten on every populated render, so its
+      // count must equal the table's (visibility itself is a viewport
+      // mode-toggle and is not asserted).
+      const assertHist = async (label, expectEmpty, ownName) => {
+        const p = await histProbe();
+        const apiCount = expectEmpty ? 0 : hRowsFor(p.filter, p.stateFilter).length;
+        const owned = expectEmpty || (p.rowCount > 0 && p.rowNames.every(n => n === ownName));
+        suite.log(label,
+          p.rowCount === apiCount &&
+          p.has === (expectEmpty ? '0' : '1') &&
+          owned &&
+          (expectEmpty
+            ? (p.emptyShown === true && p.compactShown === false)
+            : (p.emptyShown === false && p.compactCount === p.rowCount)),
+          JSON.stringify(p));
+      };
+      // Deterministic setter: wait until the option exists (data reloads
+      // rebuild the select), set the value and verify it stuck before firing
+      // change — a silently reverted value would make the probes assert
+      // against the wrong filter instead of failing loudly.
+      const setModelFilter = async (mid) => {
+        await page.waitForFunction(v => {
+          const s = document.getElementById('hf-model');
+          if (!s) return false;
+          s.value = v;
+          if (s.value !== v) return false;
+          s.dispatchEvent(new Event('change'));
+          return true;
+        }, mid, { timeout: 10000 });
+        await page.waitForTimeout(150);
+      };
+      const setStateFilter = async (st) => {
+        await page.waitForFunction(v => {
+          const s = document.getElementById('hf-state');
+          if (!s) return false;
+          s.value = v;
+          if (s.value !== v) return false;
+          s.dispatchEvent(new Event('change'));
+          return true;
+        }, st, { timeout: 10000 });
+        await page.waitForTimeout(150);
+      };
+
+      await setModelFilter(stateA.id);
+      await assertHist('16.2 Model with history: rows visible, empty state hidden', false, 'HF State Model');
+      await setModelFilter(stateC.id);
+      await assertHist('16.3 Switch to model without history: empty state shown, zero stale rows', true);
+      await setModelFilter(stateA.id);
+      await assertHist('16.4 Switch back to the model with history: rows restored', false, 'HF State Model');
+      const emptyState = ['exited', 'failed', 'stale'].find(s => hRowsFor(stateA.id, s).length === 0);
+      await setStateFilter(emptyState);
+      await assertHist('16.5 State filter yields empty: zero rows and hidden cards even after a populated render', true);
+      await setStateFilter('');
+      await assertHist('16.6 State filter cleared: rows restored', false, 'HF State Model');
+      await setModelFilter(stateC.id);
+      await assertHist('16.7 State-filter-empty to model without history: empty state stays consistent', true);
+      for (let i = 0; i < 3; i++) {
+        await setModelFilter(stateA.id);
+        await setModelFilter(stateC.id);
+      }
+      await assertHist('16.8 Rapid filter switching (6 consecutive changes) ends consistent', true);
+      // The shipped 3000 ms refresh: one full cycle after the filter switch
+      // must keep the empty state consistent (stale rows must not resurface).
+      await sleep(3500);
+      await assertHist('16.9 After one 3000 ms refresh cycle the empty state stays consistent', true);
+      // API/storage isolation: a fresh full fetch after all the filter
+      // switching still carries zero records for the model without history
+      // (a copied entity never inherits the original's history).
+      const histAfter = await histApi();
+      suite.log('16.10 API: model without history owns zero records after all switching',
+        histAfter.filter(i => i.model_id === stateC.id).length === 0,
+        `total=${histAfter.length} stateC=${histAfter.filter(i => i.model_id === stateC.id).length}`);
+    }
+
     // ═══ SECTION 17: Polling (2+ cycles) ═══
     await page.click('#sidebar button[data-view="models"]');
     await page.waitForTimeout(7000);

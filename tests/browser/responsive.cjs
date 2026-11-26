@@ -268,9 +268,9 @@ async function main() {
       }));
     });
     const cardOk = cardInfo.length === 2 &&
-      cardInfo.every(c => c.name.length > 0 && c.exec.length > 0 && c.actions === 2) &&
+      cardInfo.every(c => c.name.length > 0 && c.exec.length > 0 && c.actions === 3) &&
       cardInfo.every(c => c.hasL3 && c.cwd.length > 0);
-    suite.log('mobile card keeps Name + Executable + 2 actions + Working directory line', cardOk, JSON.stringify(cardInfo));
+    suite.log('mobile card keeps Name + Executable + 3 actions (edit/copy/delete, ADR 027) + Working directory line', cardOk, JSON.stringify(cardInfo));
 
     // Instances contract specifics (ADR 013 UX geometry): short mono values
     // (ID / PID / Exit) stay on one line (no character-by-character wrap), the
@@ -534,8 +534,8 @@ async function main() {
         pipeLongTitle.textOverflow === 'ellipsis' && pipeLongTitle.whiteSpace === 'nowrap' &&
         pipeLongTitle.insideNameBox && pipeLongTitle.insideRow,
       pipeLongTitle ? `max_width=${pipeLongTitle.maxWidth} w=${pipeLongTitle.width} scroll=${pipeLongTitle.scrollW} truncated=${pipeLongTitle.truncated} overflow=${pipeLongTitle.textOverflow}/${pipeLongTitle.whiteSpace} inside_row=${pipeLongTitle.insideRow}` : 'long pipeline row absent');
-    suite.log('T-5 Pipeline card keeps its icon strip (3 icon buttons at 44x44, stopped pipeline)',
-      !!pipeDesktop && pipeDesktop.iconBoxes.length === 3 && pipeDesktop.iconBoxes.every(b => b.w >= 44 && b.h >= 44),
+    suite.log('T-5 Pipeline card keeps its icon strip (4 icon buttons at 44x44, stopped pipeline, ADR 027 copy)',
+      !!pipeDesktop && pipeDesktop.iconBoxes.length === 4 && pipeDesktop.iconBoxes.every(b => b.w >= 44 && b.h >= 44),
       pipeDesktop ? `icons=${JSON.stringify(pipeDesktop.iconBoxes.map(b => b.w + 'x' + b.h))}` : 'pipeline row absent');
     suite.log('T-7 Models card carries the density block (padding/gap/list gap)',
       !!modelsDesktop && modelsDesktop.padding === DENSE_CARD.padding && modelsDesktop.gap === DENSE_CARD.gap &&
@@ -736,7 +736,7 @@ async function main() {
       [375, 430, 479, 480, 630, 768, 769].every(w => {
         const rows = prowOf(w);
         return rows.length === 2 &&
-          rows.every(r => r.buttons === 3 && r.boxes.every(b => b.w >= 44 && b.h >= 44) && r.overlaps.length === 0) &&
+          rows.every(r => r.buttons === 4 && r.boxes.every(b => b.w >= 44 && b.h >= 44) && r.overlaps.length === 0) &&
           rows.every(r => r.outsideRow === 0) && pband[w].docScrollW === pband[w].vw;
       }),
       [375, 430, 479, 480, 630, 768, 769].map(w => `${w}: ` +
@@ -879,13 +879,14 @@ async function main() {
     };
 
     // The transitional strip is sub-frame for the shipped 3000 ms tick, so its
-    // three-button geometry is measured on the renderer's own output for that
-    // branch: the four-button stopped row's primary button is swapped for the
+    // four-button geometry (five in a stopped row after ADR 027) is measured on
+    // the renderer's own output for that branch: the five-button stopped row's
+    // primary button is swapped for the
     // `model-transitional model-progress` ring host (app.js starting/stopping
     // branch), measured, and restored exactly.
     const ringStripProbe = () => {
       const row = [...document.querySelectorAll('#model-list .model-row')]
-        .find(r => r.querySelectorAll('.model-row-actions .icon-btn').length === 4);
+        .find(r => r.querySelectorAll('.model-row-actions .icon-btn').length === 5);
       if (!row) return null;
       const strip = row.querySelector('.model-row-actions');
       const removed = strip.querySelector('.icon-btn');
@@ -956,9 +957,9 @@ async function main() {
     suite.log('T-14 The maintained fixture metadata is untruncated at every merged width',
       [631, 768].every(w => rowsOf(w).every(r => r.subClientW > 0 && r.subScrollW <= r.subClientW + 1)),
       [631, 768].map(w => `${w}: scroll/client=${fmt(rowsOf(w).map(r => [r.subScrollW, r.subClientW]))} title=${fmt(rowsOf(w).map(r => [r.titleScrollW, r.titleClientW]))}`).join(' | '));
-    suite.log('T-14 @630/@631/@768: 44x44 targets, zero pairwise overlap and zero row escape on the five- and four-button rows',
+    suite.log('T-14 @630/@631/@768: 44x44 targets, zero pairwise overlap and zero row escape on the six- and five-button rows (ADR 027 copy)',
       [630, 631, 768].every(w => rowsOf(w).length >= 2 &&
-        rowsOf(w).some(r => r.buttons === 5) && rowsOf(w).some(r => r.buttons === 4) &&
+        rowsOf(w).some(r => r.buttons === 6) && rowsOf(w).some(r => r.buttons === 5) &&
         rowsOf(w).every(r => r.boxes.every(b => b.w >= 44 && b.h >= 44) && r.overlaps.length === 0 && r.outsideRow === 0)),
       [630, 631, 768].map(w => `${w}: ` + fmt(rowsOf(w).map(r => `${r.buttons}b/${r.overlaps.length}ov/${r.outsideRow}out`))).join(' | '));
 
@@ -968,8 +969,8 @@ async function main() {
       await page.waitForTimeout(250);
       ringBand[w] = await page.evaluate(ringStripProbe);
     }
-    suite.log('T-14 @630/@631/@768: the three-button transitional strip keeps 44x44 targets, no overlap, inside the row',
-      [630, 631, 768].every(w => !!ringBand[w] && ringBand[w].buttons === 3 &&
+    suite.log('T-14 @630/@631/@768: the four-button transitional strip keeps 44x44 targets, no overlap, inside the row (ADR 027 copy)',
+      [630, 631, 768].every(w => !!ringBand[w] && ringBand[w].buttons === 4 &&
         ringBand[w].overlaps.length === 0 && ringBand[w].inside),
       [630, 631, 768].map(w => `${w}: ${JSON.stringify(ringBand[w])}`).join(' | '));
 
