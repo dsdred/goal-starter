@@ -100,7 +100,11 @@ async function setSaveCapability(page, mode) {
           }
         }
       });
-      window.__toastObserver.observe(document.getElementById('toast-container'), { childList: true });
+      // UI-FEEDBACK-01: error toasts route to the assertive container; the
+      // tracker must cover both live regions to keep its toast census intact.
+      for (const id of ['toast-container', 'toast-error-container']) {
+        window.__toastObserver.observe(document.getElementById(id), { childList: true });
+      }
     }
     if (!window.__fetchWrapped) {
       const orig = window.fetch;

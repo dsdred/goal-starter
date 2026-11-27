@@ -444,7 +444,15 @@ async function main() {
     suite.log('15.2 RU GPU VRAM value uses localized unit', t15ru.includes('24,0 ГиБ'));
     suite.log('15.3 RU runtime label is Рантайм', t15ru.includes('Рантайм'));
     suite.log('15.4 RU RSS label is ОЗУ процесса', t15ru.includes('ОЗУ процесса'));
-    suite.log('15.5 RU RSS explanation shown', t15ru.includes('Резидентная память процесса может включать общие страницы и смонтированные в память файлы моделей'));
+    // UI-FEEDBACK-01: the RSS explanation moved into the canonical info button's
+    // tooltip (no standalone visible paragraph) — the verbatim RU text is
+    // asserted in the tooltip contract and its absence from visible text.
+    const rssTip15ru = await page.evaluate(() => {
+      const b = document.querySelector('#resources-content .res-proc-note');
+      return b ? b.getAttribute('data-tooltip') : '';
+    });
+    suite.log('15.5 RU RSS explanation in the info button tooltip only', rssTip15ru === 'Резидентная память процесса может включать общие страницы и смонтированные в память файлы моделей.' && !t15ru.includes('Резидентная память процесса может включать'),
+      `tip=${JSON.stringify(rssTip15ru.slice(0, 60))} visible=${t15ru.includes('Резидентная память процесса может включать')}`);
     suite.log('15.6 RU VRAM label uses the Russian equivalent', t15ru.includes('Видеопамять: всего'));
     suite.log('15.7 RU: no untranslated VRAM/English unit remains in the view', !t15ru.includes('VRAM') && !/GiB|MiB|KiB/.test(t15ru));
     // I18N-HIST-01: the SECTION 13 live instance rendered its `stopping`
@@ -477,7 +485,12 @@ async function main() {
     suite.log('15.9 EN GiB value keeps ASCII unit and dot', t15en.includes('1.5 GiB'));
     suite.log('15.10 EN GPU VRAM value keeps ASCII unit', t15en.includes('24.0 GiB'));
     suite.log('15.11 EN labels unchanged (Runtime / Process RAM)', t15en.includes('Runtime') && t15en.includes('Process RAM'));
-    suite.log('15.12 EN RSS explanation shown', t15en.includes('Resident process memory may include shared pages and memory-mapped model files'));
+    const rssTip15en = await page.evaluate(() => {
+      const b = document.querySelector('#resources-content .res-proc-note');
+      return b ? b.getAttribute('data-tooltip') : '';
+    });
+    suite.log('15.12 EN RSS explanation in the info button tooltip only', rssTip15en === 'Resident process memory may include shared pages and memory-mapped model files.' && !t15en.includes('Resident process memory may include'),
+      `tip=${JSON.stringify(rssTip15en.slice(0, 60))} visible=${t15en.includes('Resident process memory may include')}`);
     const miss15en = await missingKeys();
     suite.log('15.13 EN: i18nMissing fully empty (stopping label resolved, not fallback) + no raw keys in DOM',
       miss15en.length === 0 && (await domRawKeys()).length === 0,

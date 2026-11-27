@@ -153,9 +153,9 @@ async function main() {
     suite.log('1.6 Env keys pre-filled with empty values (write-only)',
       JSON.stringify(prefill.envKeys) === JSON.stringify(['COPY_SRC_KEY']) && JSON.stringify(prefill.envVals) === JSON.stringify(['']),
       `keys=${JSON.stringify(prefill.envKeys)} vals=${JSON.stringify(prefill.envVals)}`);
-    suite.log('1.7 D-9 notice shown with exact EN text (hint-text pattern)',
+    suite.log('1.7 D-9 notice shown with exact EN text (neutral info notice, not a warning)',
       prefill.notice === 'Environment variable values are not copied. Re-enter them if required.' &&
-      prefill.noticeClass === 'hint-text copy-env-notice',
+      prefill.noticeClass === 'notice notice-info copy-env-notice',
       `notice=${JSON.stringify(prefill.notice)} class=${JSON.stringify(prefill.noticeClass)}`);
 
     // User edits the suggested name before saving, then saves.

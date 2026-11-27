@@ -32,8 +32,10 @@
         </div>
     </div>
 
-    <!-- Toast container -->
-    <div id="toast-container"></div>
+    <!-- Toast live regions: routine/success/warning are announced politely,
+     errors assertively; neither container takes keyboard focus. -->
+    <div id="toast-container" role="status" aria-live="polite"></div>
+    <div id="toast-error-container" role="alert" aria-live="assertive"></div>
 
     <!-- Server connection banner -->
     <div id="conn-banner" class="conn-banner" style="display:none;">
@@ -497,7 +499,7 @@
                                 <button class="btn btn-primary btn-sm" id="portable-export-btn" onclick="portableExport()" data-i18n="portable.export.button">Скачать</button>
                             </div>
                         </div>
-                        <div class="portable-warning-box">
+                        <div class="notice notice-warning portable-warning-box">
                             <p class="hint-text" data-i18n="portable.warning">Значения переменных окружения НЕ экспортируются. Экспортируются только имена ключей. Args экспортируются как есть и могут содержать конфиденциальные данные (API-ключи, токены, пути). GoAl не выполняет детекцию секретов в Args.</p>
                         </div>
                         <div class="portable-subsection">

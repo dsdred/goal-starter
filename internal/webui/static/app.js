@@ -419,7 +419,15 @@ function safeId(id) {
 // title attribute is never set, so no native browser tooltip can appear
 // alongside the custom one.
 function iconBtn(icon, label, color, action, id) {
-    return '<button class="icon-btn icon-btn-' + color + '" data-tooltip="' + esc(label) + '" aria-label="' + esc(label) + '" onclick="' + action + '(\'' + safeId(id) + '\')">' + icon + '</button>';
+    return '<button type="button" class="icon-btn ctx-info icon-btn-' + color + '" data-tooltip="' + esc(label) + '" aria-label="' + esc(label) + '" onclick="' + action + '(\'' + safeId(id) + '\')">' + icon + '</button>';
+}
+
+// infoTip is the canonical contextual info button (UI-FEEDBACK-01): the same
+// appearance as the action icon buttons, no onclick, and the same
+// goaltip/data-tooltip/aria-label contract (never a native title attribute).
+// extraClass keeps context-scoped selectors (e.g. .pl-chip-hint) working.
+function infoTip(text, extraClass) {
+    return '<button type="button" class="icon-btn ctx-info' + (extraClass ? ' ' + extraClass : '') + '" data-tooltip="' + esc(text) + '" aria-label="' + esc(text) + '">' + ICONS.info + '</button>';
 }
 
 var ICONS = {
@@ -800,7 +808,7 @@ function pipelineChips(p) {
                 '</span>';
         } else if (rc.state === 'stopped') {
             const hint = t('pipelines.chip.stopped_hint');
-            actions = '<span class="pl-chip-hint" title="' + esc(hint) + '" aria-label="' + esc(hint) + '">' + ICONS.info + '</span>';
+            actions = infoTip(hint, 'pl-chip-hint');
         }
         return '<span class="pl-chip status-badge ' + rc.state + '" title="' + esc(name) + '"><span class="pl-chip-name">' + esc(name) + '</span>' + actions + '</span>';
     }).join(' ');
@@ -1683,9 +1691,10 @@ function addEnvRow(containerId) {
 function addWizEnvRow() { addEnvRow('wiz-env-container'); }
 
 // showCopyEnvNotice (ADR 027 D-9): contextual notice above an env container
-// when a copy pre-filled environment keys. Reuses the existing .hint-text
-// pattern; no notice when the source had no env keys. The notice is a dynamic
-// DOM node located by class (no template id).
+// when a copy pre-filled environment keys. No notice when the source had no
+// env keys. The notice is a dynamic DOM node located by class (no template
+// id). It describes normal product behavior, so it is a neutral info notice
+// of the .notice family (UI-FEEDBACK-01), never a warning presentation.
 function removeCopyEnvNotices() {
     document.querySelectorAll('.copy-env-notice').forEach(function (n) { n.remove(); });
 }
@@ -1695,7 +1704,7 @@ function showCopyEnvNotice(containerId, keys) {
     if (!keys || !keys.length) return;
     const container = document.getElementById(containerId);
     const notice = document.createElement('div');
-    notice.className = 'hint-text copy-env-notice';
+    notice.className = 'notice notice-info copy-env-notice';
     notice.textContent = t('entity.copy.env_notice');
     container.parentNode.insertBefore(notice, container);
 }
@@ -2418,7 +2427,25 @@ function bindTooltipSystem() {
     // hover/focus alone own the tooltip. keydown also clears a flag left armed by
     // a touch pointerup that never produced a click.
     document.addEventListener('pointerdown', function () { tipTouchActivation = false; });
-    document.addEventListener('keydown', function () { tipTouchActivation = false; });
+    document.addEventListener('keydown', function (e) {
+        tipTouchActivation = false;
+        // Escape dismisses a visible tooltip (UI-FEEDBACK-01) without moving
+        // focus: the trigger keeps focus, so the focusout contract is untouched.
+        if (e.key === 'Escape' && tipActiveEl) tipHide();
+    });
+    // Click-to-toggle: a .ctx-info trigger shows (or hides) the tooltip on
+    // click/tap, so touch and keyboard users are not limited to hover/focus.
+    document.addEventListener('click', function (e) {
+        const tEl = tipTargetFromEvent(e);
+        if (tEl && tEl.classList && tEl.classList.contains('ctx-info')) {
+            if (tipActiveEl === tEl && tipHintLatched) { tipHide(); return; }
+            tipShow(tEl);
+            tipHintLatched = true;
+            return;
+        }
+        // Outside click dismisses a latched (click/tap-activated) tooltip.
+        if (tipActiveEl && tipHintLatched && (!tEl || tEl !== tipActiveEl)) tipHide();
+    });
     document.addEventListener('pointerup', function (e) { tipTouchActivation = e.pointerType === 'touch'; });
     document.addEventListener('focusin', function (e) {
         const tEl = tipTargetFromEvent(e);
@@ -2536,11 +2563,16 @@ function showBlockedModal(title, dependents) {
 
 // ─── Toast ──────────────────────────────────────────────────────────────────
 
+// Toast live regions (UI-FEEDBACK-01): routine/success/warning go to the
+// polite region, errors to the assertive one, so each message is announced
+// exactly once at the urgency its severity warrants. Containers never take
+// keyboard focus.
 function showToast(msg, type) {
     const div = document.createElement('div');
     div.className = 'toast ' + (type || '');
     div.textContent = msg;
-    document.getElementById('toast-container').appendChild(div);
+    const container = document.getElementById(type === 'error' ? 'toast-error-container' : 'toast-container');
+    container.appendChild(div);
     setTimeout(function () { div.remove(); }, 4000);
 }
 
@@ -3128,14 +3160,21 @@ function resProvTag(reading) {
     return '';
 }
 
-function resRow(labelKey, reading, kind) {
+// resRow renders one metric row. When head is given (the section's headline
+// reading), a row whose provenance matches the headline's repeats no tag:
+// the headline tag covers it, and every reading whose meaning differs
+// (measured vs estimated vs unavailable) keeps its own tag, so mixed
+// provenance stays unambiguous (UI-FEEDBACK-01; ADR 026 D-5 semantics).
+function resRow(labelKey, reading, kind, head) {
     const v = resNum(reading);
     let val;
     if (v === null) val = '—';
     else if (kind === 'bytes') val = fmtBytes(v);
     else if (kind === 'percent') val = v + '%';
     else val = String(v);
-    return '<div class="res-row"><span>' + t(labelKey) + '</span><span class="res-row-val">' + esc(val) + resProvTag(reading) + '</span></div>';
+    const sameHead = head !== undefined && head !== null && reading !== null && reading !== undefined && reading.provenance === head.provenance;
+    const tag = sameHead ? '' : resProvTag(reading);
+    return '<div class="res-row"><span>' + t(labelKey) + '</span><span class="res-row-val">' + esc(val) + tag + '</span></div>';
 }
 
 function resVendorLabel(v) {
@@ -3174,13 +3213,13 @@ function resSystem(sys) {
     let h = '<div class="res-section-title">' + t('resources.system.title') + '</div><div class="res-grid">';
     h += '<div class="res-card"><div class="res-card-title">' + t('resources.cpu.title') + '</div>' +
         '<div class="res-metric">' + (cu === null ? '—' : Math.round(cu) + '%') + resProvTag(cpu.utilization) + '</div>' +
-        resMeter(cu) + '<div class="res-rows">' + resRow('resources.cpu.cores', cpu.logical_cores, 'count') + '</div></div>';
+        resMeter(cu) + '<div class="res-rows">' + resRow('resources.cpu.cores', cpu.logical_cores, 'count', cpu.utilization) + '</div></div>';
     h += '<div class="res-card"><div class="res-card-title">' + t('resources.ram.title') + '</div>' +
         '<div class="res-metric">' + resPctText(rp) + resProvTag(ram.used) + '</div>' +
         resMeter(rp) + '<div class="res-rows">' +
-        resRow('resources.ram.total', ram.total, 'bytes') +
-        resRow('resources.ram.used', ram.used, 'bytes') +
-        resRow('resources.ram.available', ram.available, 'bytes') + '</div></div>';
+        resRow('resources.ram.total', ram.total, 'bytes', ram.used) +
+        resRow('resources.ram.used', ram.used, 'bytes', ram.used) +
+        resRow('resources.ram.available', ram.available, 'bytes', ram.used) + '</div></div>';
     h += '</div>';
     return h;
 }
@@ -3199,9 +3238,9 @@ function resGpuCard(d) {
     h += '</div>';
     h += '<div class="res-metric">' + resPctText(vp) + resProvTag(res.vram_used) + '</div>' + resMeter(vp);
     h += '<div class="res-rows">' +
-        resRow('resources.gpu.vram_total', res.vram_total, 'bytes') +
-        resRow('resources.gpu.vram_used', res.vram_used, 'bytes') +
-        resRow('resources.gpu.vram_free', res.vram_free, 'bytes') + '</div></div>';
+        resRow('resources.gpu.vram_total', res.vram_total, 'bytes', res.vram_used) +
+        resRow('resources.gpu.vram_used', res.vram_used, 'bytes', res.vram_used) +
+        resRow('resources.gpu.vram_free', res.vram_free, 'bytes', res.vram_used) + '</div></div>';
     return h;
 }
 
@@ -3248,13 +3287,16 @@ function resProcessCard(p) {
 }
 
 function resProcesses(procs) {
-    let h = '<div class="res-section-title">' + t('resources.processes.title');
+    // RSS explanation (UI-FEEDBACK-01): the canonical info button beside the
+    // process RAM section label; the note lives in the shared tooltip only —
+    // there is no standalone visible paragraph.
+    let h = '<div class="res-section-title">' + t('resources.processes.title')
+        + infoTip(t('resources.processes.rss_note'), 'res-proc-note');
     if (procs.length) h += ' <span class="res-count">' + procs.length + '</span>';
     h += '</div>';
     if (!procs.length) {
         return h + '<div class="empty-state"><p>' + t('resources.processes.empty') + '</p><small class="hint-text">' + t('resources.processes.empty_hint') + '</small></div>';
     }
-    h += '<small class="hint-text res-proc-note">' + t('resources.processes.rss_note') + '</small>';
     h += '<div class="res-grid">';
     procs.forEach(function (p) { h += resProcessCard(p); });
     return h + '</div>';
@@ -3351,6 +3393,7 @@ window.closeModal = closeModal;
 window.closeConfirm = closeConfirm;
 window.reloadAllData = reloadAllData;
 window.loadResources = loadResources;
+window.showToast = showToast;
 window.addWizEnvRow = addWizEnvRow;
 window.addEnvRow = addEnvRow;
 window.onWizRtModeChange = onWizRtModeChange;

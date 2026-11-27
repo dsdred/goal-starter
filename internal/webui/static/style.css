@@ -14,6 +14,7 @@
     --danger: #e74c3c;
     --warning: #f39c12;
     --info: #60a5fa;
+    --orphan: #9b59b6;
     --border: #2a2c48;
     --shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
     --radius: 10px;
@@ -42,6 +43,7 @@
     --danger: #c0392b;
     --warning: #e67e22;
     --info: #2980b9;
+    --orphan: #8e44ad;
     --border: #dcdfe6;
     --shadow: 0 4px 24px rgba(0, 0, 0, 0.08);
     --log-stdout: #1a7a3a;
@@ -106,8 +108,10 @@ code { font-family: var(--font-mono); font-size: 0.9em; background: var(--bg-inp
 .radio-option:hover { color: var(--text-primary); }
 .radio-option:has(input:checked) { color: var(--text-primary); font-weight: 500; }
 .radio-option input[type=radio] { accent-color: var(--accent); margin: 0; width: 15px; height: 15px; flex-shrink: 0; }
-.hint { display: block; font-size: 0.75rem; color: var(--text-muted); margin-top: 4px; }
+/* Hint text is one family (UI-FEEDBACK-01): .hint-text is the base contract,
+   .hint extends it for the small inline form variant. */
 .hint-text { font-size: 0.85rem; color: var(--text-muted); margin-bottom: 1rem; }
+.hint { display: block; font-size: 0.75rem; color: var(--text-muted); margin-top: 4px; }
 .error-msg { color: var(--danger); font-size: 0.85rem; margin: 0.5rem 0; }
 
 /* Modal */
@@ -143,6 +147,13 @@ code { font-family: var(--font-mono); font-size: 0.9em; background: var(--bg-inp
 .toast.success { border-color: var(--success); }
 .toast.error { border-color: var(--danger); }
 .toast.warning { border-color: var(--warning); }
+.toast.info { border-color: var(--info); }
+/* Error toasts live in their own assertive live region, stacked below the
+   polite one. */
+#toast-error-container {
+    position: fixed; top: 1rem; right: 1rem; z-index: 9999;
+    display: flex; flex-direction: column; gap: 0.5rem; pointer-events: none;
+}
 @keyframes toastIn { from { opacity: 0; transform: translateX(20px); } to { opacity: 1; transform: translateX(0); } }
 
 /* Connection banner (server unreachable) */
@@ -309,7 +320,7 @@ code { font-family: var(--font-mono); font-size: 0.9em; background: var(--bg-inp
 .status-badge.stopping { background: rgba(243, 156, 18, 0.15); color: var(--warning); }
 .status-badge.stopped, .status-badge.exited { background: rgba(154, 154, 180, 0.12); color: var(--text-muted); }
 .status-badge.failed { background: rgba(231, 76, 60, 0.15); color: var(--danger); }
-.status-badge.orphan { background: rgba(155, 89, 182, 0.15); color: #9b59b6; }
+.status-badge.orphan { background: rgba(155, 89, 182, 0.15); color: var(--orphan); }
 .status-badge.stale { background: rgba(154, 154, 180, 0.12); color: var(--text-muted); }
 .status-badge.pending { background: rgba(96, 165, 250, 0.10); color: var(--info); opacity: 0.8; }
 /* ADR 023 D-3: user-facing state words on the state-word surfaces (Models,
@@ -505,8 +516,12 @@ code { font-family: var(--font-mono); font-size: 0.9em; background: var(--bg-inp
 .pl-chip-actions { display: inline-flex; flex-shrink: 0; align-items: center; }
 .pl-chip-actions .icon-btn { width: 24px; height: 24px; border-radius: 5px; }
 .pl-chip-actions .icon-btn svg { width: 14px; height: 14px; }
-.pl-chip-hint { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; color: var(--text-muted); font-size: 13px; line-height: 1; }
+/* The chip hint is a .icon-btn (44x44 base touch target) but lives in the
+   chip's inline flow, where it must keep the compact chip-action size or the
+   480..768 merge band regresses (UX-PIPELINE-LIST-DENSITY PLD-3). */
+.pl-chip-hint { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; color: var(--text-muted); font-size: 13px; line-height: 1; width: 24px; height: 24px; border-radius: 5px; }
 .pl-chip-hint svg { width: 15px; height: 15px; fill: currentColor; }
+.pl-chip-hint.ctx-info svg { width: 15px; height: 15px; fill: currentColor; }
 /* Pipeline linear builder (ADR 013 Owner UI): each block is one model entry;
    blocks stack top-to-bottom in launch order (no DAG, no drag&drop, no
    decorative connectors). Each block carries explicit move up / move down /
@@ -611,6 +626,21 @@ code { font-family: var(--font-mono); font-size: 0.9em; background: var(--bg-inp
 }
 .ctx-help:hover, .ctx-help:focus { color: var(--accent); background: var(--accent-subtle); outline: none; }
 .pl-seg-help { position: relative; cursor: help; }
+/* Canonical info-button appearance (UI-FEEDBACK-01): one visual contract for
+   every contextual info trigger (action icon buttons, chip hint, RSS
+   explanation). Ghost/muted at rest, accent on hover/focus; the help text
+   always comes from #goaltip via data-tooltip — never a native title. */
+.ctx-info {
+    display: inline-flex; align-items: center; justify-content: center;
+    background: transparent; border: none; padding: 0; cursor: pointer;
+    color: var(--text-muted); line-height: 1; vertical-align: middle;
+}
+.ctx-info:hover { background: var(--bg-input); color: var(--accent); }
+.ctx-info:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-radius: 5px; }
+/* Icon size follows the context: 16 px by default, the pipeline chip strip
+   keeps its compact 14 px, the RSS note line its 13 px. */
+.ctx-info svg { width: 16px; height: 16px; fill: currentColor; }
+.pl-chip-actions .ctx-info svg { width: 14px; height: 14px; }
 
 /* Canonical floating tooltip: one element for the whole app. Positioned by JS
    (above when it fits, else below; horizontally clamped to the viewport). */
@@ -680,8 +710,18 @@ code { font-family: var(--font-mono); font-size: 0.9em; background: var(--bg-inp
 }
 .portable-export-row select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-subtle); }
 [data-theme="light"] .portable-export-row select { color-scheme: light; }
-.portable-warning-box { margin: 0.8rem 0; padding: 0.5rem 0.7rem; background: transparent; border: 1px solid var(--border); border-left: 2px solid var(--warning); border-radius: var(--radius-sm); }
-.portable-warning-box .hint-text { margin: 0; font-size: 0.75rem; color: var(--text-muted); }
+/* Notice family (UI-FEEDBACK-01): one presentation contract for semantic
+   notices, keyed by meaning (info / warning / error / success) on the
+   existing palette tokens. The Settings export box is .notice-warning
+   (.portable-warning-box keeps its identity as the stable selector). */
+.notice { margin: 0.8rem 0; padding: 0.5rem 0.7rem; background: transparent; border: 1px solid var(--border); border-left: 2px solid var(--border); border-radius: var(--radius-sm); }
+.notice .hint-text { margin: 0; font-size: 0.75rem; color: var(--text-muted); }
+/* Inline notice (wizard copy-env D-9): compact row, no box margin. */
+.copy-env-notice { margin: 0 0 0.5rem; padding: 0.35rem 0.6rem; }
+.notice-info { border-left-color: var(--info); }
+.notice-warning { border-left-color: var(--warning); }
+.notice-error { border-left-color: var(--danger); }
+.notice-success { border-left-color: var(--success); }
 .portable-import-actions { display: flex; gap: 0.5rem; margin-top: 0.6rem; }
 #portable-import-result { margin-top: 0.8rem; font-size: 0.82rem; }
 #portable-import-result .portable-result-success { color: var(--success); }
@@ -911,6 +951,8 @@ code { font-family: var(--font-mono); font-size: 0.9em; background: var(--bg-inp
 .res-prov-estimated { background: rgba(243, 156, 18, 0.15); color: var(--warning); }
 .res-prov-unavailable { background: rgba(154, 154, 180, 0.12); color: var(--text-muted); }
 .res-proc-reason { font-family: var(--font-mono); font-size: 0.62rem; color: var(--text-muted); overflow-wrap: anywhere; }
+/* RSS explanation line: canonical info button scaled to the text line. */
+.res-proc-note { margin-left: 6px; vertical-align: middle; }
 .res-proc-rss .res-row-val { font-size: 0.95rem; font-weight: 700; color: var(--text-primary); flex-wrap: wrap; }
 @media (max-width: 768px) {
     .res-grid { grid-template-columns: 1fr; }
