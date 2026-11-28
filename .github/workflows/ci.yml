@@ -146,6 +146,18 @@ jobs:
           test "$matched" -eq 24
           go test -count=1 -timeout 20m -v -run "$ADR021_SLICE3_TESTS" $PKGS
 
+      # BUILD-ARTIFACTS-01: build-ownership regression for
+      # scripts/build-all.ps1 (cases A–J, 35 checks; layout, same-version
+      # rebuilds, foreign/legacy byte identity, failure isolation, lock
+      # exclusivity, exact-set detection, simulated + real pipeline OUTDIR
+      # hand-off, fail-closed resource embedding). Runs under Windows
+      # PowerShell 5.1 — the engine whose semantics the build script targets.
+      # The suite exits non-zero on any FAIL, which fails this job; no
+      # Go/browser coverage is touched. Case J performs one real (unsigned)
+      # in-process build — the same invocation form release.yml uses.
+      - name: Run build-ownership regression (BUILD-ARTIFACTS-01)
+        run: powershell -NoProfile -File tests/scripts/build-root.test.ps1
+
   vulncheck:
     name: Vulnerability Check
     runs-on: ubuntu-latest

@@ -134,6 +134,8 @@ $env:GOOS='windows'; $env:GOARCH='amd64'; $env:CGO_ENABLED='0'; go build -o bin/
 $env:GOOS='linux'; $env:GOARCH='amd64'; go build -o bin/goal-linux-amd64 ./cmd/goal
 ```
 
+*(2026-11-28, BUILD-ARTIFACTS-01: the release build `scripts/build-all.ps1` no longer writes to the top-level `bin/`/`releases/` — every invocation allocates its own unique, collision-safe build root `build/<version>-<yyyyMMdd-HHmmss>-<unique-id>/` and writes only there; the ownership rules, the `OUTDIR` hand-off to the release workflow, the per-worktree build lock and the `rsrc.syso` preservation behavior are documented in [BUILD_RELEASE.md](BUILD_RELEASE.md). `build/` is gitignored and pruned manually. The manual cross-compile snippet above still targets the gitignored legacy `bin/` — those are developer quick builds, not managed by the build script.)*
+
 ## Project structure
 
 | Path | Purpose |

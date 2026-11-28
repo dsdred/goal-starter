@@ -74,15 +74,26 @@ $env:SIGN_TIMESTAMP = "http://timestamp.digicert.com"
 .\scripts\build-all.ps1 -ReleaseVersion vX.Y.Z
 ```
 
-Output:
-- `bin/goal-windows-amd64.exe` (signed if SIGN_CERT provided)
-- `bin/goal-linux-amd64`
-- `bin/checksums.txt`
+Output (per-build ownership layout, BUILD-ARTIFACTS-01, 2026-11-28): every invocation creates its own unique, collision-safe build root under `build/` and writes only there:
 
-The script also creates release archives:
-- `releases/goal-vX.Y.Z-windows-amd64.zip`
-- `releases/goal-vX.Y.Z-linux-amd64.tar.gz`
-- `releases/checksums.txt`
+- `build/vX.Y.Z-<yyyyMMdd-HHmmss>-<unique-id>/bin/goal-windows-amd64.exe` (signed if SIGN_CERT provided)
+- `build/vX.Y.Z-<yyyyMMdd-HHmmss>-<unique-id>/bin/goal-linux-amd64`
+- `build/vX.Y.Z-<yyyyMMdd-HHmmss>-<unique-id>/bin/checksums.txt`
+- `build/vX.Y.Z-<yyyyMMdd-HHmmss>-<unique-id>/releases/goal-vX.Y.Z-windows-amd64.zip`
+- `build/vX.Y.Z-<yyyyMMdd-HHmmss>-<unique-id>/releases/goal-vX.Y.Z-linux-amd64.tar.gz`
+- `build/vX.Y.Z-<yyyyMMdd-HHmmss>-<unique-id>/releases/checksums.txt`
+
+The script emits `OUTDIR=<absolute build root>` exactly once to the **success stream** (`Write-Output`), so CI passes the exact root of THIS invocation to its verification and upload steps (no newest-directory discovery). The emission must stay on the success stream: the release workflow captures it in-pipeline (`@(& .\scripts\build-all.ps1 … 4>&1 | …)`), and console emission (`[Console]::Out` / `Write-Host`) bypasses that pipeline under Windows PowerShell 5.1 (Q2 root cause, 2026-11-28).
+
+**Build ownership rules:**
+- A build only ever creates, modifies or deletes paths inside its own root (plus the `cmd/goal/rsrc.syso` it generated; a pre-existing `rsrc.syso` is preserved byte-for-byte and restored after the build). Legacy `bin/` and `releases/`, previous build roots, and foreign files are never modified, moved, overwritten or deleted.
+- Fail-closed resource embedding: if a run generates no `rsrc.syso` (for example `winres/winres.json` is missing from the checkout) while a pre-existing `cmd/goal/rsrc.syso` is present, the build refuses with a clear message instead of silently embedding unidentified (possibly stale) version resources into a release binary. The file is left in place: restore `winres/winres.json` (`git checkout -- winres`) and rebuild, or inspect and remove `cmd/goal/rsrc.syso` manually if it is intentionally yours.
+- Same-version rebuilds produce independent roots; there is no automatic pruning. Manual cleanup: delete the `build/vX.Y.Z-*` roots you are done with (e.g. `Remove-Item build\v2.3.1-* -Recurse -Force` — deliberately, only that version's roots).
+- Concurrent invocations from the same worktree are serialized by an exclusive lock (`%TEMP%\goal-build-<worktree-key>.lock`): the second build fails fast with a clear message instead of interleaving the shared source-tree resource file.
+- The script no longer runs `go clean -cache`: the Go build cache is content-addressed over package files (including the embedded `.syso`) and the per-invocation ldflags, so version metadata and resource changes invalidate it automatically.
+- Baseline builds of another revision: build inside a disposable worktree — `git worktree add <tmp>\goal-baseline-<revision> <revision>`, run the script from that worktree, then `git worktree remove`. Never swap files in a modified worktree to build another revision.
+- Regression coverage: `tests/scripts/build-root.test.ps1` — cases A–J, 35 checks (layout uniqueness, non-destructive same-version rebuilds, foreign/legacy/previous-root byte identity, failure isolation, lock exclusivity, artifact-set detection, simulated and **real pipeline** OUTDIR hand-off, fail-closed resource embedding). Case J runs the production script in-process with the release workflow's exact capture expression (one real unsigned build: exactly one captured OUTDIR, validated root, exact five upload assets, cleanup through the validated hand-off) plus a locked-out failure-propagation leg. Runs in regular CI as the `Run build-ownership regression (BUILD-ARTIFACTS-01)` step of the existing `test-windows` job (Windows PowerShell 5.1; a FAIL exits non-zero and fails the job); run locally from the repository root with `powershell -NoProfile -File tests/scripts/build-root.test.ps1`.
+*(2026-11-28, Q2 bounded correction: the independent review of the final acceptance found the `OUTDIR` hand-off was emitted via `[Console]::Out.WriteLine`, which under Windows PowerShell 5.1 goes to the console host and bypasses the workflow's in-pipeline capture — the release build step would have thrown "exactly one OUTDIR line (found 0)" after a successful build. Correction: `scripts/build-all.ps1` now emits `OUTDIR` with `Write-Output` (success stream); no ownership, layout or locking change. RED on the pre-fix bytes with the new real-capture case J (in-process production invocation, no simulated array): J.1–J.4 FAIL with OUTDIR match count 0 while the real build itself succeeded. GREEN on the corrected bytes: 35/35. One real build (v1.2.9-e2e7) through the workflow's exact capture mechanism: exit 0, exactly one captured OUTDIR (the only pipeline object), validated root, exact five-asset sets, both checksums files cross-verified against live bytes, PE ProductVersion 1.2.9-e2e7, `rsrc.syso`/transients cleaned, lock released, legacy `bin/`+`releases/` byte-identical to the pre-build freeze. Bounded independent re-review: PASS. Disclosed limitation (preserved from acceptance): the legacy `releases/` historical SHA256 baseline is incomplete — the pre-e2e freeze exists only for `bin/`.)*
 
 ## Developer build
 
@@ -109,7 +120,7 @@ go build ./cmd/goal
 
 **CI:** GitHub Actions runs lint, build (Windows+Linux), test with race detector, and govulncheck. See `.github/workflows/ci.yml`.
 
-**Release CI:** `.github/workflows/release.yml` triggers on tag push. Runs tests, builds, signs Windows binary (if certificate available), verifies signature, generates checksums, and publishes release.
+**Release CI:** `.github/workflows/release.yml` triggers on tag push. Runs tests, builds into a unique per-build root (capturing the script's `OUTDIR` line and validating it before use), signs the Windows binary (if certificate available), verifies signature, generates checksums, and publishes the release. The verification and upload steps consume exactly the captured build root — never a shared `bin/`/`releases/` directory and never a newest-directory search — and the upload keeps `overwrite_files: false` + `fail_on_unmatched_files: true` over the explicit five-asset allowlist.
 
 ## Tag convention
 

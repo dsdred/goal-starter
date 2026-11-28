@@ -4,6 +4,9 @@
 # Release archives
 /releases/
 
+# Per-invocation build roots (BUILD-ARTIFACTS-01, 2026-11-28)
+/build/
+
 # Data directory
 /data/
 

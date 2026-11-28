@@ -45,18 +45,39 @@ jobs:
         run: go vet ./...
 
       - name: Build canonical release set
+        id: build
         shell: powershell
         env:
           SIGN_CERT: ${{ secrets.GOAL_SIGN_CERT }}
           SIGN_PASSWORD: ${{ secrets.GOAL_SIGN_CERT_PASSWORD }}
           SIGN_TIMESTAMP: ${{ secrets.GOAL_SIGN_TIMESTAMP_SERVER }}
         run: |
-          .\scripts\build-all.ps1 -ReleaseVersion $env:RELEASE_VERSION
+          # The script allocates its own unique build root and prints
+          # "OUTDIR=<absolute path>" exactly once; capture that exact root
+          # (no newest-directory discovery) and validate it before use.
+          $outDirLines = @(& .\scripts\build-all.ps1 -ReleaseVersion $env:RELEASE_VERSION 4>&1 | ForEach-Object { "$_" })
+          $outDir = @($outDirLines | Where-Object { $_ -match '^OUTDIR=' })
+          if ($outDir.Count -ne 1) {
+            throw "Build did not report exactly one OUTDIR line (found $($outDir.Count))"
+          }
+          $root = $outDir[0].Substring(7)
+          .\scripts\goal-build-lib.ps1
+          if (-not (Test-GoalBuildRoot -BuildRoot $root -Version $env:RELEASE_VERSION -BaseDir ".")) {
+            throw "Build reported an invalid OUTDIR: $root (must be an absolute root under build/ named after $env:RELEASE_VERSION)"
+          }
+          "outDir=$root" >> $env:GITHUB_OUTPUT
 
       - name: Verify exact upload allowlist and checksums
         shell: pwsh
+        env:
+          BUILD_OUT_DIR: ${{ steps.build.outputs.outdir }}
         run: |
           $ErrorActionPreference = "Stop"
+          if ([string]::IsNullOrWhiteSpace($env:BUILD_OUT_DIR)) {
+            throw "BUILD_OUT_DIR is empty; the build step did not hand off its build root"
+          }
+          $binDir = Join-Path $env:BUILD_OUT_DIR "bin"
+          $releaseDir = Join-Path $env:BUILD_OUT_DIR "releases"
           $version = $env:RELEASE_VERSION
           $expectedBin = @(
             "goal-windows-amd64.exe",
@@ -81,16 +102,16 @@ jobs:
             }
           }
 
-          Assert-ExactFileSet "bin" $expectedBin
-          Assert-ExactFileSet "releases" $expectedRelease
+          Assert-ExactFileSet $binDir $expectedBin
+          Assert-ExactFileSet $releaseDir $expectedRelease
 
           foreach ($forbidden in @("goal--windows-amd64.zip", "goal--linux-amd64.tar.gz")) {
-            if (Test-Path -LiteralPath "releases/$forbidden") {
+            if (Test-Path -LiteralPath (Join-Path $releaseDir $forbidden)) {
               throw "Forbidden empty-version artifact exists: $forbidden"
             }
           }
 
-          $checksumLines = @(Get-Content -LiteralPath "releases/checksums.txt")
+          $checksumLines = @(Get-Content -LiteralPath (Join-Path $releaseDir "checksums.txt"))
           if ($checksumLines.Count -ne 2) {
             throw "Release checksums must list exactly two canonical archives"
           }
@@ -105,7 +126,7 @@ jobs:
               throw "Unexpected asset in checksums: $assetName"
             }
             $listedChecksumAssets += $assetName
-            $actualHash = (Get-FileHash -Algorithm SHA256 -LiteralPath "releases/$assetName").Hash.ToLowerInvariant()
+            $actualHash = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $releaseDir $assetName)).Hash.ToLowerInvariant()
             if ($actualHash -ne $expectedHash) {
               throw "Checksum mismatch for $assetName"
             }
@@ -183,11 +204,13 @@ jobs:
           fail_on_unmatched_files: true
           overwrite_files: false
           body_path: release-notes-combined.md
+          # Exact five assets of THIS invocation, resolved from the build
+          # step's validated outDir (never a newest-directory search).
           files: |
-            bin/goal-windows-amd64.exe
-            bin/goal-linux-amd64
-            releases/goal-${{ github.ref_name }}-windows-amd64.zip
-            releases/goal-${{ github.ref_name }}-linux-amd64.tar.gz
-            releases/checksums.txt
+            ${{ steps.build.outputs.outdir }}/bin/goal-windows-amd64.exe
+            ${{ steps.build.outputs.outdir }}/bin/goal-linux-amd64
+            ${{ steps.build.outputs.outdir }}/releases/goal-${{ github.ref_name }}-windows-amd64.zip
+            ${{ steps.build.outputs.outdir }}/releases/goal-${{ github.ref_name }}-linux-amd64.tar.gz
+            ${{ steps.build.outputs.outdir }}/releases/checksums.txt
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
