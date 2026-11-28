@@ -8,11 +8,19 @@
 //   • the ADR 027 D-9 copy-env notice as a NEUTRAL info notice (never a
 //     warning presentation), exact EN/RU text preserved;
 //   • the Resources RSS explanation as an info button carrying the note
-//     verbatim while the note text stays visible;
+//     verbatim in the tooltip only (no standalone visible paragraph),
+//     including the click-toggle contract across forced re-renders (4.6/4.7)
+//     and the two-orphan-hint latch collision regression (4.8/4.9);
+//   • the data-table actions column right-edge geometry: the last action
+//     button of every actions cell sits flush at the table's right edge with
+//     only the standard cell padding in between (5.4, runtimes/instances/
+//     history tables);
 //   • theme-token hygiene (orphan badge token; warning vs info notices).
 // No backend, measurement or i18n key semantics are exercised here beyond
 // presentation and the exact notice strings.
 const path = require('path');
+const fs = require('fs');
+const { spawn } = require('child_process');
 const H = require('./harness.cjs');
 
 const PORT = 19488;
@@ -46,6 +54,45 @@ async function main() {
   const goalBin = H.buildGoal(ws);
   const fakeRt = H.buildFakeRuntime(ws);
   H.writeConfig(ws, { webPort: PORT, runtimes: [{ id: 'rt-uf', name: 'RT UF', executable: fakeRt, workingDirectory: path.dirname(fakeRt), environment: { RT_ENV_KEY: 'v' } }] });
+
+  // Two orphan models for the 4.8/4.9 collision regression: two independent
+  // fake-runtime processes (never in GoAl's process tree) plus a pre-populated
+  // store with running instances attributed to them, so recovery marks both
+  // ORPHAN on startup. Their hint buttons are two DISTINCT controls that share
+  // the identical tooltip text AND the identical onclick="toggleHint(this)" —
+  // the only same-text/same-onclick pair in the app (chip hints have no
+  // onclick; the RSS note is unique).
+  const ufHelpers = [];
+  for (let i = 0; i < 2; i++) {
+    const h = spawn(fakeRt, ['infinite'], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+    ufHelpers.push(h);
+  }
+  await new Promise(r => setTimeout(r, 600));
+  if (ufHelpers.some(h => !H.isProcessAlive(h.pid))) {
+    console.error('FATAL: a UF helper died immediately');
+    process.exit(1);
+  }
+  const orphansCreated = new Date(Date.now() - 2000).toISOString();
+  const orphansNow = new Date().toISOString();
+  const ufRepo = {
+    schema_version: 7,
+    runtimes: [{ id: 'rt-uf', name: 'RT UF', executable: fakeRt, working_directory: path.dirname(fakeRt), environment: { RT_ENV_KEY: 'v' }, created_at: orphansCreated, updated_at: orphansCreated }],
+    models: [
+      { id: 'm-uf-orphan-1', name: 'UF Orphan 1', runtime_id: 'rt-uf', args: ['infinite'], environment: {}, active: false, autostart_delay: 0, created_at: orphansCreated, updated_at: orphansCreated },
+      { id: 'm-uf-orphan-2', name: 'UF Orphan 2', runtime_id: 'rt-uf', args: ['infinite'], environment: {}, active: false, autostart_delay: 0, created_at: orphansNow, updated_at: orphansNow },
+    ],
+    pipelines: [],
+    instances: [
+      { id: 'inst-uf-orphan-1', model_id: 'm-uf-orphan-1', runtime_id: 'rt-uf', pipeline_id: null, pipeline_entry_id: null, executable: fakeRt, args: ['infinite'], working_directory: path.dirname(fakeRt), environment: {}, state: 'running', pid: ufHelpers[0].pid, exit_code: 0, exit_class: '', last_error: '', started_at: orphansNow, created_at: orphansNow, updated_at: orphansNow },
+      { id: 'inst-uf-orphan-2', model_id: 'm-uf-orphan-2', runtime_id: 'rt-uf', pipeline_id: null, pipeline_entry_id: null, executable: fakeRt, args: ['infinite'], working_directory: path.dirname(fakeRt), environment: {}, state: 'running', pid: ufHelpers[1].pid, exit_code: 0, exit_class: '', last_error: '', started_at: orphansNow, created_at: orphansNow, updated_at: orphansNow },
+      // Terminal record: /api/v1/history projects repository instances, and the
+      // app fetches history once at boot — a stopped instance provides the
+      // history-table row for the 5.4 alignment check without a live cycle.
+      { id: 'inst-uf-term-1', model_id: 'm-uf-orphan-1', runtime_id: 'rt-uf', pipeline_id: null, pipeline_entry_id: null, executable: fakeRt, args: ['infinite'], working_directory: path.dirname(fakeRt), environment: {}, state: 'exited', pid: 0, exit_code: 0, exit_class: 'normal', last_error: '', started_at: orphansCreated, stopped_at: orphansCreated, created_at: orphansCreated, updated_at: orphansCreated },
+    ],
+  };
+  fs.writeFileSync(path.join(ws.dataDir, 'goal_repo.json'), JSON.stringify(ufRepo, null, 2));
+
   const server = H.startServer(goalBin, ws);
   if (!await H.waitForHealth(BASE)) {
     console.error('Server failed to start. Output:', server.output);
@@ -280,6 +327,100 @@ async function main() {
     suite.log('4.5 RU note verbatim in the tooltip', ruRss === RU_NOTE, JSON.stringify(ruRss.slice(0, 80)));
     await H.screenshot(page, ws, '04-rss-info-button');
 
+    // 4.6/4.7: click-to-toggle on the RSS info button — a dedicated info
+    // trigger with NO action coupling (no wizard), so the toggle contract is
+    // tested on its own. 4.7 forces a re-render of the resources view between
+    // the two clicks (the refresh rebuild replaces the trigger node): the
+    // latched hint must survive the refresh and hide on the second activation
+    // of the re-rendered control.
+    await page.evaluate(() => window.setLanguage('en'));
+    await page.waitForTimeout(500);
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(200);
+    const tipOn = () => page.evaluate(() => document.getElementById('goaltip').classList.contains('visible'));
+    const rssBtn = page.locator('#resources-content .res-section-title .ctx-info.res-proc-note').first();
+    const rbox = await rssBtn.boundingBox();
+    await page.mouse.click(rbox.x + rbox.width / 2, rbox.y + rbox.height / 2);
+    await page.waitForTimeout(200);
+    const rOn = await tipOn();
+    await page.mouse.click(rbox.x + rbox.width / 2, rbox.y + rbox.height / 2);
+    await page.waitForTimeout(200);
+    suite.log('4.6 real click toggles the RSS tooltip on and off', rOn && !(await tipOn()), `on=${rOn} off=${!(await tipOn())}`);
+
+    // Latch, force the re-render, verify survival, then the second activation
+    // of the re-rendered node must hide.
+    await page.mouse.click(rbox.x + rbox.width / 2, rbox.y + rbox.height / 2);
+    await page.waitForTimeout(200);
+    const rLatched = await tipOn();
+    await page.evaluate(() => {
+      window.__ufOld = document.querySelector('#resources-content .res-section-title .ctx-info.res-proc-note');
+      window.loadResources();
+    });
+    const replaced = await page.waitForFunction(() => {
+      const el = document.querySelector('#resources-content .res-section-title .ctx-info.res-proc-note');
+      return !!el && el !== window.__ufOld;
+    }, { timeout: 8000 }).then(() => true).catch(() => false);
+    await page.waitForTimeout(150);
+    const rSurvives = await tipOn();
+    // Second activation of the re-rendered node: a programmatic click (no
+    // pointer movement, so no new mouseover can re-latch the fresh node).
+    await page.evaluate(() => {
+      const el = document.querySelector('#resources-content .res-section-title .ctx-info.res-proc-note');
+      if (el) el.click();
+    });
+    await page.waitForTimeout(200);
+    suite.log('4.7 latched tooltip survives a forced re-render and the re-rendered button hides it on click',
+      rLatched && replaced && rSurvives && !(await tipOn()),
+      `latched=${rLatched} replaced=${replaced} survives=${rSurvives} off=${!(await tipOn())}`);
+
+    // 4.8/4.9 collision regression (touch): the two orphan hint buttons are
+    // two DISTINCT controls sharing the identical tooltip text AND the
+    // identical onclick="toggleHint(this)". Latch A, force the model
+    // re-render, tap B: B's hint must SHOW — a latch key without a stable
+    // per-control identity follows the shared key onto the other control and
+    // mis-hides. The 3 s model refresh is disabled on this page so the ONLY
+    // re-render is the forced one (a natural refresh would auto-rebind the
+    // latch to A's fresh node and mask the collision).
+    const touchCtx = await browser.newContext({ hasTouch: true, viewport: { width: 1280, height: 800 } });
+    const tp = await touchCtx.newPage();
+    await tp.addInitScript(() => {
+      const orig = window.setInterval;
+      window.setInterval = function (fn, ms, ...a) {
+        if (ms === 3000) return orig(function () {}, ms);
+        return orig(fn, ms, ...a);
+      };
+    });
+    await tp.goto(BASE, { waitUntil: 'networkidle' });
+    await tp.waitForTimeout(600);
+    await tp.evaluate(() => window.setLanguage('en'));
+    await tp.waitForTimeout(500);
+    await tp.evaluate(() => window.navigate('models'));
+    await tp.waitForTimeout(400);
+    const hintBtn = tp.locator('#model-list button.icon-btn-ghost:not(.ctx-info)');
+    await hintBtn.first().waitFor({ timeout: 10000 });
+    const hintIds = (await hintBtn.evaluateAll(els => els.map(e => e.getAttribute('data-tip-id')))).slice().sort();
+    suite.log('4.8 the two orphan hints carry distinct stable tip ids (entity ids)',
+      (await hintBtn.count()) === 2 && hintIds.length === 2 && hintIds[0] === 'm-uf-orphan-1' && hintIds[1] === 'm-uf-orphan-2',
+      `ids=${JSON.stringify(hintIds)}`);
+    await hintBtn.nth(0).tap();
+    await tp.waitForTimeout(250);
+    const aOn = await tp.evaluate(() => document.getElementById('goaltip').classList.contains('visible'));
+    await tp.evaluate(() => window.renderModels());
+    await tp.waitForFunction(() => !!document.querySelector('#model-list button.icon-btn-ghost:not(.ctx-info)'), { timeout: 5000 });
+    await tp.waitForTimeout(200);
+    await hintBtn.nth(1).scrollIntoViewIfNeeded();
+    await hintBtn.nth(1).tap();
+    await tp.waitForTimeout(250);
+    const bState = await tp.evaluate(() => {
+      const t = document.getElementById('goaltip');
+      const a = document.querySelector('[aria-describedby="goaltip"]');
+      return { visible: t ? t.classList.contains('visible') : false, describedId: a ? a.getAttribute('data-tip-id') : null };
+    });
+    suite.log('4.9 tap A, re-render, tap B: the other same-key control shows its own hint (no shared latch)',
+      aOn && bState.visible && bState.describedId === 'm-uf-orphan-2',
+      `aOn=${aOn} b=${JSON.stringify(bState)}`);
+    await touchCtx.close();
+
     // ═══ SECTION 5: theme-token hygiene ═══
     // Orphan badge uses the theme token (purple family), both themes.
     const orphanProbe = await (async () => {
@@ -321,12 +462,55 @@ async function main() {
     await page.evaluate(() => document.documentElement.setAttribute('data-theme', 'dark'));
     await H.screenshot(page, ws, '05b-settings-warning-notice-dark');
 
+    // ═══ SECTION 5.4: data-table actions column right edge (Owner visual
+    // finding) ═══ The last action button of every actions cell must sit
+    // flush against the table's right edge with only the standard cell
+    // padding in between — runtimes, instances and history tables.
+    const alignOf = async (view, bodyId) => {
+      await page.evaluate(v => window.navigate(v), view);
+      await page.waitForTimeout(500);
+      return page.evaluate(b => {
+        const tbody = document.getElementById(b);
+        if (!tbody) return { rows: 0, rowsData: [] };
+        const table = tbody.closest('table');
+        const trs = [...table.querySelectorAll('tbody tr')].filter(tr => tr.querySelector('.actions-cell'));
+        if (!trs.length) return { rows: 0, rowsData: [] };
+        const tRight = table.getBoundingClientRect().right;
+        return { rows: trs.length, rowsData: trs.map(tr => {
+          const cell = tr.querySelector('.actions-cell');
+          const btns = [...cell.querySelectorAll('button')];
+          const last = btns[btns.length - 1];
+          return {
+            gap: Math.round((tRight - last.getBoundingClientRect().right) * 100) / 100,
+            padR: parseFloat(getComputedStyle(cell).paddingRight),
+            btnW: Math.round(last.getBoundingClientRect().width)
+          };
+        }) };
+      }, bodyId);
+    };
+    const alignOk = a => a.rows > 0 && a.rowsData.every(r =>
+      Math.abs(r.gap - r.padR) <= 0.75 && r.btnW === 44);
+    const alignRt = await alignOf('adv-runtimes', 'adv-runtimes-body');
+    const alignInst = await alignOf('adv-instances', 'adv-instances-body');
+    const alignHist = await alignOf('history', 'history-body');
+    suite.log('5.4 actions cells sit flush at the table right edge (gap == cell padding, buttons un-stretched)',
+      alignOk(alignRt) && alignOk(alignInst) && alignOk(alignHist),
+      JSON.stringify({
+        runtimes: alignRt.rows ? alignRt.rowsData.map(r => r.gap + '/' + r.padR) : 0,
+        instances: alignInst.rows ? alignInst.rowsData.map(r => r.gap + '/' + r.padR) : 0,
+        history: alignHist.rows ? alignHist.rowsData.map(r => r.gap + '/' + r.padR) : 0
+      }));
+    await page.evaluate(() => window.navigate('adv-runtimes'));
+    await page.waitForTimeout(300);
+    await H.screenshot(page, ws, '06-actions-right-edge');
+
     // ═══ SECTION 6: no console errors / 500s ═══
     suite.log('6.1 no page console errors', suite.consoleErrors.length === 0, JSON.stringify(suite.consoleErrors.slice(0, 3)));
     suite.log('6.2 no 5xx responses', suite.serverErrors.length === 0, JSON.stringify(suite.serverErrors.slice(0, 3)));
   } finally {
     await browser.close();
     await server.stop();
+    for (const h of ufHelpers) H.killTree(h.pid);
   }
   ok = await suite.finish();
   process.exit(ok ? 0 : 1);

@@ -266,6 +266,9 @@ code { font-family: var(--font-mono); font-size: 0.9em; background: var(--bg-inp
 }
 .model-row-pid { font-family: var(--font-mono); font-size: 0.75rem; color: var(--text-muted); white-space: nowrap; }
 .model-row-uptime { font-family: var(--font-mono); font-size: 0.75rem; color: var(--text-secondary); white-space: nowrap; }
+/* Shared action-button group: one class for every actions column (entity
+   rows + data tables) so spacing, centering and no-wrap stay unified. */
+.action-group { display: flex; gap: 4px; flex-wrap: nowrap; align-items: center; flex-shrink: 0; vertical-align: middle; }
 .model-row-actions { display: flex; gap: 4px; flex-wrap: nowrap; align-items: center; flex-shrink: 0; }
 .icon-btn {
     display: inline-flex; align-items: center; justify-content: center;
@@ -452,7 +455,11 @@ code { font-family: var(--font-mono); font-size: 0.9em; background: var(--bg-inp
 .data-table th { text-align: left; padding: 10px 12px; color: var(--text-muted); font-weight: 500; font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.04em; border-bottom: 1px solid var(--border); }
 .data-table td { padding: 10px 12px; border-bottom: 1px solid var(--border); color: var(--text-secondary); overflow-wrap: anywhere; }
 .data-table tr:hover td { background: var(--accent-subtle); }
-.data-table .actions-cell { white-space: nowrap; }
+.data-table .actions-cell { white-space: nowrap; vertical-align: middle; }
+/* The action group stretches the full cell width, so text-align cannot move
+   the buttons — justify-content pins the group to the cell's right edge,
+   leaving exactly the cell padding (12px) after the last button. */
+.data-table .actions-cell .action-group { justify-content: flex-end; }
 .data-table .actions-cell .btn { margin-right: 4px; }
 /* Instances table geometry (ADR 013 UX): short mono values (ID/PID/Exit) stay on
    one line, the model name is ellipsized (full name in the title tooltip), the

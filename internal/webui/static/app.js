@@ -426,8 +426,12 @@ function iconBtn(icon, label, color, action, id) {
 // appearance as the action icon buttons, no onclick, and the same
 // goaltip/data-tooltip/aria-label contract (never a native title attribute).
 // extraClass keeps context-scoped selectors (e.g. .pl-chip-hint) working.
-function infoTip(text, extraClass) {
-    return '<button type="button" class="icon-btn ctx-info' + (extraClass ? ' ' + extraClass : '') + '" data-tooltip="' + esc(text) + '" aria-label="' + esc(text) + '">' + ICONS.info + '</button>';
+// tipId is the stable logical identity of a repeated control (the entity it
+// describes), carried as data-tip-id for the click-latch (tipControlKey).
+function infoTip(text, extraClass, tipId) {
+    return '<button type="button" class="icon-btn ctx-info' + (extraClass ? ' ' + extraClass : '') + '" data-tooltip="' + esc(text) + '"' +
+        (tipId ? ' data-tip-id="' + safeId(tipId) + '"' : '') +
+        ' aria-label="' + esc(text) + '">' + ICONS.info + '</button>';
 }
 
 var ICONS = {
@@ -572,6 +576,7 @@ function renderModels() {
         } else if (status === 'orphan') {
             actionBtns = '<button type="button" class="icon-btn icon-btn-ghost"' +
                 ' data-tooltip="' + esc(t('instances.orphan.hint')) + '"' +
+                ' data-tip-id="' + safeId(m.id) + '"' +
                 ' aria-label="' + esc(t('instances.orphan.hint')) + '"' +
                 ' onclick="toggleHint(this)">' + ICONS.info + '</button>';
         } else {
@@ -593,7 +598,7 @@ function renderModels() {
                     (uptime ? ' &middot; ' + uptime : '') +
                 '</div>' +
             '</div>' +
-            '<div class="model-row-actions">' +
+            '<div class="model-row-actions action-group">' +
                 actionBtns +
                 iconBtn(ICONS.logs, t('models.actions.logs'), 'ghost', 'viewInstanceLogs', inst ? inst.id : '') +
                 iconBtn(ICONS.edit, t('models.actions.edit'), 'ghost', 'openWizard', m.id) +
@@ -808,7 +813,9 @@ function pipelineChips(p) {
                 '</span>';
         } else if (rc.state === 'stopped') {
             const hint = t('pipelines.chip.stopped_hint');
-            actions = infoTip(hint, 'pl-chip-hint');
+            // m.id: every entry is one logical control; the shared hint text
+            // must not let two entries share a click-latch identity.
+            actions = infoTip(hint, 'pl-chip-hint', m.id);
         }
         return '<span class="pl-chip status-badge ' + rc.state + '" title="' + esc(name) + '"><span class="pl-chip-name">' + esc(name) + '</span>' + actions + '</span>';
     }).join(' ');
@@ -901,7 +908,7 @@ function renderPipelines() {
                 '</div>' +
                 '<div class="model-row-sub pl-chips-wrap">' + pipelineChips(p) + '</div>' +
             '</div>' +
-            '<div class="model-row-actions">' +
+            '<div class="model-row-actions action-group">' +
                 pipelineActionStrip(p) +
             '</div>' +
         '</div>';
@@ -1774,9 +1781,9 @@ function renderAdvRuntimes() {
     if (tableWrap) tableWrap.dataset.has = '1';
     document.getElementById('adv-runtimes-body').innerHTML = runtimesData.map(function (r) {
         return '<tr><td>' + esc(r.name) + '</td><td title="' + esc(r.executable || '') + '">' + esc(r.executable) + '</td><td title="' + esc(r.working_directory || '') + '">' + esc(r.working_directory || '—') + '</td>' +
-            '<td class="actions-cell">' + iconBtn(ICONS.edit, t('runtimes.actions.edit'), 'ghost', 'editRuntime', r.id) +
+            '<td class="actions-cell"><div class="action-group">' + iconBtn(ICONS.edit, t('runtimes.actions.edit'), 'ghost', 'editRuntime', r.id) +
             iconBtn(ICONS.copy, t('runtimes.actions.copy'), 'ghost', 'copyRuntime', r.id) +
-            iconBtn(ICONS.del, t('runtimes.actions.delete'), 'danger', 'deleteRuntime', r.id) + '</td></tr>';
+            iconBtn(ICONS.del, t('runtimes.actions.delete'), 'danger', 'deleteRuntime', r.id) + '</div></td></tr>';
     }).join('');
     const compact = document.getElementById('runtimes-compact');
     if (compact) {
@@ -2039,7 +2046,7 @@ function renderAdvInstances() {
             '<td class="inst-state">' + badge + '</td>' +
             '<td class="inst-mono">' + (i.pid || '—') + '</td><td class="inst-time" title="' + esc(fmtTime(i.started_at)) + '">' + fmtTime(i.started_at) + '</td><td class="inst-time">' + fmtTime(i.stopped_at) + '</td>' +
             '<td class="inst-mono">' + (i.exit_code != null ? i.exit_code : '—') + '</td>' +
-            '<td class="actions-cell">' + actions + '</td></tr>';
+            '<td class="actions-cell"><div class="action-group">' + actions + '</div></td></tr>';
     }).join('');
     const compact = document.getElementById('instances-compact');
     if (compact) {
@@ -2210,7 +2217,7 @@ function renderHistory() {
             '<td class="inst-mono">' + (i.pid || '—') + '</td>' +
             '<td class="inst-time" title="' + esc(fmtTime(i.started_at)) + '">' + fmtTime(i.started_at) + '</td><td class="inst-time" title="' + esc(fmtTime(i.stopped_at)) + '">' + fmtTime(i.stopped_at) + '</td>' +
             '<td class="inst-reason"' + reasonTitle + '>' + esc(reasonText) + '</td>' +
-            '<td class="actions-cell">' + iconBtn(ICONS.logs, t('instances.actions.logs'), 'ghost', 'viewInstanceLogs', i.id) + '</td></tr>';
+            '<td class="actions-cell"><div class="action-group">' + iconBtn(ICONS.logs, t('instances.actions.logs'), 'ghost', 'viewInstanceLogs', i.id) + '</div></td></tr>';
     }).join('');
     const compact = document.getElementById('history-compact');
     if (compact) {
@@ -2352,6 +2359,25 @@ let tipActiveEl = null;
 // click fires, so tooltip visibility alone cannot tell an activation from a
 // passive reveal.
 let tipHintLatched = false;
+// Logical identity of the latched control. Row re-renders (renderModels on the
+// 3 s refresh, renderResources on the 5 s poll) rebuild their innerHTML and
+// replace the trigger node, so tipActiveEl alone can no longer recognize the
+// same control after a refresh: the latched hint must then be hideable by a
+// second activation of the re-rendered node, and a re-render that detaches the
+// focused trigger must not count as a user blur.
+let tipLatchKey = null;
+function tipControlKey(el) {
+    if (!el || !el.getAttribute) return null;
+    // Tooltip text + onclick alone are not a control identity: repeated
+    // controls (orphan hints, pipeline chip hints) carry identical pairs.
+    // data-tip-id carries the entity id the control belongs to (model /
+    // pipeline entry) — stable across row re-renders — so two visually and
+    // textually identical controls count as the same logical control only
+    // when they describe the same entity.
+    return (el.getAttribute('data-tooltip') || '') + '|' +
+        (el.getAttribute('onclick') || '') + '|' +
+        (el.getAttribute('data-tip-id') || '');
+}
 // A click only acts when the tap behind it was a real touch. Armed by a touch
 // pointerup and cleared by every pointerdown, so a mouse click — and Enter or
 // Space, which have no pointer at all — reach toggleHint unarmed and do nothing.
@@ -2387,6 +2413,7 @@ function tipHide() {
     tipEl.classList.remove('visible');
     tipEl.setAttribute('aria-hidden', 'true');
     tipHintLatched = false;
+    tipLatchKey = null;
     if (tipActiveEl) {
         tipActiveEl.removeAttribute('aria-describedby');
         tipActiveEl = null;
@@ -2397,9 +2424,10 @@ function toggleHint(el) {
     const fromTouch = tipTouchActivation;
     tipTouchActivation = false;
     if (!el || !fromTouch) return;
-    if (tipActiveEl === el && tipHintLatched) { tipHide(); return; }
+    if (tipHintLatched && (tipActiveEl === el || tipControlKey(el) === tipLatchKey)) { tipHide(); return; }
     tipShow(el);
     tipHintLatched = true;
+    tipLatchKey = tipControlKey(el);
 }
 
 function tipTargetFromEvent(e) {
@@ -2407,10 +2435,26 @@ function tipTargetFromEvent(e) {
     return el && el.closest ? el.closest('[data-tooltip]') : null;
 }
 
+// A row re-render (renderModels / renderResources / ...) replaces the latched
+// control's node. When hover or focus reaches the fresh node of the same
+// logical control, rebind the visible hint to it instead of re-showing —
+// re-showing would clear the latch and break the second-activation-hides
+// contract. Returns true when the hint was rebound (caller must not call
+// tipShow).
+function tipRebindAfterRerender(tEl) {
+    if (!(tipHintLatched && tipActiveEl && tipActiveEl.isConnected === false && tipControlKey(tEl) === tipLatchKey)) return false;
+    tipActiveEl = tEl;
+    tEl.setAttribute('aria-describedby', 'goaltip');
+    return true;
+}
+
 function bindTooltipSystem() {
     document.addEventListener('mouseover', function (e) {
         const tEl = tipTargetFromEvent(e);
-        if (tEl && tEl !== tipActiveEl) tipShow(tEl);
+        if (tEl && tEl !== tipActiveEl) {
+            if (tipRebindAfterRerender(tEl)) return;
+            tipShow(tEl);
+        }
     });
     document.addEventListener('mouseout', function (e) {
         // A tap emits a mouseover/mouseout pair around the gesture, and the
@@ -2438,9 +2482,12 @@ function bindTooltipSystem() {
     document.addEventListener('click', function (e) {
         const tEl = tipTargetFromEvent(e);
         if (tEl && tEl.classList && tEl.classList.contains('ctx-info')) {
-            if (tipActiveEl === tEl && tipHintLatched) { tipHide(); return; }
+            // tipControlKey makes the toggle survive a re-render of the same
+            // logical control (the row rebuild replaces the DOM node).
+            if (tipHintLatched && (tipActiveEl === tEl || tipControlKey(tEl) === tipLatchKey)) { tipHide(); return; }
             tipShow(tEl);
             tipHintLatched = true;
+            tipLatchKey = tipControlKey(tEl);
             return;
         }
         // Outside click dismisses a latched (click/tap-activated) tooltip.
@@ -2449,10 +2496,21 @@ function bindTooltipSystem() {
     document.addEventListener('pointerup', function (e) { tipTouchActivation = e.pointerType === 'touch'; });
     document.addEventListener('focusin', function (e) {
         const tEl = tipTargetFromEvent(e);
-        if (tEl && tEl !== tipActiveEl) tipShow(tEl);
+        if (tEl && tEl !== tipActiveEl) {
+            if (tipRebindAfterRerender(tEl)) return;
+            tipShow(tEl);
+        }
     });
     document.addEventListener('focusout', function (e) {
         if (!tipActiveEl) return;
+        // A latched (click/tap-activated) hint outlives focus changes, exactly
+        // as it already outlives hover-leave; it is dismissed by a second
+        // activation of the same control, an outside click, or Escape. This
+        // also covers the incidental blur a row re-render causes when it
+        // detaches the focused trigger (Chromium still reports the node as
+        // connected while dispatching focusout, so isConnected cannot tell
+        // the two apart).
+        if (tipHintLatched) return;
         // Only hide when focus actually leaves the trigger (not on unrelated
         // focus changes elsewhere, which would hide a hover tooltip).
         const from = e.target;
